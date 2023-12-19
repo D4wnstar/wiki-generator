@@ -11,11 +11,17 @@ type Note = {
     content: string
     references: Set<string>
     backreferences: Backreference[]
+    properties: NoteProperties
 }
 
 type Backreference = {
     displayName: string
     slug: string
+}
+
+type NoteProperties = {
+    publish: boolean
+    frontpage: boolean
 }
 
 function slugifyPath(path:string): string {
@@ -28,11 +34,35 @@ function slugifyPath(path:string): string {
     return slugged.join("/")
 }
 
-function formatMd(md: string): string {
-    md = md.replace(/^---\r?\n.*?\r?\n---/g, "") // Remove obsidian properties
+function parseProperties(match: string): NoteProperties {
+    const props: NoteProperties = { publish: false, frontpage: false }
+    const propsLines = match.split("\n")
+    for (const line of propsLines) {
+        const kv = line.split(": ")
+        switch (kv[0]) {
+            case "dg-publish":
+                if (kv[1] === "true") { props.publish = true }
+                break;
+            case "dg-home":
+                if (kv[1] === "true") { props.frontpage = true }
+            default:
+                break;
+        }
+    }
+    return props
+}
+
+function formatMd(md: string): [string, NoteProperties] {
+    const propsRegex = /^---\r?\n(.*?)\r?\n---/s
+    const match = md.match(propsRegex)
+    let props: NoteProperties = { publish: false, frontpage: false }
+    if (match) {
+        props = parseProperties(match[1]) // Save some properties before removing them
+        md = md.replace(propsRegex, "") // Remove obsidian properties
+    }
     md = md.replace(/^:::hidden\n.*?\n:::/gms, "") // Remove :::hidden::: blocks
     md = md.replace(/^#+ GM.*?(?=^#|$(?![\r\n]))/gms, "") // Remove GM paragraphs
-    return md
+    return [md, props]
 }
 
 function backrefAlreadyExists(displayName: string, slug: string, backrefs: Backreference[]): boolean {
@@ -74,14 +104,16 @@ function convertWikilinks(note: Note, notes: Note[]): Note {
 }
 
 async function readNotes(converter: Converter, vault: Vault): Promise<Note[]> {
-    const notes = []
+    const notes: Note[] = []
     const mdFiles = vault.getMarkdownFiles();
 
     for (const file of mdFiles) {
         const slug = slugifyPath(file.path.replace(".md", ""))
 
         let content = await vault.read(file);
-        content = formatMd(content)
+        const out = formatMd(content)
+        content = out[0]
+        const props = out[1]
 
         let html = converter.makeHtml(content)
         html = html.replace(/<h(\d)(.*?)>(.*?)<\/h\d>/g, '<h$1$2 class="h$1">$3</h$1>')
@@ -96,41 +128,57 @@ async function readNotes(converter: Converter, vault: Vault): Promise<Note[]> {
             content: html,
             references: new Set<string>(),
             backreferences: [],
+            properties: props
         })
     }
     return notes
 }
 
+function noteToString(note: Note): string {
+    let out = ""
+    out += "{"
+    out += `\n\t\ttitle: "${note.title}",`
+    out += `\n\t\tpath: "${note.path}",`
+    out += `\n\t\tslug: "${note.slug}",`
+    out += `\n\t\treferences: [`
+    for (const ref of note.references) {
+        out += `"${ref}", `
+    }
+    out += `],`
+    out += `\n\t\tbackreferences: [`
+    for (const ref of note.backreferences) {
+        out += `{displayName: "${ref.displayName}", slug: "${ref.slug}"}, `
+    }
+    out += `],`
+    out += `\n\t\tcontent: \`${note.content}\`,`
+    out += `\n\t\tproperties: { publish: ${note.properties.publish}, frontpage: ${note.properties.frontpage} },`
+    out += "\n\t}"
+
+    return out
+}
 
 export async function convertNotesForUpload(vault: Vault, outPath: string): Promise<void> {
     const converter = new Converter()
     let notes = await readNotes(converter, vault);
     notes = notes.map((note) => convertWikilinks(note, notes))
+    notes.sort((a, b) => a.slug.localeCompare(b.slug));
+
+    let notesJsonString = ""
+    const frontpage = notes.find(note => note.properties.frontpage)
+    if (frontpage) {   
+        notesJsonString += "export const frontpage = "
+        notesJsonString += noteToString(frontpage)
+        notesJsonString += "\n"
+    }
     
-    let notesJsonString = "export const notes = [\n"
+    notesJsonString += "export const notes = [\n"
     for (const note of notes) {
-        notesJsonString += "\t{"
-        notesJsonString += `\n\t\ttitle: "${note.title}",`
-        notesJsonString += `\n\t\tpath: "${note.path}",`
-        notesJsonString += `\n\t\tslug: "${note.slug}",`
-        notesJsonString += `\n\t\treferences: [`
-        for (const ref of note.references) {
-            notesJsonString += `"${ref}", `
-        }
-        notesJsonString += `],`
-        notesJsonString += `\n\t\tbackreferences: [`
-        for (const ref of note.backreferences) {
-            notesJsonString += `{displayName: "${ref.displayName}", slug: "${ref.slug}"}, `
-        }
-        notesJsonString += `],`
-        notesJsonString += `\n\t\tcontent: \`${note.content}\`,`
-        notesJsonString += "\n\t},\n"
+        if (!note.properties.publish || note.properties.frontpage) { continue }
+        notesJsonString += "\t"
+        notesJsonString += noteToString(note)
+        notesJsonString += ",\n"
     }
     notesJsonString += "]"
     
     writeFileSync(join(outPath, "notes-data.ts"), notesJsonString, { encoding: "utf-8" })
-}
-
-export function sayMyName() {
-    console.log(__dirname)
 }
