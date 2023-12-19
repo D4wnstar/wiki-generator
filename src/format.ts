@@ -3,8 +3,9 @@ import slugify from 'slugify'
 import { Vault } from "obsidian";
 import { writeFileSync } from "fs";
 import { join } from "path";
+import { convertWikilinks } from "./wikilinks";
 
-type Note = {
+export type Note = {
     title: string
     path: string
     slug: string
@@ -14,7 +15,7 @@ type Note = {
     properties: NoteProperties
 }
 
-type Backreference = {
+export type Backreference = {
     displayName: string
     slug: string
 }
@@ -24,7 +25,7 @@ type NoteProperties = {
     frontpage: boolean
 }
 
-function slugifyPath(path:string): string {
+export function slugifyPath(path:string): string {
     const elems = path.split("/").filter(elem => elem !== "")
     const slugged = []
     for (const elem of elems) {
@@ -45,6 +46,7 @@ function parseProperties(match: string): NoteProperties {
                 break;
             case "dg-home":
                 if (kv[1] === "true") { props.frontpage = true }
+                break;
             default:
                 break;
         }
@@ -63,44 +65,6 @@ function formatMd(md: string): [string, NoteProperties] {
     md = md.replace(/^:::hidden\n.*?\n:::/gms, "") // Remove :::hidden::: blocks
     md = md.replace(/^#+ GM.*?(?=^#|$(?![\r\n]))/gms, "") // Remove GM paragraphs
     return [md, props]
-}
-
-function backrefAlreadyExists(displayName: string, slug: string, backrefs: Backreference[]): boolean {
-    for (const backref of backrefs) {
-        if (backref.displayName === displayName && backref.slug === slug) {
-            return true
-        }
-    }
-
-    return false
-}
-
-function convertWikilinks(note: Note, notes: Note[]): Note {
-    note.content = note.content.replace(/\[\[(.*?)(?:\|(.*?)?)?\]\]/g, (match, ...groups) => {
-        const captureGroups: string[] = groups.slice(0, -2)
-        const realName = captureGroups[0]
-        const altName = captureGroups.length > 1 ? captureGroups[1] : undefined
-        // Check if the path is explicit (like [[Enciclopedia Antediluviana/Nazioni/Auriga]])
-        // or implicit (like [[Auriga]]). If it's implicit, the note name is unique.
-        const refNote = realName.split("/").filter(elem => elem !== "").length > 1
-                        ? notes.find((note) => note.slug === slugifyPath(realName))
-                        : notes.find((note) => note.title.toLowerCase() === realName.toLowerCase())
-
-        if (refNote) {
-            if (!backrefAlreadyExists(note.title, note.slug, refNote.backreferences)) {
-                refNote.backreferences.push({ displayName: note.title, slug: note.slug })
-            }
-        }
-        else {
-            console.warn(`Could not find note "${realName}"`)
-            return altName ? altName : realName
-        }
-
-        note.references.add(refNote.slug)
-        return `<a href="/${refNote.slug}" class="anchor">${altName ? altName : realName}</a>`
-    })
-
-    return note
 }
 
 async function readNotes(converter: Converter, vault: Vault): Promise<Note[]> {
