@@ -1,6 +1,6 @@
 import { App, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
 import { join } from 'path';
-import { convertNotesForUpload, sayMyName } from 'src/format';
+import { convertNotesForUpload } from 'src/format';
 
 // Remember to rename these classes and interfaces!
 

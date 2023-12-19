@@ -29,7 +29,7 @@ function slugifyPath(path:string): string {
 }
 
 function formatMd(md: string): string {
-    md = md.replace(/^---\n.*?\n---/g, "") // Remove obsidian properties
+    md = md.replace(/^---\r?\n.*?\r?\n---/g, "") // Remove obsidian properties
     md = md.replace(/^:::hidden\n.*?\n:::/gms, "") // Remove :::hidden::: blocks
     md = md.replace(/^#+ GM.*?(?=^#|$(?![\r\n]))/gms, "") // Remove GM paragraphs
     return md
