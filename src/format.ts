@@ -117,6 +117,7 @@ async function readNotes(converter: Converter, vault: Vault): Promise<Note[]> {
 
         let html = converter.makeHtml(content)
         html = html.replace(/<h(\d)(.*?)>(.*?)<\/h\d>/g, '<h$1$2 class="h$1">$3</h$1>')
+        html = html.replace(/<a(.*?)>(.*?)<\/a>/g, '<a$1 class="anchor" target="_blank">$2</a>')
         html = html.replace(/<blockquote>/g, '<blockquote class="blockquote">')
         html = html.replace(/<ul>/g, '<ul class="list-disc list-inside [&_&]:pl-5">')
         html = html.replace(/<ol>/g, '<ul class="list-decimal list-inside [&_&]:pl-5">')
