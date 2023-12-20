@@ -1,83 +1,104 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
-import { join } from 'path';
-import { convertNotesForUpload } from 'src/format';
+import { App, Notice, Plugin, PluginSettingTab, Setting } from "obsidian"
+import { join } from "path"
+import { convertNotesForUpload } from "src/format"
 
-interface WikiGenerator {
-	mySetting: string;
+interface WikiGeneratorSettings {
+	vercelBlobToken: string
 }
 
-const DEFAULT_SETTINGS: WikiGenerator = {
-	mySetting: 'default'
+const DEFAULT_SETTINGS: WikiGeneratorSettings = {
+	vercelBlobToken: "",
 }
 
-export default class HelloWorldPlugin extends Plugin {
-	settings: WikiGenerator;
+export default class WikiGeneratorPlugin extends Plugin {
+	settings: WikiGeneratorSettings
 
 	async onload() {
-		await this.loadSettings();
+		await this.loadSettings()
 
 		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Greet', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice("hi")
-		});
+		const ribbonIconEl = this.addRibbonIcon("dice", "Greet", async () => {
+			new Notice("Beginning note conversion...")
+			await convertNotesForUpload(
+				this.app.vault,
+				join(
+					this.app.vault.adapter.basePath,
+					"/.obsidian/plugins/obsidian-wiki-generator/"
+				),
+				this.settings.vercelBlobToken
+			)
+			new Notice("Successfully uploaded notes!")
+		})
 		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
+		ribbonIconEl.addClass("my-plugin-ribbon-class")
 
+		const testButton = this.addRibbonIcon("test-tube-2", "Test", async () => {
+			console.log(this.app.vault.getFiles())
+		})
 
 		// This adds an editor command that can perform some operation on the current editor instance
 		this.addCommand({
-			id: 'upload-notes',
-			name: 'Upload notes',
+			id: "upload-notes",
+			name: "Upload notes",
 			callback: async () => {
 				new Notice("Beginning note conversion...")
 				await convertNotesForUpload(
-					this.app.vault, join(this.app.vault.adapter.basePath, "/.obsidian/plugins/obsidian-wiki-generator/")
+					this.app.vault,
+					join(
+						this.app.vault.adapter.basePath,
+						"/.obsidian/plugins/obsidian-wiki-generator/"
+					),
+					this.settings.vercelBlobToken
 				)
 				new Notice("Successfully uploaded notes!")
-			}
-		});
+			},
+		})
 
 		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+		this.addSettingTab(new SampleSettingTab(this.app, this))
 	}
 
-	onunload() {
-
-	}
+	onunload() {}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.settings = Object.assign(
+			{},
+			DEFAULT_SETTINGS,
+			await this.loadData()
+		)
 	}
 
 	async saveSettings() {
-		await this.saveData(this.settings);
+		await this.saveData(this.settings)
 	}
 }
 
-
 class SampleSettingTab extends PluginSettingTab {
-	plugin: HelloWorldPlugin;
+	plugin: WikiGeneratorPlugin
 
-	constructor(app: App, plugin: HelloWorldPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
+	constructor(app: App, plugin: WikiGeneratorPlugin) {
+		super(app, plugin)
+		this.plugin = plugin
 	}
 
 	display(): void {
-		const {containerEl} = this;
+		const { containerEl } = this
 
-		containerEl.empty();
+		containerEl.empty()
 
 		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
+			.setName("Vercel Blob Token")
+			.setDesc(
+				"Secret token for Vercel Blob file storage. You can find it in your Vercel dashboard."
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("Copy your token")
+					.setValue(this.plugin.settings.vercelBlobToken)
+					.onChange(async (value) => {
+						this.plugin.settings.vercelBlobToken = value
+						await this.plugin.saveSettings()
+					})
+			)
 	}
 }
