@@ -1,6 +1,7 @@
 import { Notice, TFile, Vault } from "obsidian"
 import { Backreference, Note, slugifyPath } from "./format"
-import { ListBlobResultBlob, head, put } from "@vercel/blob"
+import { SupabaseClient } from "@supabase/supabase-js"
+import { FileObject } from "@supabase/storage-js"
 
 function backrefAlreadyExists(
 	displayName: string,
@@ -89,9 +90,9 @@ function handleNoteReference(
 async function handleFileTransclusion(
 	captureGroups: string[],
 	media: TFile[],
-	blobs: ListBlobResultBlob[],
-    vault: Vault,
-    blobToken: string
+	vault: Vault,
+	filesInStorage: FileObject[],
+	supabase: SupabaseClient
 ): Promise<string> {
 	const filename = captureGroups[1]
 	// const displayOptions = captureGroups[2]
@@ -104,25 +105,63 @@ async function handleFileTransclusion(
 		return `[${filename}]`
 	}
 
-	// Pathname check is an .includes() so that I don't have to extract the base name
-	// AND because blobs have a random suffix added to their filename by default
-	let storedBlob = blobs.find((blob) => blob.pathname.includes(filename))
-
-	if (!storedBlob) {
-        const refFileBinary = await vault.readBinary(refFile)
-		const response = await put(filename, refFileBinary, { access: 'public', token: blobToken })
-        new Notice(`Successfully uploaded file ${filename} with name ${response.pathname}`)
-		console.log(`Successfully uploaded file ${filename} with name ${response.pathname}`)
-        storedBlob = await head(response.url, { token: blobToken })
-	}
-
+	let fileType: string
 	const imageExtensions = ["png", "webp", "jpg", "jpeg", "gif", "bmp", "svg"]
 	if (imageExtensions.includes(refFile.extension)) {
-		return `<img src="${storedBlob.url}" alt="${refFile.basename}" />`
+		fileType = "image"
 	} else {
-        console.warn(`File type for file "${filename}" is currently unsupported. Skipping...`)
-        return filename
-    }
+		console.warn(
+			`File type for file "${filename}" is currently unsupported. Skipping...`
+		)
+		return filename
+	}
+
+	// Pathname check is an .includes() so that I don't have to extract the base name
+	// AND because blobs have a random suffix added to their filename by default
+	const storedFile = filesInStorage.find((file) =>
+		file.name.includes(filename)
+	)
+	let url: string
+
+	if (!storedFile) {
+		const refFileBinary = await vault.readBinary(refFile)
+		const { data, error } = await supabase.storage
+			.from("images")
+			.upload(filename, new Blob([refFileBinary]))
+
+		if (error) {
+			console.error(
+				`Got error with message "${error.message}" when trying to upload file "${filename}". Skipping...`
+			)
+			return `[${filename}]`
+		} else if (!data) {
+			console.error(
+				`Found file "${filename}" but received no data when requesting it from Storage. Skipping...`
+			)
+			return `[${filename}]`
+		}
+
+		new Notice(`Successfully uploaded file ${filename} as ${data?.path}`)
+		console.log(`Successfully uploaded file ${filename} as ${data?.path}`)
+		const urlData = supabase.storage.from("images").getPublicUrl(data.path)
+
+		url = urlData.data.publicUrl
+	} else {
+		console.log(`Found existing file ${storedFile.name}`)
+		const urlData = supabase.storage
+			.from("images")
+			.getPublicUrl(storedFile.name)
+
+		url = urlData.data.publicUrl
+	}
+
+	switch (fileType) {
+		case "image":
+			return `<img src="${url}" alt="${refFile.basename}" />`
+		default:
+			// This should be impossible, it's here just because TypeScript is complaining
+			return `[${filename}]`
+	}
 }
 
 async function subWikilinks(
@@ -131,9 +170,9 @@ async function subWikilinks(
 	note: Note,
 	notes: Note[],
 	media: TFile[],
-	blobs: ListBlobResultBlob[],
-    vault: Vault,
-    blobToken: string,
+	vault: Vault,
+	filesInStorage: FileObject[],
+	supabase: SupabaseClient
 ): Promise<string> {
 	// Note references are changed to <a> tags
 	// File references are removed, leaving just the filename
@@ -145,7 +184,13 @@ async function subWikilinks(
 	const isMedia = captureGroups[1]?.match(/\..*$/) ? true : false
 
 	if (isTransclusion && isMedia) {
-		return await handleFileTransclusion(captureGroups, media, blobs, vault, blobToken)
+		return await handleFileTransclusion(
+			captureGroups,
+			media,
+			vault,
+			filesInStorage,
+			supabase
+		)
 	} else if (isTransclusion && !isMedia) {
 		return handleNoteTransclusion(captureGroups, notes)
 	} else if (!isTransclusion && isMedia) {
@@ -160,21 +205,34 @@ export async function convertWikilinks(
 	note: Note,
 	notes: Note[],
 	media: TFile[],
-	blobs: ListBlobResultBlob[],
-    vault: Vault,
-    blobToken: string,
+	vault: Vault,
+	filesInStorage: FileObject[],
+	supabase: SupabaseClient
 ): Promise<Note> {
-    const matches = Array.from(note.content.matchAll(/(!)?\[\[(.*?)(?:\|(.*?)?)?\]\]/g));
-    
-    const replacements = await Promise.all(matches.map(match => 
-        subWikilinks(match[0], match.slice(1), note, notes, media, blobs, vault, blobToken)
-    ));
-    
-    let newContent = note.content;
-    for (const index in matches) {
-        newContent = newContent.replace(matches[index][0], replacements[index]);
-    }
-    note.content = newContent;
+	const matches = Array.from(
+		note.content.matchAll(/(!)?\[\[(.*?)(?:\|(.*?)?)?\]\]/g)
+	)
+
+	const replacements = await Promise.all(
+		matches.map((match) =>
+			subWikilinks(
+				match[0],
+				match.slice(1),
+				note,
+				notes,
+				media,
+				vault,
+				filesInStorage,
+				supabase
+			)
+		)
+	)
+
+	let newContent = note.content
+	for (const index in matches) {
+		newContent = newContent.replace(matches[index][0], replacements[index])
+	}
+	note.content = newContent
 
 	return note
 }

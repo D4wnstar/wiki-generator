@@ -4,7 +4,7 @@ import { TFile, Vault } from "obsidian"
 import { writeFileSync } from "fs"
 import { join } from "path"
 import { convertWikilinks } from "./wikilinks"
-import { list } from "@vercel/blob"
+import { createClient } from "@supabase/supabase-js"
 
 export type Note = {
 	title: string
@@ -151,18 +151,31 @@ function noteToString(note: Note): string {
 export async function convertNotesForUpload(
 	vault: Vault,
 	outPath: string,
-	blobToken: string
+	supabaseUrl: string,
+	supabaseAnonKey: string,
+	supabaseServiceKey: string,
 ): Promise<void> {
+	const supabase = createClient(supabaseUrl, supabaseServiceKey)
+
 	const converter = new Converter()
 	const files = await readVault(converter, vault)
 	let notes = files[0]
 	const media = files[1]
 
-	const blobs = await list({ token: blobToken })
-	// Currently ignores blobs over the default limit of 1000 per call
+	const { data, error } = await supabase
+		.storage
+		.from('images')
+		.list()
+
+	if (error) {
+		console.error("Could not reach Supabase Storage. Got the following erro:", error.message)
+		console.error(error)
+		return
+	}
+
 
 	notes = await Promise.all(notes.map((note) =>
-		convertWikilinks(note, notes, media, blobs.blobs, vault, blobToken)
+		convertWikilinks(note, notes, media, vault, data, supabase)
 	))
 	notes.sort((a, b) => a.slug.localeCompare(b.slug))
 

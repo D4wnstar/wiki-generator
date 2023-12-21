@@ -3,13 +3,23 @@ import { join } from "path"
 import { convertNotesForUpload } from "src/format"
 
 interface WikiGeneratorSettings {
-	vercelBlobToken: string
 	supabaseUrl: string
 	supabaseAnonKey: string
+	supabaseServiceKey: string
+	supabaseUseLocal: boolean
+	supabaseUrlLocal: string
+	supabaseAnonKeyLocal: string
+	supabaseServiceKeyLocal: string
 }
 
 const DEFAULT_SETTINGS: WikiGeneratorSettings = {
-	vercelBlobToken: "",
+	supabaseUrl: "",
+	supabaseAnonKey: "",
+	supabaseServiceKey: "",
+	supabaseUseLocal: false,
+	supabaseUrlLocal: "http://localhost:54321",
+	supabaseAnonKeyLocal: "",
+	supabaseServiceKeyLocal: "",
 }
 
 export default class WikiGeneratorPlugin extends Plugin {
@@ -19,24 +29,38 @@ export default class WikiGeneratorPlugin extends Plugin {
 		await this.loadSettings()
 
 		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon("dice", "Greet", async () => {
-			new Notice("Beginning note conversion...")
-			await convertNotesForUpload(
-				this.app.vault,
-				join(
-					this.app.vault.adapter.basePath,
-					"/.obsidian/plugins/obsidian-wiki-generator/"
-				),
-				this.settings.vercelBlobToken
-			)
-			new Notice("Successfully uploaded notes!")
-		})
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass("my-plugin-ribbon-class")
+		const ribbonIconEl = this.addRibbonIcon(
+			"dice",
+			"Upload Notes",
+			async () => {
+				new Notice("Beginning note conversion...")
+				await convertNotesForUpload(
+					this.app.vault,
+					join(
+						this.app.vault.adapter.basePath,
+						"/.obsidian/plugins/obsidian-wiki-generator/"
+					),
+					this.settings.supabaseUseLocal
+						? "http://localhost:54321"
+						: this.settings.supabaseUrl,
+					this.settings.supabaseUseLocal
+						? this.settings.supabaseAnonKeyLocal
+						: this.settings.supabaseAnonKey,
+					this.settings.supabaseUseLocal
+						? this.settings.supabaseServiceKeyLocal
+						: this.settings.supabaseServiceKey
+						)
+				new Notice("Successfully uploaded notes!")
+			}
+		)
 
-		const testButton = this.addRibbonIcon("test-tube-2", "Test", async () => {
-			console.log(this.app.vault.getFiles())
-		})
+		const testButton = this.addRibbonIcon(
+			"test-tube-2",
+			"Test",
+			async () => {
+				console.log(this.app.vault.getFiles())
+			}
+		)
 
 		// This adds an editor command that can perform some operation on the current editor instance
 		this.addCommand({
@@ -50,17 +74,25 @@ export default class WikiGeneratorPlugin extends Plugin {
 						this.app.vault.adapter.basePath,
 						"/.obsidian/plugins/obsidian-wiki-generator/"
 					),
-					this.settings.vercelBlobToken
+					this.settings.supabaseUseLocal
+						? this.settings.supabaseUrl
+						: "http://localhost:54321",
+					this.settings.supabaseUseLocal
+						? this.settings.supabaseAnonKey
+						: this.settings.supabaseAnonKeyLocal,
+					this.settings.supabaseUseLocal
+						? this.settings.supabaseServiceKey
+						: this.settings.supabaseServiceKeyLocal
 				)
 				new Notice("Successfully uploaded notes!")
 			},
 		})
 
 		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this))
+		this.addSettingTab(new WikiGeneratorSettingTab(this.app, this))
 	}
 
-	onunload() { }
+	onunload() {}
 
 	async loadSettings() {
 		this.settings = Object.assign(
@@ -75,7 +107,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 	}
 }
 
-class SampleSettingTab extends PluginSettingTab {
+class WikiGeneratorSettingTab extends PluginSettingTab {
 	plugin: WikiGeneratorPlugin
 
 	constructor(app: App, plugin: WikiGeneratorPlugin) {
@@ -89,41 +121,102 @@ class SampleSettingTab extends PluginSettingTab {
 		containerEl.empty()
 
 		new Setting(containerEl)
-			.setName("Vercel Blob Token")
-			.setDesc(
-				"Secret token for Vercel Blob file storage. You can find it in your Vercel dashboard."
-			)
-			.addText((text) => text
-				.setPlaceholder("Copy your token")
-				.setValue(this.plugin.settings.vercelBlobToken)
-				.onChange(async (value) => {
-					this.plugin.settings.vercelBlobToken = value
-					await this.plugin.saveSettings()
-				})
+			.setName("Tokens")
+			.setHeading()
+
+		new Setting(containerEl)
+			.setName("Supabase URL")
+			.setDesc("The URL for the Supabase API")
+			.addText((text) =>
+				text
+					.setPlaceholder("Copy your token")
+					.setValue(this.plugin.settings.supabaseUrl)
+					.onChange(async (value) => {
+						this.plugin.settings.supabaseUrl = value
+						await this.plugin.saveSettings()
+					})
 			)
 
 		new Setting(containerEl)
 			.setName("Supabase Anon Key")
 			.setDesc("The anon key for Supabase")
-			.addText((text) => text
-				.setPlaceholder("Copy your token")
-				.setValue(this.plugin.settings.supabaseAnonKey)
-				.onChange(async (value) => {
-					this.plugin.settings.supabaseAnonKey = value
-					await this.plugin.saveSettings()
-				})
+			.addText((text) =>
+				text
+					.setPlaceholder("Copy your token")
+					.setValue(this.plugin.settings.supabaseAnonKey)
+					.onChange(async (value) => {
+						this.plugin.settings.supabaseAnonKey = value
+						await this.plugin.saveSettings()
+					})
 			)
 
 		new Setting(containerEl)
-			.setName("Supabase URL")
-			.setDesc("The URL for Supabase")
-			.addText((text) => text
-				.setPlaceholder("Copy your token")
-				.setValue(this.plugin.settings.supabaseUrl)
-				.onChange(async (value) => {
-					this.plugin.settings.supabaseUrl = value
-					await this.plugin.saveSettings()
-				})
+			.setName("Supabase Service Key")
+			.setDesc("The Service key for Supabase")
+			.addText((text) =>
+				text
+					.setPlaceholder("Copy your token")
+					.setValue(this.plugin.settings.supabaseServiceKey)
+					.onChange(async (value) => {
+						this.plugin.settings.supabaseServiceKey = value
+						await this.plugin.saveSettings()
+					})
+			)
+
+		new Setting(containerEl)
+			.setName("Developer Options")
+			.setHeading()
+
+		new Setting(containerEl)
+			.setName("Use Local Supabase Docker Container")
+			.setDesc(
+				"Use a local Supabase container for plugin development. Requires setting the local anon and service keys below"
+			)
+			.addToggle(async (toggle) => {
+				toggle
+					.setValue(this.plugin.settings.supabaseUseLocal)
+					.onChange(async (value) => {
+						this.plugin.settings.supabaseUseLocal = value
+						await this.plugin.saveSettings()
+					})
+			})
+
+		new Setting(containerEl)
+			.setName("Supabase URL (Local)")
+			.setDesc("The URL for the API of a local Supabase instance. You probably don't need to change this")
+			.addText((text) =>
+				text
+					.setValue(this.plugin.settings.supabaseUrlLocal)
+					.onChange(async (value) => {
+						this.plugin.settings.supabaseUrlLocal = value
+						await this.plugin.saveSettings()
+					})
+			)
+
+		new Setting(containerEl)
+			.setName("Supabase Anon Key (Local)")
+			.setDesc("The anon key for a local Supabase instance")
+			.addText((text) =>
+				text
+					.setPlaceholder("Copy your token")
+					.setValue(this.plugin.settings.supabaseAnonKeyLocal)
+					.onChange(async (value) => {
+						this.plugin.settings.supabaseAnonKeyLocal = value
+						await this.plugin.saveSettings()
+					})
+			)
+
+		new Setting(containerEl)
+			.setName("Supabase Service Key (Local)")
+			.setDesc("The Service key for a local Supabase instance")
+			.addText((text) =>
+				text
+					.setPlaceholder("Copy your token")
+					.setValue(this.plugin.settings.supabaseServiceKeyLocal)
+					.onChange(async (value) => {
+						this.plugin.settings.supabaseServiceKeyLocal = value
+						await this.plugin.saveSettings()
+					})
 			)
 	}
 }
