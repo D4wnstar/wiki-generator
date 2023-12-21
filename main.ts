@@ -4,6 +4,8 @@ import { convertNotesForUpload } from "src/format"
 
 interface WikiGeneratorSettings {
 	vercelBlobToken: string
+	supabaseUrl: string
+	supabaseAnonKey: string
 }
 
 const DEFAULT_SETTINGS: WikiGeneratorSettings = {
@@ -58,7 +60,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 		this.addSettingTab(new SampleSettingTab(this.app, this))
 	}
 
-	onunload() {}
+	onunload() { }
 
 	async loadSettings() {
 		this.settings = Object.assign(
@@ -91,14 +93,37 @@ class SampleSettingTab extends PluginSettingTab {
 			.setDesc(
 				"Secret token for Vercel Blob file storage. You can find it in your Vercel dashboard."
 			)
-			.addText((text) =>
-				text
-					.setPlaceholder("Copy your token")
-					.setValue(this.plugin.settings.vercelBlobToken)
-					.onChange(async (value) => {
-						this.plugin.settings.vercelBlobToken = value
-						await this.plugin.saveSettings()
-					})
+			.addText((text) => text
+				.setPlaceholder("Copy your token")
+				.setValue(this.plugin.settings.vercelBlobToken)
+				.onChange(async (value) => {
+					this.plugin.settings.vercelBlobToken = value
+					await this.plugin.saveSettings()
+				})
+			)
+
+		new Setting(containerEl)
+			.setName("Supabase Anon Key")
+			.setDesc("The anon key for Supabase")
+			.addText((text) => text
+				.setPlaceholder("Copy your token")
+				.setValue(this.plugin.settings.supabaseAnonKey)
+				.onChange(async (value) => {
+					this.plugin.settings.supabaseAnonKey = value
+					await this.plugin.saveSettings()
+				})
+			)
+
+		new Setting(containerEl)
+			.setName("Supabase URL")
+			.setDesc("The URL for Supabase")
+			.addText((text) => text
+				.setPlaceholder("Copy your token")
+				.setValue(this.plugin.settings.supabaseUrl)
+				.onChange(async (value) => {
+					this.plugin.settings.supabaseUrl = value
+					await this.plugin.saveSettings()
+				})
 			)
 	}
 }

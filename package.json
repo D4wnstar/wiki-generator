@@ -25,6 +25,7 @@
 		"typescript": "4.7.4"
 	},
 	"dependencies": {
+		"@supabase/supabase-js": "^2.39.1",
 		"@vercel/blob": "file:../../../../../../Software/Web/storage/packages/blob",
 		"showdown": "^2.1.0",
 		"slugify": "^1.6.6"

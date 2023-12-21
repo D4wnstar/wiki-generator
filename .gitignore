@@ -22,3 +22,5 @@ data.json
 .DS_Store
 
 notes-data.ts
+.env
+.env.*
