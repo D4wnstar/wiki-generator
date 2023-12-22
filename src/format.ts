@@ -1,10 +1,12 @@
-import { Converter } from "showdown"
+import markdownit from "markdown-it"
 import slugify from "slugify"
 import { TFile, Vault } from "obsidian"
 import { writeFileSync } from "fs"
 import { join } from "path"
 import { convertWikilinks } from "./wikilinks"
 import { createClient } from "@supabase/supabase-js"
+import * as MarkdownIt from "markdown-it"
+import { Database } from "./database.types"
 
 export type Note = {
 	title: string
@@ -14,6 +16,7 @@ export type Note = {
 	references: Set<string>
 	backreferences: Backreference[]
 	properties: NoteProperties
+	details: Map<string, string>
 }
 
 export type Backreference = {
@@ -24,6 +27,11 @@ export type Backreference = {
 type NoteProperties = {
 	publish: boolean
 	frontpage: boolean
+}
+
+type NotesData = {
+	frontpage: Note
+	notes: Note[]
 }
 
 export function slugifyPath(path: string): string {
@@ -59,21 +67,44 @@ function parseProperties(match: string): NoteProperties {
 	return props
 }
 
-function formatMd(md: string): [string, NoteProperties] {
+function parseDetails(match: string): Map<string, string> {
+	const detailsMap = new Map<string, string>()
+	const details = match.split("\n").filter((line) => line !== "")
+
+	for (const detail of details) {
+		const [kConst, v] = detail.split(/:\s*/)
+		let k = kConst // Literally just to make ESLint not complain about using let instead of const
+		k = k.replace(/^(_|\*)+/, "").replace(/(_|\*)+$/, "")
+		detailsMap.set(k, v)
+	}
+
+	return detailsMap
+}
+
+function formatMd(md: string): [string, NoteProperties, Map<string, string>] {
 	const propsRegex = /^---\r?\n(.*?)\r?\n---/s
-	const match = md.match(propsRegex)
+	const propsMatch = md.match(propsRegex)
 	let props: NoteProperties = { publish: false, frontpage: false }
-	if (match) {
-		props = parseProperties(match[1]) // Save some properties before removing them
+	if (propsMatch) {
+		props = parseProperties(propsMatch[1]) // Save some properties before removing them
 		md = md.replace(propsRegex, "") // Remove obsidian properties
 	}
+
+	const detailsRegex = /^:::details\n(.*?)\n:::/ms // Finds the first occurence of :::details:::
+	const detailsMatch = md.match(detailsRegex)
+	let details = new Map<string, string>()
+	if (detailsMatch) {
+		details = parseDetails(detailsMatch[1])
+		md = md.replace(detailsRegex, "") // Remove details from the main page
+	}
+
 	md = md.replace(/^:::hidden\n.*?\n:::/gms, "") // Remove :::hidden::: blocks
 	md = md.replace(/^#+ GM.*?(?=^#|$(?![\r\n]))/gms, "") // Remove GM paragraphs
-	return [md, props]
+	return [md, props, details]
 }
 
 async function readVault(
-	converter: Converter,
+	converter: MarkdownIt,
 	vault: Vault
 ): Promise<[Note[], TFile[]]> {
 	const notes: Note[] = []
@@ -92,8 +123,9 @@ async function readVault(
 		const out = formatMd(content)
 		content = out[0]
 		const props = out[1]
+		const details = out[2]
 
-		let html = converter.makeHtml(content)
+		let html = converter.render(content)
 		html = html.replace(
 			/<h(\d)(.*?)>(.*?)<\/h\d>/g,
 			'<h$1$2 class="h$1">$3</h$1>'
@@ -120,6 +152,7 @@ async function readVault(
 			references: new Set<string>(),
 			backreferences: [],
 			properties: props,
+			details: details,
 		})
 	}
 	return [notes, media]
@@ -153,52 +186,107 @@ export async function convertNotesForUpload(
 	outPath: string,
 	supabaseUrl: string,
 	supabaseAnonKey: string,
-	supabaseServiceKey: string,
+	supabaseServiceKey: string
 ): Promise<void> {
-	const supabase = createClient(supabaseUrl, supabaseServiceKey)
+	const supabase = createClient<Database>(supabaseUrl, supabaseServiceKey)
 
-	const converter = new Converter()
+	const converter = markdownit()
 	const files = await readVault(converter, vault)
 	let notes = files[0]
 	const media = files[1]
 
-	const { data, error } = await supabase
-		.storage
-		.from('images')
-		.list()
+	const { data, error } = await supabase.storage.from("images").list()
 
 	if (error) {
-		console.error("Could not reach Supabase Storage. Got the following erro:", error.message)
+		console.error(
+			"Could not reach Supabase Storage. Got the following error:",
+			error.message
+		)
 		console.error(error)
 		return
 	}
 
-
-	notes = await Promise.all(notes.map((note) =>
-		convertWikilinks(note, notes, media, vault, data, supabase)
-	))
+	notes = await Promise.all(
+		notes.map((note) =>
+			convertWikilinks(note, notes, media, vault, data, supabase)
+		)
+	)
 	notes.sort((a, b) => a.slug.localeCompare(b.slug))
+
+	const notesData: NotesData = {
+		frontpage: {
+			title: "",
+			path: "",
+			slug: "",
+			content: "",
+			references: new Set(),
+			backreferences: [],
+			properties: {
+				publish: false,
+				frontpage: false,
+			},
+			details: new Map(),
+		},
+		notes: [],
+	}
 
 	let notesJsonString = ""
 	const frontpage = notes.find((note) => note.properties.frontpage)
 	if (frontpage) {
-		notesJsonString += "export const frontpage = "
-		notesJsonString += noteToString(frontpage)
-		notesJsonString += "\n"
+		// notesJsonString += "export const frontpage = "
+		// notesJsonString += noteToString(frontpage)
+		// notesJsonString += "\n"
+		notesData.frontpage = frontpage
 	}
 
 	notesJsonString += "export const notes = [\n"
 	for (const note of notes) {
-		if (!note.properties.publish || note.properties.frontpage) {
-			continue
-		}
-		notesJsonString += "\t"
-		notesJsonString += noteToString(note)
-		notesJsonString += ",\n"
+		// if (!note.properties.publish || note.properties.frontpage) {
+		// 	continue
+		// }
+		// notesJsonString += "\t"
+		// notesJsonString += noteToString(note)
+		// notesJsonString += ",\n"
+		notesData.notes.push(note)
 	}
 	notesJsonString += "]"
 
-	writeFileSync(join(outPath, "notes-data.ts"), notesJsonString, {
+	const dump = JSON.stringify(notesData, (_, value) => {
+		if (value instanceof Map || value instanceof Set) {
+			return [...value]
+		} else {
+			return value
+		}
+	})
+
+	writeFileSync(join(outPath, "notes-data.json"), dump, {
 		encoding: "utf-8",
 	})
+
+	let { data, error } = supabase
+		.from('notes')
+		.insert(notes.map((note) => {
+			title: note.title,
+			path: note.path,
+			slug: note.slug,
+			content: note.content
+		}))
 }
+
+/*
+notes-data.json schema
+
+{
+	"frontpage": Note,
+	"notes": {
+		title: string
+		path: string
+		slug: string
+		content: string
+		references: string[]
+		backreferences: { displayName: string, slug: string }[]
+		properties: { publish: boolean, frontpage: boolean }
+		details: { detailName: string, detailContent: string }[]
+	}[]
+}
+*/

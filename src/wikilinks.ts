@@ -33,13 +33,11 @@ function findReferencedNote(noteName: string, notes: Note[]): Note | undefined {
 }
 
 function handleNoteTransclusion(
-	captureGroups: string[],
+	realName: string,
+	altName: string | undefined,
 	notes: Note[]
 ): string {
 	// TODO: Add handling for #header links
-	const realName = captureGroups[1]
-	const altName = captureGroups[2] // may be undefined
-
 	const refNote = findReferencedNote(realName, notes)
 
 	if (refNote) {
@@ -55,14 +53,12 @@ function handleNoteTransclusion(
 }
 
 function handleNoteReference(
-	captureGroups: string[],
+	realName: string,
+	altName: string | undefined,
 	note: Note,
 	notes: Note[]
 ): string {
 	// TODO: Add handling for #header links
-	const realName = captureGroups[1]
-	const altName = captureGroups[2] // may be undefined
-
 	const refNote = findReferencedNote(realName, notes)
 
 	if (refNote) {
@@ -88,15 +84,18 @@ function handleNoteReference(
 }
 
 async function handleFileTransclusion(
-	captureGroups: string[],
+	filename: string,
+	displayOptions: string | undefined,
 	media: TFile[],
 	vault: Vault,
 	filesInStorage: FileObject[],
 	supabase: SupabaseClient
 ): Promise<string> {
-	const filename = captureGroups[1]
-	// const displayOptions = captureGroups[2]
 	const refFile = media.find((file) => file.name === filename)
+
+	const resolution = displayOptions?.match(/(\d+)x?(\d+)?/) ?? [""]
+	const widthClass = resolution[1] ? `w-[${resolution[1]}px]` : ""
+	const heightClass = resolution[2] ? `h-[${resolution[2]}px]` : ""
 
 	if (!refFile) {
 		console.warn(
@@ -155,9 +154,15 @@ async function handleFileTransclusion(
 		url = urlData.data.publicUrl
 	}
 
+	let tag: string
 	switch (fileType) {
 		case "image":
-			return `<img src="${url}" alt="${refFile.basename}" />`
+			tag = `<img src="${url}" alt="${refFile.basename}"`
+			if (widthClass || heightClass) {
+				tag += ` class="${widthClass} ${heightClass} mx-auto"`
+			}
+			tag += " />"
+			return tag
 		default:
 			// This should be impossible, it's here just because TypeScript is complaining
 			return `[${filename}]`
@@ -166,7 +171,7 @@ async function handleFileTransclusion(
 
 async function subWikilinks(
 	match: string,
-	captureGroups: string[],
+	captureGroups: (string | undefined)[],
 	note: Note,
 	notes: Note[],
 	media: TFile[],
@@ -179,26 +184,49 @@ async function subWikilinks(
 	// Note transclusions copypaste the transcluded text in a <blockquote>
 	// File transclusions inject the file in a tag dependent on the file type
 
-	// const captureGroups: string[] = groups.slice(0, -2)
 	const isTransclusion = captureGroups[0] ? true : false
 	const isMedia = captureGroups[1]?.match(/\..*$/) ? true : false
 
+	const capture1 = captureGroups[1]
+	const capture2 = captureGroups[2]
+
+	if (!capture1) {
+		console.warn(`Could not find match for note ${note.title}`)
+		return note.title
+	}
+
 	if (isTransclusion && isMedia) {
 		return await handleFileTransclusion(
-			captureGroups,
+			capture1,
+			capture2,
 			media,
 			vault,
 			filesInStorage,
 			supabase
 		)
 	} else if (isTransclusion && !isMedia) {
-		return handleNoteTransclusion(captureGroups, notes)
+		return handleNoteTransclusion(capture1, capture2, notes)
 	} else if (!isTransclusion && isMedia) {
-		return captureGroups[1] ?? captureGroups[0]
+		return capture2 ?? capture1
 		// handleFileReference()
 	} else {
-		return handleNoteReference(captureGroups, note, notes)
+		return handleNoteReference(capture1, capture2, note, notes)
 	}
+}
+
+function captionImages(html: string): string {
+	return html.replace(
+		/<img src="(.*?)" alt="(.*?)" class="(w-\[.*?\])?(.*?)" \/>\s*<em>Caption:\s*(.*?)<\/em>/,
+		(match, ...groups) => {
+			const maxw = groups[2] ? ` max-${groups[2]}` : ""
+			return `<figure class="text-center mx-auto w-fit${maxw}">\
+<img src="${groups[0]}" alt="${groups[1]}" class="${groups[2]}${groups[3]}" />\
+<figcaption class="text-surface-700-200-token py-2 px-4 card variant-outline-surface">\
+${groups[4]}\
+</figcaption>\
+</figure>`
+		}
+	)
 }
 
 export async function convertWikilinks(
@@ -209,9 +237,8 @@ export async function convertWikilinks(
 	filesInStorage: FileObject[],
 	supabase: SupabaseClient
 ): Promise<Note> {
-	const matches = Array.from(
-		note.content.matchAll(/(!)?\[\[(.*?)(?:\|(.*?)?)?\]\]/g)
-	)
+	const wikilinkRegex = /(!)?\[\[(.*?)(?:\|(.*?)?)?\]\]/g
+	let matches = [...note.content.matchAll(wikilinkRegex)]
 
 	const replacements = await Promise.all(
 		matches.map((match) =>
@@ -233,6 +260,34 @@ export async function convertWikilinks(
 		newContent = newContent.replace(matches[index][0], replacements[index])
 	}
 	note.content = newContent
+
+	for (const [key, value] of note.details.entries()) {
+		matches = [...value.matchAll(wikilinkRegex)]
+
+		const replacements = await Promise.all(
+			matches.map((match) =>
+				subWikilinks(
+					match[0],
+					match.slice(1),
+					note,
+					notes,
+					media,
+					vault,
+					filesInStorage,
+					supabase
+				)
+			)
+		)
+
+		for (const index in matches) {
+			note.details.set(
+				key,
+				value.replace(matches[index][0], replacements[index])
+			)
+		}
+	}
+
+	note.content = captionImages(note.content)
 
 	return note
 }
