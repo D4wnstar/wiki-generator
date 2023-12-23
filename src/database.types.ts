@@ -36,19 +36,22 @@ export interface Database {
     Tables: {
       backreferences: {
         Row: {
-          backreference: string | null
+          display_name: string | null
           id: number
-          note_id: number | null
+          note_id: number
+          slug: string | null
         }
         Insert: {
-          backreference?: string | null
+          display_name?: string | null
           id?: number
-          note_id?: number | null
+          note_id: number
+          slug?: string | null
         }
         Update: {
-          backreference?: string | null
+          display_name?: string | null
           id?: number
-          note_id?: number | null
+          note_id?: number
+          slug?: string | null
         }
         Relationships: [
           {
@@ -64,19 +67,19 @@ export interface Database {
           detail_content: string | null
           detail_name: string | null
           id: number
-          note_id: number | null
+          note_id: number
         }
         Insert: {
           detail_content?: string | null
           detail_name?: string | null
           id?: number
-          note_id?: number | null
+          note_id: number
         }
         Update: {
           detail_content?: string | null
           detail_name?: string | null
           id?: number
-          note_id?: number | null
+          note_id?: number
         }
         Relationships: [
           {
@@ -92,31 +95,31 @@ export interface Database {
           content: string | null
           frontpage: boolean | null
           id: number
-          path: string | null
+          path: string
           publish: boolean | null
           references: string[] | null
-          slug: string | null
-          title: string | null
+          slug: string
+          title: string
         }
         Insert: {
           content?: string | null
           frontpage?: boolean | null
           id?: number
-          path?: string | null
+          path: string
           publish?: boolean | null
           references?: string[] | null
-          slug?: string | null
-          title?: string | null
+          slug: string
+          title: string
         }
         Update: {
           content?: string | null
           frontpage?: boolean | null
           id?: number
-          path?: string | null
+          path?: string
           publish?: boolean | null
           references?: string[] | null
-          slug?: string | null
-          title?: string | null
+          slug?: string
+          title?: string
         }
         Relationships: []
       }

@@ -8,6 +8,20 @@ import { createClient } from "@supabase/supabase-js"
 import * as MarkdownIt from "markdown-it"
 import { Database } from "./database.types"
 
+export class NoFrontPageError extends Error {
+  constructor(message: string) {
+	super(message); // Pass the message to the Error constructor
+	this.name = "NoFrontPageError"; // Set the name of the error
+  }
+}
+
+export class DatabaseError extends Error {
+  constructor(message: string) {
+	super(message); // Pass the message to the Error constructor
+	this.name = "DatabaseError"; // Set the name of the error
+  }
+}
+
 export type Note = {
 	title: string
 	path: string
@@ -231,12 +245,18 @@ export async function convertNotesForUpload(
 	}
 
 	let notesJsonString = ""
+	// Change .find to .filter and check if the resulting array has a length of 1
+	// to prevent possibly weird behaviour in case user sets more than one front page
 	const frontpage = notes.find((note) => note.properties.frontpage)
 	if (frontpage) {
 		// notesJsonString += "export const frontpage = "
 		// notesJsonString += noteToString(frontpage)
 		// notesJsonString += "\n"
 		notesData.frontpage = frontpage
+	} else {
+		throw new NoFrontPageError(
+			"ERROR: No page has been set as the front page. One front page must be set by adding the dg-home: true property to a note."
+		)
 	}
 
 	notesJsonString += "export const notes = [\n"
@@ -263,14 +283,56 @@ export async function convertNotesForUpload(
 		encoding: "utf-8",
 	})
 
-	let { data, error } = supabase
+	const notesInsertionResult = await supabase
 		.from('notes')
-		.insert(notes.map((note) => {
-			title: note.title,
-			path: note.path,
-			slug: note.slug,
-			content: note.content
-		}))
+		.upsert(notes.map((note) => {
+			return {
+				title: note.title,
+				path: note.path,
+				slug: note.slug,
+				content: note.content,
+				publish: note.properties.publish,
+				frontpage: note.properties.frontpage,
+				references: [...note.references]
+			}
+		}), {
+			onConflict: 'slug', // Treat rows with the same slug as duplicate pages
+			ignoreDuplicates: false, // Merge information of duplicate pages to keep things updated
+		})
+		.select()
+
+	if (notesInsertionResult.error) {
+		throw new DatabaseError(notesInsertionResult.error.message)
+	}
+
+	const addedNotes = notesInsertionResult.data
+
+	for (const index in notes) {
+		const { error: detailsError } = await supabase
+			.from('details')
+			.upsert([...notes[index].details.entries()].map((pair) => {
+				return {
+					note_id: addedNotes[index].id,
+					detail_name: pair[0],
+					detail_content: pair[1]
+				}
+			}))
+		
+		if (detailsError) { throw new DatabaseError(detailsError.message) }
+
+		const { error: backrefError } = await supabase
+			.from('backreferences')
+			.upsert(notes[index].backreferences.map((backref) => {
+				return {
+					note_id: addedNotes[index].id,
+					display_name: backref.displayName,
+					slug: backref.slug
+				}
+			}))
+		
+		if (backrefError) { throw new DatabaseError(backrefError.message) }
+	}
+	
 }
 
 /*

@@ -1,6 +1,10 @@
 import { App, Notice, Plugin, PluginSettingTab, Setting } from "obsidian"
 import { join } from "path"
-import { convertNotesForUpload } from "src/format"
+import {
+	DatabaseError,
+	NoFrontPageError,
+	convertNotesForUpload,
+} from "src/format"
 
 interface WikiGeneratorSettings {
 	supabaseUrl: string
@@ -34,22 +38,33 @@ export default class WikiGeneratorPlugin extends Plugin {
 			"Upload Notes",
 			async () => {
 				new Notice("Beginning note conversion...")
-				await convertNotesForUpload(
-					this.app.vault,
-					join(
-						this.app.vault.adapter.basePath,
-						"/.obsidian/plugins/obsidian-wiki-generator/"
-					),
-					this.settings.supabaseUseLocal
-						? "http://localhost:54321"
-						: this.settings.supabaseUrl,
-					this.settings.supabaseUseLocal
-						? this.settings.supabaseAnonKeyLocal
-						: this.settings.supabaseAnonKey,
-					this.settings.supabaseUseLocal
-						? this.settings.supabaseServiceKeyLocal
-						: this.settings.supabaseServiceKey
-						)
+				try {
+					await convertNotesForUpload(
+						this.app.vault,
+						join(
+							this.app.vault.adapter.basePath,
+							"/.obsidian/plugins/obsidian-wiki-generator/"
+						),
+						this.settings.supabaseUseLocal
+							? "http://localhost:54321"
+							: this.settings.supabaseUrl,
+						this.settings.supabaseUseLocal
+							? this.settings.supabaseAnonKeyLocal
+							: this.settings.supabaseAnonKey,
+						this.settings.supabaseUseLocal
+							? this.settings.supabaseServiceKeyLocal
+							: this.settings.supabaseServiceKey
+					)
+				} catch (error) {
+					if (
+						error instanceof NoFrontPageError ||
+						error instanceof DatabaseError
+					) {
+						new Notice(error.message)
+						return
+					}
+				}
+
 				new Notice("Successfully uploaded notes!")
 			}
 		)
@@ -120,9 +135,7 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 
 		containerEl.empty()
 
-		new Setting(containerEl)
-			.setName("Tokens")
-			.setHeading()
+		new Setting(containerEl).setName("Tokens").setHeading()
 
 		new Setting(containerEl)
 			.setName("Supabase URL")
@@ -163,9 +176,7 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 					})
 			)
 
-		new Setting(containerEl)
-			.setName("Developer Options")
-			.setHeading()
+		new Setting(containerEl).setName("Developer Options").setHeading()
 
 		new Setting(containerEl)
 			.setName("Use Local Supabase Docker Container")
@@ -183,7 +194,9 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Supabase URL (Local)")
-			.setDesc("The URL for the API of a local Supabase instance. You probably don't need to change this")
+			.setDesc(
+				"The URL for the API of a local Supabase instance. You probably don't need to change this"
+			)
 			.addText((text) =>
 				text
 					.setValue(this.plugin.settings.supabaseUrlLocal)
