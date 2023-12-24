@@ -1,25 +1,25 @@
 import markdownit from "markdown-it"
 import slugify from "slugify"
 import { TFile, Vault } from "obsidian"
-import { writeFileSync } from "fs"
-import { join } from "path"
 import { convertWikilinks } from "./wikilinks"
 import { createClient } from "@supabase/supabase-js"
 import * as MarkdownIt from "markdown-it"
 import { Database } from "./database.types"
+import { writeFileSync } from "fs"
+import { join } from "path"
 
-export class NoFrontPageError extends Error {
-  constructor(message: string) {
-	super(message); // Pass the message to the Error constructor
-	this.name = "NoFrontPageError"; // Set the name of the error
-  }
+export class FrontPageError extends Error {
+	constructor(message: string) {
+		super(message) // Pass the message to the Error constructor
+		this.name = "NoFrontPageError" // Set the name of the error
+	}
 }
 
 export class DatabaseError extends Error {
-  constructor(message: string) {
-	super(message); // Pass the message to the Error constructor
-	this.name = "DatabaseError"; // Set the name of the error
-  }
+	constructor(message: string) {
+		super(message) // Pass the message to the Error constructor
+		this.name = "DatabaseError" // Set the name of the error
+	}
 }
 
 export type Note = {
@@ -31,6 +31,7 @@ export type Note = {
 	backreferences: Backreference[]
 	properties: NoteProperties
 	details: Map<string, string>
+	sidebarImages: SidebarImage[]
 }
 
 export type Backreference = {
@@ -43,9 +44,9 @@ type NoteProperties = {
 	frontpage: boolean
 }
 
-type NotesData = {
-	frontpage: Note
-	notes: Note[]
+type SidebarImage = {
+	image_name: string
+	caption: string | undefined
 }
 
 export function slugifyPath(path: string): string {
@@ -95,7 +96,39 @@ function parseDetails(match: string): Map<string, string> {
 	return detailsMap
 }
 
-function formatMd(md: string): [string, NoteProperties, Map<string, string>] {
+function parseImage(match: RegExpMatchArray): SidebarImage {
+	let filename: string | undefined = undefined
+	let caption: string | undefined = undefined
+
+	const lines = match[0].split("\n").filter((line) => line !== "")
+	for (const line of lines) {
+		const wikilink = line.match(/!\[\[(.*?)(\|.*)?\]\]/)
+		if (wikilink) {
+			filename = wikilink[1]
+			continue
+		}
+		const capMatch = line.match(/\*Caption:\s*(.*)\*/)
+		if (capMatch) {
+			caption = capMatch[1]
+		}
+	}
+
+	if (!filename) {
+		throw new Error("Invalid formatting for :::image::: block.")
+	}
+
+	return {
+		image_name: filename,
+		caption: caption,
+	}
+}
+
+function formatMd(md: string): {
+	md: string
+	props: NoteProperties
+	details: Map<string, string>
+	sidebarImgs: SidebarImage[]
+} {
 	const propsRegex = /^---\r?\n(.*?)\r?\n---/s
 	const propsMatch = md.match(propsRegex)
 	let props: NoteProperties = { publish: false, frontpage: false }
@@ -112,12 +145,25 @@ function formatMd(md: string): [string, NoteProperties, Map<string, string>] {
 		md = md.replace(detailsRegex, "") // Remove details from the main page
 	}
 
+	const imageRegex = /^:::image\n(.*?)\n:::/gms // Finds all occurences of :::image:::
+	const imageMatch = md.matchAll(imageRegex)
+	const sidebarImages: SidebarImage[] = []
+	for (const match of imageMatch) {
+		sidebarImages.push(parseImage(match))
+		md = md.replace(match[0], "")
+	}
+
 	md = md.replace(/^:::hidden\n.*?\n:::/gms, "") // Remove :::hidden::: blocks
 	md = md.replace(/^#+ GM.*?(?=^#|$(?![\r\n]))/gms, "") // Remove GM paragraphs
-	return [md, props, details]
+	return {
+		md: md,
+		props: props,
+		details: details,
+		sidebarImgs: sidebarImages,
+	}
 }
 
-async function readVault(
+async function vaultToNotes(
 	converter: MarkdownIt,
 	vault: Vault
 ): Promise<[Note[], TFile[]]> {
@@ -130,16 +176,12 @@ async function readVault(
 			media.push(file)
 			continue
 		}
-
 		const slug = slugifyPath(file.path.replace(".md", ""))
 
-		let content = await vault.read(file)
-		const out = formatMd(content)
-		content = out[0]
-		const props = out[1]
-		const details = out[2]
+		const content = await vault.read(file)
+		const formatted = formatMd(content)
 
-		let html = converter.render(content)
+		let html = converter.render(formatted.md)
 		html = html.replace(
 			/<h(\d)(.*?)>(.*?)<\/h\d>/g,
 			'<h$1$2 class="h$1">$3</h$1>'
@@ -150,12 +192,12 @@ async function readVault(
 		)
 		html = html.replace(/<blockquote>/g, '<blockquote class="blockquote">')
 		html = html.replace(
-			/<ul>/g,
-			'<ul class="list-disc list-inside [&_&]:pl-5">'
+			/<ul(.*?)>/g,
+			'<ul$1 class="list-disc list-inside [&_&]:pl-5">'
 		)
 		html = html.replace(
-			/<ol>/g,
-			'<ul class="list-decimal list-inside [&_&]:pl-5">'
+			/<ol(.*?)>/g,
+			'<ol$1 class="list-decimal list-inside [&_&]:pl-5">'
 		)
 
 		notes.push({
@@ -165,34 +207,12 @@ async function readVault(
 			content: html,
 			references: new Set<string>(),
 			backreferences: [],
-			properties: props,
-			details: details,
+			properties: formatted.props,
+			details: formatted.details,
+			sidebarImages: formatted.sidebarImgs,
 		})
 	}
 	return [notes, media]
-}
-
-function noteToString(note: Note): string {
-	let out = ""
-	out += "{"
-	out += `\n\t\ttitle: "${note.title}",`
-	out += `\n\t\tpath: "${note.path}",`
-	out += `\n\t\tslug: "${note.slug}",`
-	out += `\n\t\treferences: [`
-	for (const ref of note.references) {
-		out += `"${ref}", `
-	}
-	out += `],`
-	out += `\n\t\tbackreferences: [`
-	for (const ref of note.backreferences) {
-		out += `{displayName: "${ref.displayName}", slug: "${ref.slug}"}, `
-	}
-	out += `],`
-	out += `\n\t\tcontent: \`${note.content}\`,`
-	out += `\n\t\tproperties: { publish: ${note.properties.publish}, frontpage: ${note.properties.frontpage} },`
-	out += "\n\t}"
-
-	return out
 }
 
 export async function convertNotesForUpload(
@@ -205,100 +225,63 @@ export async function convertNotesForUpload(
 	const supabase = createClient<Database>(supabaseUrl, supabaseServiceKey)
 
 	const converter = markdownit()
-	const files = await readVault(converter, vault)
-	let notes = files[0]
-	const media = files[1]
+	const files = await vaultToNotes(converter, vault)
+	const [allNotes, media] = files
+	let notes = allNotes.filter((note) => note.properties.publish) // Remove all notes that aren't set to be published
 
-	const { data, error } = await supabase.storage.from("images").list()
+	const { data: storedMedia, error: storageError } = await supabase.storage
+		.from("images")
+		.list()
 
-	if (error) {
-		console.error(
-			"Could not reach Supabase Storage. Got the following error:",
-			error.message
+	if (storageError) {
+		throw new DatabaseError(
+			`${storageError.message}\nIf you just created your Supabase database, try waiting a couple minutes and then try again.`
 		)
-		console.error(error)
-		return
 	}
 
 	notes = await Promise.all(
 		notes.map((note) =>
-			convertWikilinks(note, notes, media, vault, data, supabase)
+			convertWikilinks(note, notes, media, vault, storedMedia, supabase)
 		)
 	)
 	notes.sort((a, b) => a.slug.localeCompare(b.slug))
 
-	const notesData: NotesData = {
-		frontpage: {
-			title: "",
-			path: "",
-			slug: "",
-			content: "",
-			references: new Set(),
-			backreferences: [],
-			properties: {
-				publish: false,
-				frontpage: false,
-			},
-			details: new Map(),
-		},
-		notes: [],
-	}
-
-	let notesJsonString = ""
-	// Change .find to .filter and check if the resulting array has a length of 1
-	// to prevent possibly weird behaviour in case user sets more than one front page
-	const frontpage = notes.find((note) => note.properties.frontpage)
-	if (frontpage) {
-		// notesJsonString += "export const frontpage = "
-		// notesJsonString += noteToString(frontpage)
-		// notesJsonString += "\n"
-		notesData.frontpage = frontpage
-	} else {
-		throw new NoFrontPageError(
+	const frontpageArray = notes.filter((note) => note.properties.frontpage)
+	if (frontpageArray.length === 0) {
+		throw new FrontPageError(
 			"ERROR: No page has been set as the front page. One front page must be set by adding the dg-home: true property to a note."
+		)
+	} else if (frontpageArray.length > 1) {
+		throw new FrontPageError(
+			`ERROR: Multiple pages have been set as the front page.
+			Please only set a single page as the front page.
+			The relevant pages are ${frontpageArray.reduce(
+				(prev, curr) => `${prev}\n${curr.path}`,
+				"\n"
+			)}`
 		)
 	}
 
-	notesJsonString += "export const notes = [\n"
-	for (const note of notes) {
-		// if (!note.properties.publish || note.properties.frontpage) {
-		// 	continue
-		// }
-		// notesJsonString += "\t"
-		// notesJsonString += noteToString(note)
-		// notesJsonString += ",\n"
-		notesData.notes.push(note)
-	}
-	notesJsonString += "]"
-
-	const dump = JSON.stringify(notesData, (_, value) => {
-		if (value instanceof Map || value instanceof Set) {
-			return [...value]
-		} else {
-			return value
-		}
-	})
-
-	writeFileSync(join(outPath, "notes-data.json"), dump, {
-		encoding: "utf-8",
-	})
+	writeFileSync(join(outPath, "notes-data.json"), JSON.stringify(notes))
 
 	const notesInsertionResult = await supabase
-		.from('notes')
-		.upsert(notes.map((note) => {
-			return {
-				title: note.title,
-				path: note.path,
-				slug: note.slug,
-				content: note.content,
-				publish: note.properties.publish,
-				frontpage: note.properties.frontpage,
-				references: [...note.references]
+		.from("notes")
+		.upsert(
+			notes.map((note) => {
+				return {
+					title: note.title,
+					path: note.path,
+					slug: note.slug,
+					content: note.content,
+					frontpage: note.properties.frontpage,
+					references: [...note.references],
+				}
+			}),
+			{
+				onConflict: "slug", // Treat rows with the same slug as duplicate pages
+				ignoreDuplicates: false, // Merge information of duplicate pages to keep things updated
 			}
-		}), {
-			onConflict: 'slug', // Treat rows with the same slug as duplicate pages
-			ignoreDuplicates: false, // Merge information of duplicate pages to keep things updated
-		})
+		)
 		.select()
 
 	if (notesInsertionResult.error) {
@@ -308,47 +291,63 @@ export async function convertNotesForUpload(
 	const addedNotes = notesInsertionResult.data
 
 	for (const index in notes) {
-		const { error: detailsError } = await supabase
-			.from('details')
-			.upsert([...notes[index].details.entries()].map((pair) => {
+		const { error: detailsError } = await supabase.from("details").upsert(
+			[...notes[index].details.entries()].map((pair) => {
 				return {
 					note_id: addedNotes[index].id,
 					detail_name: pair[0],
-					detail_content: pair[1]
+					detail_content: pair[1],
 				}
-			}))
-		
-		if (detailsError) { throw new DatabaseError(detailsError.message) }
+			})
+		)
+
+		if (detailsError) {
+			throw new DatabaseError(detailsError.message)
+		}
 
 		const { error: backrefError } = await supabase
-			.from('backreferences')
-			.upsert(notes[index].backreferences.map((backref) => {
+			.from("backreferences")
+			.upsert(
+				notes[index].backreferences.map((backref) => {
+					return {
+						note_id: addedNotes[index].id,
+						display_name: backref.displayName,
+						slug: backref.slug,
+					}
+				})
+			)
+
+		if (backrefError) {
+			throw new DatabaseError(backrefError.message)
+		}
+
+		// Transfrom the names of the images into the corresponding public URL
+		notes[index].sidebarImages = await Promise.all(
+			notes[index].sidebarImages.map(async (img) => {
+				const {
+					data: { publicUrl },
+				} = supabase.storage.from("images").getPublicUrl(img.image_name)
 				return {
-					note_id: addedNotes[index].id,
-					display_name: backref.displayName,
-					slug: backref.slug
+					image_name: publicUrl,
+					caption: img.caption,
 				}
-			}))
-		
-		if (backrefError) { throw new DatabaseError(backrefError.message) }
+			})
+		)
+
+		const { error: imagesError } = await supabase
+			.from("sidebar_images")
+			.upsert(
+				notes[index].sidebarImages.map((img) => {
+					return {
+						note_id: addedNotes[index].id,
+						image_name: img.image_name,
+						caption: img.caption,
+					}
+				})
+			)
+
+		if (imagesError) {
+			throw new DatabaseError(imagesError.message)
+		}
 	}
-	
 }
-
-/*
-notes-data.json schema
-
-{
-	"frontpage": Note,
-	"notes": {
-		title: string
-		path: string
-		slug: string
-		content: string
-		references: string[]
-		backreferences: { displayName: string, slug: string }[]
-		properties: { publish: boolean, frontpage: boolean }
-		details: { detailName: string, detailContent: string }[]
-	}[]
-}
-*/

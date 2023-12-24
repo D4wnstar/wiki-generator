@@ -2,7 +2,7 @@ import { App, Notice, Plugin, PluginSettingTab, Setting } from "obsidian"
 import { join } from "path"
 import {
 	DatabaseError,
-	NoFrontPageError,
+	FrontPageError,
 	convertNotesForUpload,
 } from "src/format"
 
@@ -57,15 +57,18 @@ export default class WikiGeneratorPlugin extends Plugin {
 					)
 				} catch (error) {
 					if (
-						error instanceof NoFrontPageError ||
+						error instanceof FrontPageError ||
 						error instanceof DatabaseError
 					) {
+						console.error(error.message)
 						new Notice(error.message)
 						return
+					} else {
+						throw error
 					}
 				}
 
-				new Notice("Successfully uploaded notes!")
+				new Notice("Finshed uploading notes!")
 			}
 		)
 

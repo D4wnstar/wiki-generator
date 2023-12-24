@@ -36,22 +36,19 @@ export interface Database {
     Tables: {
       backreferences: {
         Row: {
-          display_name: string | null
-          id: number
+          display_name: string
           note_id: number
-          slug: string | null
+          slug: string
         }
         Insert: {
-          display_name?: string | null
-          id?: number
+          display_name: string
           note_id: number
-          slug?: string | null
+          slug: string
         }
         Update: {
-          display_name?: string | null
-          id?: number
+          display_name?: string
           note_id?: number
-          slug?: string | null
+          slug?: string
         }
         Relationships: [
           {
@@ -64,21 +61,18 @@ export interface Database {
       }
       details: {
         Row: {
-          detail_content: string | null
-          detail_name: string | null
-          id: number
+          detail_content: string
+          detail_name: string
           note_id: number
         }
         Insert: {
-          detail_content?: string | null
-          detail_name?: string | null
-          id?: number
+          detail_content: string
+          detail_name: string
           note_id: number
         }
         Update: {
-          detail_content?: string | null
-          detail_name?: string | null
-          id?: number
+          detail_content?: string
+          detail_name?: string
           note_id?: number
         }
         Relationships: [
@@ -96,7 +90,6 @@ export interface Database {
           frontpage: boolean | null
           id: number
           path: string
-          publish: boolean | null
           references: string[] | null
           slug: string
           title: string
@@ -106,7 +99,6 @@ export interface Database {
           frontpage?: boolean | null
           id?: number
           path: string
-          publish?: boolean | null
           references?: string[] | null
           slug: string
           title: string
@@ -116,12 +108,36 @@ export interface Database {
           frontpage?: boolean | null
           id?: number
           path?: string
-          publish?: boolean | null
           references?: string[] | null
           slug?: string
           title?: string
         }
         Relationships: []
+      }
+      sidebar_images: {
+        Row: {
+          caption: string | null
+          image_name: string
+          note_id: number
+        }
+        Insert: {
+          caption?: string | null
+          image_name: string
+          note_id: number
+        }
+        Update: {
+          caption?: string | null
+          image_name?: string
+          note_id?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sidebar_images_note_id_fkey"
+            columns: ["note_id"]
+            referencedRelation: "notes"
+            referencedColumns: ["id"]
+          }
+        ]
       }
     }
     Views: {

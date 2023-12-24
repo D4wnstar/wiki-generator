@@ -2,6 +2,7 @@ import { Notice, TFile, Vault } from "obsidian"
 import { Backreference, Note, slugifyPath } from "./format"
 import { SupabaseClient } from "@supabase/supabase-js"
 import { FileObject } from "@supabase/storage-js"
+import Image from "image-js"
 
 function backrefAlreadyExists(
 	displayName: string,
@@ -93,9 +94,13 @@ async function handleFileTransclusion(
 ): Promise<string> {
 	const refFile = media.find((file) => file.name === filename)
 
-	const resolution = displayOptions?.match(/(\d+)x?(\d+)?/) ?? [""]
-	const widthClass = resolution[1] ? `w-[${resolution[1]}px]` : ""
-	const heightClass = resolution[2] ? `h-[${resolution[2]}px]` : ""
+	let width: number | undefined
+	let height: number | undefined
+	if (displayOptions) {
+		const resolution = displayOptions?.match(/(\d+)x?(\d+)?/) ?? ["", "", ""]
+		width = resolution[1] ? parseInt(resolution[1]) : undefined
+		height = resolution[2] ? parseInt(resolution[2]) : undefined
+	}
 
 	if (!refFile) {
 		console.warn(
@@ -112,21 +117,33 @@ async function handleFileTransclusion(
 		console.warn(
 			`File type for file "${filename}" is currently unsupported. Skipping...`
 		)
-		return filename
+		return `[${filename}]`
 	}
 
-	// Pathname check is an .includes() so that I don't have to extract the base name
-	// AND because blobs have a random suffix added to their filename by default
-	const storedFile = filesInStorage.find((file) =>
-		file.name.includes(filename)
-	)
+	const refFileBinary = await vault.readBinary(refFile)
+	const image = await Image.load(refFileBinary)	
+
+	// If the user specified width or height, rewrite the filename to {filename}_{w}x{h}.webp
+	filename = refFile.basename
+	// if (image.size > 1280 * 720) { filename += `_720` }
+	filename += ".webp"
+
+	const storedFile = filesInStorage.find((file) => file.name === filename)
 	let url: string
 
 	if (!storedFile) {
-		const refFileBinary = await vault.readBinary(refFile)
+		// Resize image if necessary
+		// if (width) {
+		// 	image = height
+		// 		? image.resize({ width: width, height: height })
+		// 		: image.resize({ width: width })
+		// }
+		
+		// Convert to webp
+		const blob = await image.toBlob('image/webp')
 		const { data, error } = await supabase.storage
 			.from("images")
-			.upload(filename, new Blob([refFileBinary]))
+			.upload(filename, blob)
 
 		if (error) {
 			console.error(
@@ -155,13 +172,11 @@ async function handleFileTransclusion(
 	}
 
 	let tag: string
+	const wClass = width ? `w-[${width}px]` : ""
+	const hClass = height ? `h-[${height}px]` : ""
 	switch (fileType) {
 		case "image":
-			tag = `<img src="${url}" alt="${refFile.basename}"`
-			if (widthClass || heightClass) {
-				tag += ` class="${widthClass} ${heightClass} mx-auto"`
-			}
-			tag += " />"
+			tag = `<img src="${url}" alt="${refFile.basename}" class="${wClass} ${hClass} mx-auto" />`
 			return tag
 		default:
 			// This should be impossible, it's here just because TypeScript is complaining

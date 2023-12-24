@@ -4,21 +4,27 @@ create table notes (
     path text unique not null,
     slug text unique not null,
     content text,
-    publish boolean default false,
     frontpage boolean default false,
     "references" text array
 );
 
 create table backreferences (
-    id serial primary key,
     note_id integer not null references notes (id),
-    display_name text,
-    slug text
+    slug text not null,
+    display_name text not null,
+    primary key (note_id, slug)
 );
 
 create table details (
-    id serial primary key,
     note_id integer not null references notes (id),
-    detail_name text,
-    detail_content text
+    detail_name text not null,
+    detail_content text not null,
+    primary key (note_id, detail_name)
+);
+
+create table sidebar_images (
+    note_id integer not null references notes (id),
+    image_name text not null,
+    caption text,
+    primary key (note_id, image_name)
 );
