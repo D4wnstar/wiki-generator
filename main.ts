@@ -5,6 +5,7 @@ import {
 	FrontPageError,
 	convertNotesForUpload,
 } from "src/format"
+import { findClosestWidthClass } from "src/wikilinks"
 
 interface WikiGeneratorSettings {
 	supabaseUrl: string
@@ -76,7 +77,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 			"test-tube-2",
 			"Test",
 			async () => {
-				console.log(this.app.vault.getFiles())
+				console.log(findClosestWidthClass(500))
 			}
 		)
 
