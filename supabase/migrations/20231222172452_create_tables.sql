@@ -28,3 +28,10 @@ create table sidebar_images (
     caption text,
     primary key (note_id, image_name)
 );
+
+create table stored_media (
+    id serial primary key,
+    media_name text unique not null,
+    url text not null,
+    media_type text not null
+);

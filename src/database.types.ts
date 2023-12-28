@@ -139,6 +139,27 @@ export interface Database {
           }
         ]
       }
+      stored_media: {
+        Row: {
+          id: number
+          media_name: string
+          media_type: string
+          url: string
+        }
+        Insert: {
+          id?: number
+          media_name: string
+          media_type: string
+          url: string
+        }
+        Update: {
+          id?: number
+          media_name?: string
+          media_type?: string
+          url?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

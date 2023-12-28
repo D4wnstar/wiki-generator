@@ -1,5 +1,5 @@
-import { App, Notice, Plugin, PluginSettingTab, Setting } from "obsidian"
-import { join } from "path"
+import { App, Notice, Plugin, PluginSettingTab, Setting, Vault } from "obsidian"
+import { uploadConfig } from "src/config"
 import {
 	DatabaseError,
 	FrontPageError,
@@ -27,87 +27,102 @@ const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 	supabaseServiceKeyLocal: "",
 }
 
+async function uploadNotes(
+	vault: Vault,
+	supabaseUrl: string,
+	supabaseAnonKey: string,
+	supabaseServiceKey: string
+) {
+	console.log("Uploading notes...")
+	new Notice("Uploading notes...")
+	try {
+		await convertNotesForUpload(
+			vault,
+			supabaseUrl,
+			supabaseAnonKey,
+			supabaseServiceKey
+		)
+	} catch (error) {
+		new Notice(error.message)
+		if (error instanceof FrontPageError || error instanceof DatabaseError) {
+			console.error(error.message)
+			return
+		} else {
+			console.error(`Uncaught error: ${error.message}`)
+			throw error
+		}
+	}
+
+	console.log("Successfully uploaded notes!")
+	new Notice("Finshed uploading notes!")
+}
+
 export default class WikiGeneratorPlugin extends Plugin {
 	settings: WikiGeneratorSettings
 
 	async onload() {
 		await this.loadSettings()
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon(
-			"dice",
-			"Upload Notes",
-			async () => {
-				new Notice("Beginning note conversion...")
-				try {
-					await convertNotesForUpload(
-						this.app.vault,
-						join(
-							this.app.vault.adapter.basePath,
-							"/.obsidian/plugins/obsidian-wiki-generator/"
-						),
-						this.settings.supabaseUseLocal
-							? "http://localhost:54321"
-							: this.settings.supabaseUrl,
-						this.settings.supabaseUseLocal
-							? this.settings.supabaseAnonKeyLocal
-							: this.settings.supabaseAnonKey,
-						this.settings.supabaseUseLocal
-							? this.settings.supabaseServiceKeyLocal
-							: this.settings.supabaseServiceKey
-					)
-				} catch (error) {
-					if (
-						error instanceof FrontPageError ||
-						error instanceof DatabaseError
-					) {
-						console.error(error.message)
-						new Notice(error.message)
-						return
-					} else {
-						throw error
-					}
-				}
+		this.addRibbonIcon("upload-cloud", "Upload Notes", async () => {
+			await uploadNotes(
+				this.app.vault,
+				this.settings.supabaseUseLocal
+					? "http://localhost:54321"
+					: this.settings.supabaseUrl,
+				this.settings.supabaseUseLocal
+					? this.settings.supabaseAnonKeyLocal
+					: this.settings.supabaseAnonKey,
+				this.settings.supabaseUseLocal
+					? this.settings.supabaseServiceKeyLocal
+					: this.settings.supabaseServiceKey
+			)
+		})
 
-				new Notice("Finshed uploading notes!")
-			}
-		)
+		
 
-		const testButton = this.addRibbonIcon(
-			"test-tube-2",
-			"Test",
-			async () => {
-				console.log(findClosestWidthClass(500))
-			}
-		)
+		this.addRibbonIcon("test-tube-2", "Test", async () => {
+			console.log(findClosestWidthClass(500))
+		})
 
-		// This adds an editor command that can perform some operation on the current editor instance
 		this.addCommand({
 			id: "upload-notes",
 			name: "Upload notes",
 			callback: async () => {
-				new Notice("Beginning note conversion...")
-				await convertNotesForUpload(
+				await uploadNotes(
 					this.app.vault,
-					join(
-						this.app.vault.adapter.basePath,
-						"/.obsidian/plugins/obsidian-wiki-generator/"
-					),
 					this.settings.supabaseUseLocal
-						? this.settings.supabaseUrl
-						: "http://localhost:54321",
+						? "http://localhost:54321"
+						: this.settings.supabaseUrl,
 					this.settings.supabaseUseLocal
-						? this.settings.supabaseAnonKey
-						: this.settings.supabaseAnonKeyLocal,
+						? this.settings.supabaseAnonKeyLocal
+						: this.settings.supabaseAnonKey,
 					this.settings.supabaseUseLocal
-						? this.settings.supabaseServiceKey
-						: this.settings.supabaseServiceKeyLocal
+						? this.settings.supabaseServiceKeyLocal
+						: this.settings.supabaseServiceKey
 				)
-				new Notice("Successfully uploaded notes!")
 			},
 		})
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
+		this.addCommand({
+			id: "upload-notes-overwrite",
+			name: "Upload notes and overwrite media files",
+			callback: async () => {
+				uploadConfig.overwriteFiles = true
+				await uploadNotes(
+					this.app.vault,
+					this.settings.supabaseUseLocal
+						? "http://localhost:54321"
+						: this.settings.supabaseUrl,
+					this.settings.supabaseUseLocal
+						? this.settings.supabaseAnonKeyLocal
+						: this.settings.supabaseAnonKey,
+					this.settings.supabaseUseLocal
+						? this.settings.supabaseServiceKeyLocal
+						: this.settings.supabaseServiceKey
+				)
+			},
+		})
+
 		this.addSettingTab(new WikiGeneratorSettingTab(this.app, this))
 	}
 

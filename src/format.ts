@@ -1,12 +1,11 @@
 import markdownit from "markdown-it"
 import slugify from "slugify"
 import { TFile, Vault } from "obsidian"
-import { convertWikilinks } from "./wikilinks"
-import { createClient } from "@supabase/supabase-js"
+import { convertWikilinks, uploadImage } from "./wikilinks"
+import { SupabaseClient, createClient } from "@supabase/supabase-js"
 import * as MarkdownIt from "markdown-it"
 import { Database } from "./database.types"
-import { writeFileSync } from "fs"
-import { join } from "path"
+import { storedMedia } from "./config"
 
 export class FrontPageError extends Error {
 	constructor(message: string) {
@@ -96,10 +95,17 @@ function parseDetails(match: string): Map<string, string> {
 	return detailsMap
 }
 
-function parseImage(match: RegExpMatchArray): SidebarImage {
-	let filename: string | undefined = undefined
-	let caption: string | undefined = undefined
+async function parseImage(
+	match: RegExpMatchArray,
+	vault: Vault,
+	media: TFile[],
+	supabase: SupabaseClient
+): Promise<SidebarImage> {
+	let filename: string | undefined
+	let caption: string | undefined
 
+	// Parse markdown for filename and captions
+	// Unlike wikilinks, there's no need to check for user-defined dimensions
 	const lines = match[0].split("\n").filter((line) => line !== "")
 	for (const line of lines) {
 		const wikilink = line.match(/!\[\[(.*?)(\|.*)?\]\]/)
@@ -117,18 +123,45 @@ function parseImage(match: RegExpMatchArray): SidebarImage {
 		throw new Error("Invalid formatting for :::image::: block.")
 	}
 
-	return {
-		image_name: filename,
-		caption: caption,
+	// Grab that media file from the vault, if it exists. If it doesn't, it not might be a problem
+	const refFile = media.find((file) => file.name === filename)
+	if (!refFile) {
+		console.warn(
+			`Could not find file "${filename}". If this file doesn't yet exist, this is expected`
+		)
+		return {
+			image_name: filename,
+			caption: caption,
+		}
+	}
+
+	// If it exists, read it as a binary ArrayBuffer and upload it
+	const refFileBinary = await vault.readBinary(refFile)
+	const url = await uploadImage(refFileBinary, filename, supabase)
+	if (!url) {
+		return {
+			image_name: filename,
+			caption: caption,
+		}
+	} else {
+		return {
+			image_name: url,
+			caption: caption,
+		}
 	}
 }
 
-function formatMd(md: string): {
+async function formatMd(
+	md: string,
+	vault: Vault,
+	media: TFile[],
+	supabase: SupabaseClient
+): Promise<{
 	md: string
 	props: NoteProperties
 	details: Map<string, string>
 	sidebarImgs: SidebarImage[]
-} {
+}> {
 	const propsRegex = /^---\r?\n(.*?)\r?\n---/s
 	const propsMatch = md.match(propsRegex)
 	let props: NoteProperties = { publish: false, frontpage: false }
@@ -149,7 +182,7 @@ function formatMd(md: string): {
 	const imageMatch = md.matchAll(imageRegex)
 	const sidebarImages: SidebarImage[] = []
 	for (const match of imageMatch) {
-		sidebarImages.push(parseImage(match))
+		sidebarImages.push(await parseImage(match, vault, media, supabase))
 		md = md.replace(match[0], "")
 	}
 
@@ -165,21 +198,21 @@ function formatMd(md: string): {
 
 async function vaultToNotes(
 	converter: MarkdownIt,
-	vault: Vault
+	vault: Vault,
+	supabase: SupabaseClient
 ): Promise<[Note[], TFile[]]> {
 	const notes: Note[] = []
-	const media: TFile[] = []
-	const mdFiles = vault.getFiles()
+	// Get the non-markdown media first
+	let files = vault.getFiles()
+	const media = files.filter((file) => file.extension !== "md")
 
-	for (const file of mdFiles) {
-		if (file.extension !== "md") {
-			media.push(file)
-			continue
-		}
+	// Then go through the markdown notes
+	files = vault.getMarkdownFiles()
+	for (const file of files) {
 		const slug = slugifyPath(file.path.replace(".md", ""))
 
 		const content = await vault.read(file)
-		const formatted = formatMd(content)
+		const formatted = await formatMd(content, vault, media, supabase)
 
 		let html = converter.render(formatted.md)
 		html = html.replace(
@@ -217,21 +250,17 @@ async function vaultToNotes(
 
 export async function convertNotesForUpload(
 	vault: Vault,
-	outPath: string,
 	supabaseUrl: string,
 	supabaseAnonKey: string,
 	supabaseServiceKey: string
 ): Promise<void> {
 	const supabase = createClient<Database>(supabaseUrl, supabaseServiceKey)
-
 	const converter = markdownit()
-	const files = await vaultToNotes(converter, vault)
-	const [allNotes, media] = files
-	let notes = allNotes.filter((note) => note.properties.publish) // Remove all notes that aren't set to be published
 
-	const { data: storedMedia, error: storageError } = await supabase.storage
-		.from("images")
-		.list()
+	// Fetch a list of currently stored media files
+	const { data, error: storageError } = await supabase
+		.from("stored_media")
+		.select("media_name")
 
 	if (storageError) {
 		throw new DatabaseError(
@@ -239,13 +268,17 @@ export async function convertNotesForUpload(
 		)
 	}
 
-	notes = await Promise.all(
-		notes.map((note) =>
-			convertWikilinks(note, notes, media, vault, storedMedia, supabase)
-		)
-	)
-	notes.sort((a, b) => a.slug.localeCompare(b.slug))
+	// Store those files globally (see storedMedia comment for why)
+	storedMedia.files = data.map((file) => file.media_name)
 
+	// Grab all the files, parse all markdown for custom syntax and upload sidebar images
+	const files = await vaultToNotes(converter, vault, supabase)
+	const [allNotes, localMedia] = files
+
+	// Remove all notes that aren't set to be published
+	let notes = allNotes.filter((note) => note.properties.publish)
+
+	// Check if one and only one front page as been set among the published pages
 	const frontpageArray = notes.filter((note) => note.properties.frontpage)
 	if (frontpageArray.length === 0) {
 		throw new FrontPageError(
@@ -262,7 +295,13 @@ export async function convertNotesForUpload(
 		)
 	}
 
-	writeFileSync(join(outPath, "notes-data.json"), JSON.stringify(notes))
+	// Convert all the [[wikilinks]] in the notes
+	notes = await Promise.all(
+		notes.map((note) =>
+			convertWikilinks(note, notes, localMedia, vault, supabase)
+		)
+	)
+	notes.sort((a, b) => a.slug.localeCompare(b.slug))
 
 	const notesInsertionResult = await supabase
 		.from("notes")
@@ -301,9 +340,7 @@ export async function convertNotesForUpload(
 			})
 		)
 
-		if (detailsError) {
-			throw new DatabaseError(detailsError.message)
-		}
+		if (detailsError) throw new DatabaseError(detailsError.message)
 
 		const { error: backrefError } = await supabase
 			.from("backreferences")
@@ -317,22 +354,7 @@ export async function convertNotesForUpload(
 				})
 			)
 
-		if (backrefError) {
-			throw new DatabaseError(backrefError.message)
-		}
-
-		// Transfrom the names of the images into the corresponding public URL
-		notes[index].sidebarImages = await Promise.all(
-			notes[index].sidebarImages.map(async (img) => {
-				const {
-					data: { publicUrl },
-				} = supabase.storage.from("images").getPublicUrl(img.image_name)
-				return {
-					image_name: publicUrl,
-					caption: img.caption,
-				}
-			})
-		)
+		if (backrefError) throw new DatabaseError(backrefError.message)
 
 		const { error: imagesError } = await supabase
 			.from("sidebar_images")
@@ -346,8 +368,33 @@ export async function convertNotesForUpload(
 				})
 			)
 
-		if (imagesError) {
-			throw new DatabaseError(imagesError.message)
+		if (imagesError) throw new DatabaseError(imagesError.message)
+	}
+
+	const localMediaCorrectExt = localMedia.map((file) => file.name.replace(/\..*$/, ".webp"))
+	// Clean up remote files by removing ones that have been deleted locally
+	// TODO: Also remove files that are no longer referenced by any note
+	const mediaToDelete: string[] = []
+	for (const filename of storedMedia.files) {
+		if (!localMediaCorrectExt.find((name) => name === filename)) {
+			mediaToDelete.push(filename)
 		}
+	}
+
+	if (mediaToDelete.length > 0) {
+		const { data: deletedMedia, error: deletionError } = await supabase
+			.storage
+			.from("images")
+			.remove(mediaToDelete)
+
+		if (deletionError) throw new DatabaseError(deletionError.message)
+		console.log(`Removed the following files to keep the database synchronized: ${deletedMedia.map((file) => file.name)}`)
+
+		const { error: dbDeletionError } = await supabase
+			.from("stored_media")
+			.delete()
+			.in("media_name", mediaToDelete)
+
+		if (dbDeletionError) throw new DatabaseError(dbDeletionError.message)
 	}
 }

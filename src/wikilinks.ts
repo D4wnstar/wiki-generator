@@ -1,8 +1,9 @@
-import { Notice, TFile, Vault } from "obsidian"
-import { Backreference, Note, slugifyPath } from "./format"
+import { TFile, Vault } from "obsidian"
+import { Backreference, DatabaseError, Note, slugifyPath } from "./format"
 import { SupabaseClient } from "@supabase/supabase-js"
-import { FileObject } from "@supabase/storage-js"
 import Image from "image-js"
+import { storedMedia, uploadConfig } from "./config"
+import { Database } from "./database.types"
 
 function backrefAlreadyExists(
 	displayName: string,
@@ -98,6 +99,103 @@ export function findClosestWidthClass(width: number): string {
 	return finalClass
 }
 
+export async function uploadImage(
+	fileBuffer: ArrayBuffer,
+	filename: string,
+	supabase: SupabaseClient<Database>
+): Promise<string | undefined> {
+	// Change the extension to webp before conversion
+	const newFilename = filename.replace(/\..*$/, ".webp")
+
+	if (!uploadConfig.overwriteFiles) {
+		// Check if the file already exists
+		const storedFile = storedMedia.files.find((name) => name === newFilename)
+
+		// If it exists, avoid attempting a new upload and just get the URL instead
+		if (storedFile) {
+			console.log(`Found existing file ${storedFile}`)
+			const urlData = supabase.storage
+				.from("images")
+				.getPublicUrl(storedFile)
+
+			return urlData.data.publicUrl
+		}
+	}
+
+	// If it doesn't exists, load the image to manipulate it
+	let image = await Image.load(fileBuffer)
+
+	// Compress the image if it's overly large
+	if (image.width > 1600) {
+		image = image.resize({ width: 1600 })
+	}
+	if (image.height > 1600) {
+		image = image.resize({ height: 1600 })
+	}
+
+	// Convert to webp and upload
+	const blob = await image.toBlob("image/webp")
+	const { data, error } = await supabase.storage
+		.from("images")
+		.upload(newFilename, blob, { upsert: uploadConfig.overwriteFiles })
+
+	if (error) {
+		console.error(
+			`Got error with message "${error.message}" when trying to upload file "${filename}". Skipping...`
+		)
+		return undefined
+	} else if (!data) {
+		console.error(
+			`Found file "${filename}" but received no data when requesting it from Storage. Skipping...`
+		)
+		return undefined
+	}
+
+	console.log(`Successfully uploaded file ${newFilename}`)
+	const urlData = supabase.storage.from("images").getPublicUrl(data.path)
+	const url = urlData.data.publicUrl
+
+	// Push to the (local) list of stored files
+	storedMedia.files.push(newFilename)
+
+	// Push to the (remote) list of stored files
+	if (uploadConfig.overwriteFiles) {
+		const { error: imageError } = await supabase
+			.from("stored_media")
+			.upsert(
+				{
+					media_name: newFilename,
+					url: url,
+					media_type: "image",
+				},
+				{
+					onConflict: "media_name",
+					ignoreDuplicates: false,
+				}
+			)
+		if (imageError) {
+			console.error(
+				`Couldn't add ${newFilename} to stored_media table. Error message: "${imageError.message}"`
+			)
+		}
+	} else {
+		const { error: imageError } = await supabase
+			.from("stored_media")
+			.insert({
+				media_name: newFilename,
+				url: url,
+				media_type: "image",
+			})
+		if (imageError) {
+			console.error(
+				`Couldn't add ${newFilename} to stored_media table. Error message: "${imageError.message}"`
+			)
+		}
+	}
+
+	return url
+}
+
 function handleNoteTransclusion(
 	realName: string,
 	altName: string | undefined,
@@ -152,20 +250,12 @@ function handleNoteReference(
 async function handleFileTransclusion(
 	filename: string,
 	displayOptions: string | undefined,
-	media: TFile[],
+	localMedia: TFile[],
 	vault: Vault,
-	filesInStorage: FileObject[],
 	supabase: SupabaseClient
 ): Promise<string> {
-	const refFile = media.find((file) => file.name === filename)
-
-	let width: number | undefined
-	let height: number | undefined
-	if (displayOptions) {
-		const resolution = displayOptions?.match(/(\d+)x?(\d+)?/) ?? ["", "", ""]
-		width = resolution[1] ? parseInt(resolution[1]) : undefined
-		height = resolution[2] ? parseInt(resolution[2]) : undefined
-	}
+	// Grab the media file from the vault, if it exists. If it doesn't, it not might be a problem
+	const refFile = localMedia.find((file) => file.name === filename)
 
 	if (!refFile) {
 		console.warn(
@@ -174,88 +264,42 @@ async function handleFileTransclusion(
 		return `[${filename}]`
 	}
 
-	let fileType: string
+	// Differentiate the file type
 	const imageExtensions = ["png", "webp", "jpg", "jpeg", "gif", "bmp", "svg"]
 	if (imageExtensions.includes(refFile.extension)) {
-		fileType = "image"
+		// Parse the display options for width and height
+		let width: number | undefined
+		// let height: number | undefined
+		if (displayOptions) {
+			const resolution = displayOptions?.match(/(\d+)x?(\d+)?/) ?? [
+				"",
+				"",
+				"",
+			]
+			width = resolution[1] ? parseInt(resolution[1]) : undefined
+			// height = resolution[2] ? parseInt(resolution[2]) : undefined
+		}
+
+		// Load the file as a binary ArrayBuffer and upload it
+		const refFileBinary = await vault.readBinary(refFile)
+		const url = await uploadImage(refFileBinary, filename, supabase)
+
+		const wClass = width ? findClosestWidthClass(width) : ""
+		return `<img src="${url}" alt="${refFile.basename}" class="${wClass} mx-auto" />`
 	} else {
 		console.warn(
 			`File type for file "${filename}" is currently unsupported. Skipping...`
 		)
 		return `[${filename}]`
 	}
-
-	const refFileBinary = await vault.readBinary(refFile)
-	let image = await Image.load(refFileBinary)	
-
-	// If the user specified width or height, rewrite the filename to {filename}_{w}x{h}.webp
-	filename = refFile.basename
-	// if (image.size > 1280 * 720) { filename += `_720` }
-	filename += ".webp"
-
-	const storedFile = filesInStorage.find((file) => file.name === filename)
-	let url: string
-
-	if (!storedFile) {
-		// Compress the image if it's overly large necessary
-		if (image.width > 1600) {
-			image = image.resize({ width: 1600 })
-		} else if (image.height > 1600) {
-			image = image.resize({ height: 1600 })
-		}
-		
-		// Convert to webp
-		const blob = await image.toBlob('image/webp')
-		const { data, error } = await supabase.storage
-			.from("images")
-			.upload(filename, blob)
-
-		if (error) {
-			console.error(
-				`Got error with message "${error.message}" when trying to upload file "${filename}". Skipping...`
-			)
-			return `[${filename}]`
-		} else if (!data) {
-			console.error(
-				`Found file "${filename}" but received no data when requesting it from Storage. Skipping...`
-			)
-			return `[${filename}]`
-		}
-
-		console.log(`Successfully uploaded file ${filename} as ${data?.path}`)
-		const urlData = supabase.storage.from("images").getPublicUrl(data.path)
-
-		url = urlData.data.publicUrl
-	} else {
-		console.log(`Found existing file ${storedFile.name}`)
-		const urlData = supabase.storage
-			.from("images")
-			.getPublicUrl(storedFile.name)
-
-		url = urlData.data.publicUrl
-	}
-
-	let tag: string
-	const wClass = width ? findClosestWidthClass(width) : ""
-	// const hClass = height ? `h-[${height}px]` : ""
-	switch (fileType) {
-		case "image":
-			tag = `<img src="${url}" alt="${refFile.basename}" class="${wClass} mx-auto" />`
-			return tag
-		default:
-			// This should be impossible, it's here just because TypeScript is complaining
-			return `[${filename}]`
-	}
 }
 
 async function subWikilinks(
-	match: string,
 	captureGroups: (string | undefined)[],
 	note: Note,
 	notes: Note[],
-	media: TFile[],
+	localMedia: TFile[],
 	vault: Vault,
-	filesInStorage: FileObject[],
 	supabase: SupabaseClient
 ): Promise<string> {
 	// Note references are changed to <a> tags
@@ -278,9 +322,8 @@ async function subWikilinks(
 		return await handleFileTransclusion(
 			capture1,
 			capture2,
-			media,
+			localMedia,
 			vault,
-			filesInStorage,
 			supabase
 		)
 	} else if (isTransclusion && !isMedia) {
@@ -311,9 +354,8 @@ ${groups[4]}\
 export async function convertWikilinks(
 	note: Note,
 	notes: Note[],
-	media: TFile[],
+	localMedia: TFile[],
 	vault: Vault,
-	filesInStorage: FileObject[],
 	supabase: SupabaseClient
 ): Promise<Note> {
 	const wikilinkRegex = /(!)?\[\[(.*?)(?:\|(.*?)?)?\]\]/g
@@ -321,24 +363,16 @@ export async function convertWikilinks(
 
 	const replacements = await Promise.all(
 		matches.map((match) =>
-			subWikilinks(
-				match[0],
-				match.slice(1),
-				note,
-				notes,
-				media,
-				vault,
-				filesInStorage,
-				supabase
-			)
+			subWikilinks(match.slice(1), note, notes, localMedia, vault, supabase)
 		)
 	)
 
-	let newContent = note.content
 	for (const index in matches) {
-		newContent = newContent.replace(matches[index][0], replacements[index])
+		note.content = note.content.replace(
+			matches[index][0],
+			replacements[index]
+		)
 	}
-	note.content = newContent
 
 	for (const [key, value] of note.details.entries()) {
 		matches = [...value.matchAll(wikilinkRegex)]
@@ -346,13 +380,11 @@ export async function convertWikilinks(
 		const replacements = await Promise.all(
 			matches.map((match) =>
 				subWikilinks(
-					match[0],
 					match.slice(1),
 					note,
 					notes,
-					media,
+					localMedia,
 					vault,
-					filesInStorage,
 					supabase
 				)
 			)
