@@ -1,8 +1,8 @@
 import markdownit from "markdown-it"
 import slugify from "slugify"
-import { TFile, Vault } from "obsidian"
+import { Notice, TFile, Vault, request } from "obsidian"
 import { convertWikilinks, uploadImage } from "./wikilinks"
-import { SupabaseClient, createClient } from "@supabase/supabase-js"
+import { SupabaseClient } from "@supabase/supabase-js"
 import * as MarkdownIt from "markdown-it"
 import { Database } from "./database.types"
 import { storedMedia } from "./config"
@@ -250,11 +250,9 @@ async function vaultToNotes(
 
 export async function convertNotesForUpload(
 	vault: Vault,
-	supabaseUrl: string,
-	supabaseAnonKey: string,
-	supabaseServiceKey: string
+	supabase: SupabaseClient<Database>,
+	deployHookUrl: string | undefined
 ): Promise<void> {
-	const supabase = createClient<Database>(supabaseUrl, supabaseServiceKey)
 	const converter = markdownit()
 
 	// Fetch a list of currently stored media files
@@ -272,6 +270,7 @@ export async function convertNotesForUpload(
 	storedMedia.files = data.map((file) => file.media_name)
 
 	// Grab all the files, parse all markdown for custom syntax and upload sidebar images
+	console.log("Fetching files from vault...")
 	const files = await vaultToNotes(converter, vault, supabase)
 	const [allNotes, localMedia] = files
 
@@ -295,6 +294,8 @@ export async function convertNotesForUpload(
 		)
 	}
 
+	console.log("Converting notes...")
+	new Notice("Converting notes...")
 	// Convert all the [[wikilinks]] in the notes
 	notes = await Promise.all(
 		notes.map((note) =>
@@ -303,6 +304,8 @@ export async function convertNotesForUpload(
 	)
 	notes.sort((a, b) => a.slug.localeCompare(b.slug))
 
+	console.log("Inserting content into Supabase. This might take a while...")
+	new Notice("Inserting content into Supabase. This might take a while...")
 	const notesInsertionResult = await supabase
 		.from("notes")
 		.upsert(
@@ -371,9 +374,79 @@ export async function convertNotesForUpload(
 		if (imagesError) throw new DatabaseError(imagesError.message)
 	}
 
-	const localMediaCorrectExt = localMedia.map((file) => file.name.replace(/\..*$/, ".webp"))
+	// Clean up remote notes by removing ones that have been deleted or set to unpublished locally
+	const notesToDelete = []
+	const { data: storedNotes, error: retrievalError } = await supabase.from(
+		"notes"
+	).select(`
+            *,
+            backreferences (*),
+            details (*),
+            sidebar_images (*)
+        `)
+
+	if (retrievalError) throw new DatabaseError(retrievalError.message)
+
+	for (const remoteNote of storedNotes) {
+		if (!notes.find((localNote) => localNote.title === remoteNote.title)) {
+			notesToDelete.push(remoteNote)
+		}
+	}
+
+	if (notesToDelete.length > 0) {
+		console.log("Syncing notes...")
+		new Notice("Syncing notes...")
+
+		const slugsToDelete = notesToDelete.map((note) => note.slug)
+		const idsToDelete = notesToDelete.map((note) => note.id)
+
+		// Delete all details with matching id...
+		const { error: detailsDeletionError } = await supabase
+			.from("details")
+			.delete()
+			.in("note_id", idsToDelete)
+		if (detailsDeletionError)
+			throw new DatabaseError(detailsDeletionError.message)
+
+		// ...all backreferences with matching id...
+		const { error: backrefDeletionError } = await supabase
+			.from("backreferences")
+			.delete()
+			.in("note_id", idsToDelete)
+		if (backrefDeletionError)
+			throw new DatabaseError(backrefDeletionError.message)
+
+		// ... and all sidebar images with matching id
+		const { error: sidebarImageDeletionError } = await supabase
+			.from("sidebar_images")
+			.delete()
+			.in("note_id", idsToDelete)
+		if (sidebarImageDeletionError)
+			throw new DatabaseError(sidebarImageDeletionError.message)
+
+		// ...and finally all notes with matching slugs
+		const { data: deletedNotes, error: notesDeletionError } = await supabase
+			.from("notes")
+			.delete()
+			.in("slug", slugsToDelete)
+			.select()
+		if (notesDeletionError)
+			throw new DatabaseError(notesDeletionError.message)
+
+		if (deletedNotes.length > 0) {
+			console.log(
+				`Deleted the following notes to keep the database synchronized: ${deletedNotes.map(
+					(note) => note.slug
+				)}`
+			)
+		}
+	}
+
 	// Clean up remote files by removing ones that have been deleted locally
 	// TODO: Also remove files that are no longer referenced by any note
+	const localMediaCorrectExt = localMedia.map((file) =>
+		file.name.replace(/\..*$/, ".webp")
+	)
 	const mediaToDelete: string[] = []
 	for (const filename of storedMedia.files) {
 		if (!localMediaCorrectExt.find((name) => name === filename)) {
@@ -382,13 +455,18 @@ export async function convertNotesForUpload(
 	}
 
 	if (mediaToDelete.length > 0) {
-		const { data: deletedMedia, error: deletionError } = await supabase
-			.storage
-			.from("images")
-			.remove(mediaToDelete)
+		console.log("Syncing media...")
+		new Notice("Syncing media...")
+
+		const { data: deletedMedia, error: deletionError } =
+			await supabase.storage.from("images").remove(mediaToDelete)
 
 		if (deletionError) throw new DatabaseError(deletionError.message)
-		console.log(`Removed the following files to keep the database synchronized: ${deletedMedia.map((file) => file.name)}`)
+		console.log(
+			`Removed the following files to keep the database synchronized: ${deletedMedia.map(
+				(file) => file.name
+			)}`
+		)
 
 		const { error: dbDeletionError } = await supabase
 			.from("stored_media")
@@ -396,5 +474,12 @@ export async function convertNotesForUpload(
 			.in("media_name", mediaToDelete)
 
 		if (dbDeletionError) throw new DatabaseError(dbDeletionError.message)
+	}
+
+
+	if (deployHookUrl) {
+		console.log("Deploying the website...")
+		new Notice("Deploying the website...")
+		await request(deployHookUrl)
 	}
 }

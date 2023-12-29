@@ -35,3 +35,8 @@ create table stored_media (
     url text not null,
     media_type text not null
 );
+
+create table wiki_settings (
+    id serial primary key,
+    settings jsonb not null
+);

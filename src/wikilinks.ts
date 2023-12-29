@@ -1,5 +1,5 @@
 import { TFile, Vault } from "obsidian"
-import { Backreference, DatabaseError, Note, slugifyPath } from "./format"
+import { Backreference, Note, slugifyPath } from "./format"
 import { SupabaseClient } from "@supabase/supabase-js"
 import Image from "image-js"
 import { storedMedia, uploadConfig } from "./config"

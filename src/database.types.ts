@@ -160,6 +160,21 @@ export interface Database {
         }
         Relationships: []
       }
+      wiki_settings: {
+        Row: {
+          id: number
+          settings: Json
+        }
+        Insert: {
+          id?: number
+          settings: Json
+        }
+        Update: {
+          id?: number
+          settings?: Json
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
