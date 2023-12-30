@@ -1,5 +1,13 @@
 import { SupabaseClient, createClient } from "@supabase/supabase-js"
-import { App, Notice, Plugin, PluginSettingTab, Setting, Vault } from "obsidian"
+import {
+	App,
+	MarkdownView,
+	Notice,
+	Plugin,
+	PluginSettingTab,
+	Setting,
+	Vault,
+} from "obsidian"
 import { uploadConfig } from "src/config"
 import { Database } from "src/database.types"
 import {
@@ -7,10 +15,10 @@ import {
 	FrontPageError,
 	convertNotesForUpload,
 } from "src/format"
-import { findClosestWidthClass } from "src/wikilinks"
 
 interface WikiGeneratorSettings {
-	wikiTitle: string,
+	wikiTitle: string
+	autopublishNotes: boolean
 	supabaseUrl: string
 	supabaseAnonKey: string
 	supabaseServiceKey: string
@@ -23,6 +31,7 @@ interface WikiGeneratorSettings {
 
 const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 	wikiTitle: "Awesome Wiki",
+	autopublishNotes: true,
 	supabaseUrl: "",
 	supabaseAnonKey: "",
 	supabaseServiceKey: "",
@@ -37,11 +46,15 @@ async function uploadNotes(
 	vault: Vault,
 	supabase: SupabaseClient<Database> | undefined,
 	deployHookUrl: string | undefined,
-	settings: WikiGeneratorSettings,
+	settings: WikiGeneratorSettings
 ) {
 	if (!supabase) {
-		console.error("The Supabase client has not been initialized properly. Please check the URL and Service Key and reconnect.")
-		new Notice("Cannot connect to Supabase. Please check the URL and Service Key and reconnect.")
+		console.error(
+			"The Supabase client has not been initialized properly. Please check the URL and Service Key and reconnect."
+		)
+		new Notice(
+			"Cannot connect to Supabase. Please check the URL and Service Key and reconnect."
+		)
 		return
 	}
 
@@ -56,25 +69,21 @@ async function uploadNotes(
 		.from("wiki_settings")
 		.insert({
 			settings: {
-				title: settings.wikiTitle
-			}
+				title: settings.wikiTitle,
+			},
 		})
 
 	if (deletionError || settingsError) {
 		new Notice("Something went wrong when updating wiki settings.")
 		if (deletionError) console.error(deletionError)
-		if (settingsError) console.error(settingsError)		
+		if (settingsError) console.error(settingsError)
 		return
 	}
 
 	console.log("Uploading notes...")
 	new Notice("Uploading notes...")
 	try {
-		await convertNotesForUpload(
-			vault,
-			supabase,
-			deployHookUrl
-		)
+		await convertNotesForUpload(vault, supabase, deployHookUrl)
 	} catch (error) {
 		new Notice(error.message)
 		if (error instanceof FrontPageError || error instanceof DatabaseError) {
@@ -102,18 +111,14 @@ function createClientWrapper(settings: WikiGeneratorSettings) {
 			settings.supabaseUrlLocal,
 			settings.supabaseServiceKeyLocal
 		)
-	} else if (
-		settings.supabaseUrl &&
-		settings.supabaseServiceKey
-	) {
-		client = createClient( 
-			settings.supabaseUrl,
-			settings.supabaseServiceKey
-		)
+	} else if (settings.supabaseUrl && settings.supabaseServiceKey) {
+		client = createClient(settings.supabaseUrl, settings.supabaseServiceKey)
 	} else {
-		throw new Error("Please set both the URL and Service Key for Supabase in the settings")
+		throw new Error(
+			"Please set both the URL and Service Key for Supabase in the settings"
+		)
 	}
-	
+
 	return client
 }
 
@@ -123,12 +128,33 @@ export default class WikiGeneratorPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings()
 
+		// Automatically add the dg-publish: true property on file creation
+		// if the user allows it in the settings
+		this.app.workspace.onLayoutReady(() => {
+			this.registerEvent(
+				this.app.vault.on("create", () => {
+					// Timeout is here to let the workspace update before getting the view
+					// Half a second seems to make it play well enough with Templater
+					setTimeout(() => {
+						const view =
+							this.app.workspace.getActiveViewOfType(MarkdownView)
+						if (this.settings.autopublishNotes && view) {
+							view.editor.replaceRange(
+								"---\nwg-publish: true\n---\n",
+								view.editor.getCursor()
+							)
+						}
+					}, 500)
+				})
+			)
+		})
+
 		// Create the Supabase client on startup
 		let supabase: SupabaseClient
-		try {	
+		try {
 			supabase = createClientWrapper(this.settings)
 		} catch (e) {
-			new Notice(`Supabase Error: ${e}`)
+			new Notice(`Supabase Error: ${e.message}`)
 		}
 
 		this.addRibbonIcon("upload-cloud", "Upload Notes", async () => {
@@ -138,12 +164,8 @@ export default class WikiGeneratorPlugin extends Plugin {
 				this.settings.supabaseUseLocal
 					? undefined
 					: this.settings.vercelDeployHook,
-				this.settings,
+				this.settings
 			)
-		})
-
-		this.addRibbonIcon("test-tube-2", "Test", async () => {
-			console.log(findClosestWidthClass(500))
 		})
 
 		this.addCommand({
@@ -156,7 +178,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 					this.settings.supabaseUseLocal
 						? undefined
 						: this.settings.vercelDeployHook,
-					this.settings,
+					this.settings
 				)
 			},
 		})
@@ -174,6 +196,69 @@ export default class WikiGeneratorPlugin extends Plugin {
 						: this.settings.vercelDeployHook,
 					this.settings
 				)
+			},
+		})
+
+		this.addCommand({
+			id: "mass-add-publish",
+			name: "Add publish property to all notes",
+			callback: () => {
+				const vault = this.app.vault
+				const notes = vault.getMarkdownFiles()
+				for (const note of notes) {
+					vault.process(note, (noteText) => {
+						const propsRegex = /^---\n(.*?)\n---/s
+						const props = noteText.match(propsRegex)
+						if (props) {
+							const publish = props[1].match(
+								/(w|d)g-publish: (true)|(false)/
+							)
+							if (publish) return noteText
+							noteText = noteText.replace(
+								propsRegex,
+								`---\nwg-publish: false\n$1\n---`
+							)
+						} else {
+							noteText = `---\nwg-publish: false\n---\n` + noteText
+						}
+
+						return noteText
+					})
+				}
+			},
+		})
+
+		this.addCommand({
+			id: "mass-set-publish-true",
+			name: "Set publish property to true on all notes",
+			callback: () => {
+				const vault = this.app.vault
+				const notes = vault.getMarkdownFiles()
+				for (const note of notes) {
+					vault.process(note, (noteText) => {
+						return noteText.replace(
+							/^---\n(.*?)(w|d)g-publish: false(.*?)\n---/s,
+							"---\n$1$2g-publish: true$3\n---"
+						)
+					})
+				}
+			},
+		})
+
+		this.addCommand({
+			id: "mass-set-publish-false",
+			name: "Set publish property to false on all notes",
+			callback: () => {
+				const vault = this.app.vault
+				const notes = vault.getMarkdownFiles()
+				for (const note of notes) {
+					vault.process(note, (noteText) => {
+						return noteText.replace(
+							/^---\n(.*?)(w|d)g-publish: true(.*?)\n---/s,
+							"---\n$1$2g-publish: false$3\n---"
+						)
+					})
+				}
 			},
 		})
 
@@ -208,14 +293,29 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 
 		containerEl.empty()
 
+		new Setting(containerEl).setName("Vault Settings").setHeading()
+
+		new Setting(containerEl)
+			.setName("Autopublish New Notes")
+			.setDesc("Automatically set up newly created notes for publishing.")
+			.addToggle(async (toggle) => {
+				toggle
+					.setValue(this.plugin.settings.autopublishNotes)
+					.onChange(async (value) => {
+						this.plugin.settings.autopublishNotes = value
+						await this.plugin.saveSettings()
+					})
+			})
+
 		new Setting(containerEl).setName("Wiki Settings").setHeading()
 
 		new Setting(containerEl)
 			.setName("Wiki Title")
-			.setDesc("The title of your wiki. Will be updated next time you upload your notes.")
+			.setDesc(
+				"The title of your wiki. Will be updated next time you upload your notes."
+			)
 			.addText((text) => {
-				text
-					.setPlaceholder("Title goes here...")
+				text.setPlaceholder("Title goes here...")
 					.setValue(this.plugin.settings.wikiTitle)
 					.onChange(async (value) => {
 						this.plugin.settings.wikiTitle = value
@@ -227,7 +327,9 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Supabase URL")
-			.setDesc("The URL for the Supabase API. Changing requires a restart.")
+			.setDesc(
+				"The URL for the Supabase API. Changing requires a restart."
+			)
 			.addText((text) =>
 				text
 					.setPlaceholder("Copy your token")
@@ -253,7 +355,9 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Supabase Service Key")
-			.setDesc("The Service key for Supabase. Changing requires a restart.")
+			.setDesc(
+				"The Service key for Supabase. Changing requires a restart."
+			)
 			.addText((text) =>
 				text
 					.setPlaceholder("Copy your token")
@@ -323,7 +427,9 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Supabase Service Key (Local)")
-			.setDesc("The Service key for a local Supabase instance. Changing requires a restart.")
+			.setDesc(
+				"The Service key for a local Supabase instance. Changing requires a restart."
+			)
 			.addText((text) =>
 				text
 					.setPlaceholder("Copy your token")

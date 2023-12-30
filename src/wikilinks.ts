@@ -242,19 +242,20 @@ function handleNoteReference(
 	}
 
 	note.references.add(refNote.slug)
-	return `<a href="/${refNote.slug}" class="anchor">${
+	return `<a href="/${refNote.slug}" class="anchor popup">${
 		altName ?? realName
 	}</a>`
 }
 
-async function handleFileTransclusion(
+async function handleFile(
 	filename: string,
 	displayOptions: string | undefined,
 	localMedia: TFile[],
 	vault: Vault,
-	supabase: SupabaseClient
+	supabase: SupabaseClient,
+	transclude: boolean,
 ): Promise<string> {
-	// Grab the media file from the vault, if it exists. If it doesn't, it not might be a problem
+	// Grab the media file from the vault, if it exists. If it doesn't, it might not be a problem
 	const refFile = localMedia.find((file) => file.name === filename)
 
 	if (!refFile) {
@@ -284,8 +285,12 @@ async function handleFileTransclusion(
 		const refFileBinary = await vault.readBinary(refFile)
 		const url = await uploadImage(refFileBinary, filename, supabase)
 
-		const wClass = width ? findClosestWidthClass(width) : ""
-		return `<img src="${url}" alt="${refFile.basename}" class="${wClass} mx-auto" />`
+		if (transclude) {	
+			const wClass = width ? findClosestWidthClass(width) : ""
+			return `<img src="${url}" alt="${refFile.basename}" class="${wClass} mx-auto" />`
+		} else {
+			return `<a href="${url}" class="anchor">${filename}</a>`
+		}
 	} else {
 		console.warn(
 			`File type for file "${filename}" is currently unsupported. Skipping...`
@@ -319,18 +324,25 @@ async function subWikilinks(
 	}
 
 	if (isTransclusion && isMedia) {
-		return await handleFileTransclusion(
+		return await handleFile(
 			capture1,
 			capture2,
 			localMedia,
 			vault,
-			supabase
+			supabase,
+			true // transclude
 		)
 	} else if (isTransclusion && !isMedia) {
 		return handleNoteTransclusion(capture1, capture2, notes)
 	} else if (!isTransclusion && isMedia) {
-		return capture2 ?? capture1
-		// handleFileReference()
+		return await handleFile(
+			capture1,
+			capture2,
+			localMedia,
+			vault,
+			supabase,
+			false // reference
+		)
 	} else {
 		return handleNoteReference(capture1, capture2, note, notes)
 	}

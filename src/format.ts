@@ -61,23 +61,23 @@ export function slugifyPath(path: string): string {
 function parseProperties(match: string): NoteProperties {
 	const props: NoteProperties = { publish: false, frontpage: false }
 	const propsLines = match.split("\n")
+	
 	for (const line of propsLines) {
-		const kv = line.split(": ")
-		switch (kv[0]) {
+		const [key, value] = line.split(": ")
+		switch (key) {
+			case "wg-publish":
 			case "dg-publish":
-				if (kv[1] === "true") {
-					props.publish = true
-				}
+				if (value === "true") props.publish = true
 				break
+			case "wg-home":
 			case "dg-home":
-				if (kv[1] === "true") {
-					props.frontpage = true
-				}
+				if (value === "true") props.frontpage = true
 				break
 			default:
 				break
 		}
 	}
+	
 	return props
 }
 
