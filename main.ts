@@ -1,4 +1,4 @@
-import { SupabaseClient, createClient } from "@supabase/supabase-js"
+import { SupabaseClient } from "@supabase/supabase-js"
 import {
 	App,
 	MarkdownView,
@@ -15,10 +15,12 @@ import {
 	FrontPageError,
 	convertNotesForUpload,
 } from "src/format"
+import { createClientWrapper, getPublishableFiles } from "src/utils"
 
-interface WikiGeneratorSettings {
+export interface WikiGeneratorSettings {
 	wikiTitle: string
 	autopublishNotes: boolean
+	publishedFolders: string[]
 	supabaseUrl: string
 	supabaseAnonKey: string
 	supabaseServiceKey: string
@@ -32,6 +34,7 @@ interface WikiGeneratorSettings {
 const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 	wikiTitle: "Awesome Wiki",
 	autopublishNotes: true,
+	publishedFolders: [],
 	supabaseUrl: "",
 	supabaseAnonKey: "",
 	supabaseServiceKey: "",
@@ -99,29 +102,6 @@ async function uploadNotes(
 	new Notice("Finshed uploading notes!")
 }
 
-function createClientWrapper(settings: WikiGeneratorSettings) {
-	let client: SupabaseClient
-
-	if (
-		settings.supabaseUseLocal &&
-		settings.supabaseUrlLocal &&
-		settings.supabaseServiceKeyLocal
-	) {
-		client = createClient(
-			settings.supabaseUrlLocal,
-			settings.supabaseServiceKeyLocal
-		)
-	} else if (settings.supabaseUrl && settings.supabaseServiceKey) {
-		client = createClient(settings.supabaseUrl, settings.supabaseServiceKey)
-	} else {
-		throw new Error(
-			"Please set both the URL and Service Key for Supabase in the settings"
-		)
-	}
-
-	return client
-}
-
 export default class WikiGeneratorPlugin extends Plugin {
 	settings: WikiGeneratorSettings
 
@@ -136,13 +116,24 @@ export default class WikiGeneratorPlugin extends Plugin {
 					// Timeout is here to let the workspace update before getting the view
 					// Half a second seems to make it play well enough with Templater
 					setTimeout(() => {
+						const s = this.settings
 						const view =
 							this.app.workspace.getActiveViewOfType(MarkdownView)
-						if (this.settings.autopublishNotes && view) {
-							view.editor.replaceRange(
-								"---\nwg-publish: true\n---\n",
-								view.editor.getCursor()
-							)
+						if (s.autopublishNotes && view) {
+							const fileFolder =
+								view.file?.path.match(/.*(?=\/)/)?.[0]
+							if (
+								s.publishedFolders.length === 0 ||
+								(fileFolder &&
+									s.publishedFolders.some((path) =>
+										fileFolder.includes(path)
+									))
+							) {
+								view.editor.replaceRange(
+									"---\nwg-publish: true\n---\n",
+									view.editor.getCursor()
+								)
+							}
 						}
 					}, 500)
 				})
@@ -150,6 +141,9 @@ export default class WikiGeneratorPlugin extends Plugin {
 		})
 
 		// Create the Supabase client on startup
+		// Client is created on startup as there's no exposed API to remove them
+		// so creating one on each uploadNotes call creates warnings about having
+		// multiple GoTrueClients active at the same time, which is undefined behaviour
 		let supabase: SupabaseClient
 		try {
 			supabase = createClientWrapper(this.settings)
@@ -204,7 +198,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 			name: "Add publish property to all notes",
 			callback: () => {
 				const vault = this.app.vault
-				const notes = vault.getMarkdownFiles()
+				const notes = getPublishableFiles(vault, this.settings)
 				for (const note of notes) {
 					vault.process(note, (noteText) => {
 						const propsRegex = /^---\n(.*?)\n---/s
@@ -219,7 +213,8 @@ export default class WikiGeneratorPlugin extends Plugin {
 								`---\nwg-publish: false\n$1\n---`
 							)
 						} else {
-							noteText = `---\nwg-publish: false\n---\n` + noteText
+							noteText =
+								`---\nwg-publish: false\n---\n` + noteText
 						}
 
 						return noteText
@@ -233,7 +228,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 			name: "Set publish property to true on all notes",
 			callback: () => {
 				const vault = this.app.vault
-				const notes = vault.getMarkdownFiles()
+				const notes = getPublishableFiles(vault, this.settings)
 				for (const note of notes) {
 					vault.process(note, (noteText) => {
 						return noteText.replace(
@@ -250,7 +245,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 			name: "Set publish property to false on all notes",
 			callback: () => {
 				const vault = this.app.vault
-				const notes = vault.getMarkdownFiles()
+				const notes = getPublishableFiles(vault, this.settings)
 				for (const note of notes) {
 					vault.process(note, (noteText) => {
 						return noteText.replace(
@@ -307,6 +302,62 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 					})
 			})
 
+		const folderDesc = document.createDocumentFragment()
+		folderDesc.append(
+			"Set folders to publish notes from. Commands and settings that automatically set publish state, such as the above Autopublish New Notes, will only apply to notes created and present in these folders.",
+			folderDesc.createEl("br"),
+			"You must provide the full path to the folder, separated by forward slashes. For example:",
+			folderDesc.createEl("br"),
+			"University/Course Notes/Stellar Evolution",
+			folderDesc.createEl("br"),
+			folderDesc.createEl("strong", { text: "Hot Tip:" }),
+			' If you right click on a folder and press "Search in Folder", you can copy and paste the search parameter it gives you after path: (without the quotes!) and use it here.'
+		)
+		new Setting(containerEl)
+			.setName("Folders To Publish")
+			.setDesc(folderDesc)
+			.addButton((button) => {
+				button
+					.setButtonText("Add folder")
+					.setCta()
+					.onClick(async () => {
+						this.plugin.settings.publishedFolders.push("")
+						await this.plugin.saveSettings()
+						this.display()
+					})
+			})
+
+		this.plugin.settings.publishedFolders.forEach((folder, index) => {
+			new Setting(containerEl)
+				.addText((text) => {
+					text.setPlaceholder("Add folder...")
+						.setValue(folder)
+						.onChange(async (newFolder) => {
+							newFolder = newFolder.replace(/\/$/, "")
+							this.plugin.settings.publishedFolders[index] =
+								newFolder
+							await this.plugin.saveSettings()
+						})
+
+					const parentDiv = text.inputEl.parentElement
+					if (parentDiv) parentDiv.style.width = "100%"
+					text.inputEl.style.width = "100%"
+				})
+				.addExtraButton((button) => {
+					button
+						.setIcon("x")
+						.setTooltip("Remove folder")
+						.onClick(async () => {
+							this.plugin.settings.publishedFolders.splice(
+								index,
+								1
+							)
+							await this.plugin.saveSettings()
+							this.display()
+						})
+				})
+		})
+
 		new Setting(containerEl).setName("Wiki Settings").setHeading()
 
 		new Setting(containerEl)
@@ -356,7 +407,7 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Supabase Service Key")
 			.setDesc(
-				"The Service key for Supabase. Changing requires a restart."
+				"The service key for Supabase. Changing requires a restart."
 			)
 			.addText((text) =>
 				text
@@ -428,7 +479,7 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Supabase Service Key (Local)")
 			.setDesc(
-				"The Service key for a local Supabase instance. Changing requires a restart."
+				"The service key for a local Supabase instance. Changing requires a restart."
 			)
 			.addText((text) =>
 				text
