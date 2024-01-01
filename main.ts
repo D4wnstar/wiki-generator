@@ -10,6 +10,7 @@ import {
 } from "obsidian"
 import { uploadConfig } from "src/config"
 import { Database } from "src/database.types"
+import { initializeDatabase, resetDatabase } from "src/database/init"
 import {
 	DatabaseError,
 	FrontPageError,
@@ -18,31 +19,37 @@ import {
 import { createClientWrapper, getPublishableFiles } from "src/utils"
 
 export interface WikiGeneratorSettings {
+	firstUsage: boolean
 	wikiTitle: string
 	autopublishNotes: boolean
 	restrictFolders: boolean
 	publishedFolders: string[]
-	supabaseUrl: string
+	databaseUrl: string
+	supabaseApiUrl: string
 	supabaseAnonKey: string
 	supabaseServiceKey: string
 	vercelDeployHook: string
 	supabaseUseLocal: boolean
-	supabaseUrlLocal: string
+	databaseUrlLocal: string
+	supabaseApiUrlLocal: string
 	supabaseAnonKeyLocal: string
 	supabaseServiceKeyLocal: string
 }
 
 const DEFAULT_SETTINGS: WikiGeneratorSettings = {
+	firstUsage: true,
 	wikiTitle: "Awesome Wiki",
 	autopublishNotes: true,
 	restrictFolders: false,
 	publishedFolders: [],
-	supabaseUrl: "",
+	databaseUrl: "",
+	supabaseApiUrl: "",
 	supabaseAnonKey: "",
 	supabaseServiceKey: "",
 	vercelDeployHook: "",
 	supabaseUseLocal: false,
-	supabaseUrlLocal: "http://localhost:54321",
+	databaseUrlLocal: "postgresql://postgres:postgres@localhost:54322/postgres",
+	supabaseApiUrlLocal: "http://localhost:54321",
 	supabaseAnonKeyLocal: "",
 	supabaseServiceKeyLocal: "",
 }
@@ -109,6 +116,14 @@ export default class WikiGeneratorPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings()
+
+		// Automatically initialize the database the first time the user
+		// sets the database connection URL
+		if (this.settings.firstUsage && this.settings.databaseUrl) {
+			initializeDatabase(this.settings.databaseUrl)
+			this.settings.firstUsage = false
+			await this.saveSettings()
+		}
 
 		// Automatically add the dg-publish: true property on file creation
 		// if the user allows it in the settings
@@ -393,16 +408,31 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName("Tokens").setHeading()
 
 		new Setting(containerEl)
-			.setName("Supabase URL")
+			.setName("Database URL")
+			.setDesc(
+				"The URL for the Database connection. Changing requires a restart."
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("Copy your token")
+					.setValue(this.plugin.settings.databaseUrl)
+					.onChange(async (value) => {
+						this.plugin.settings.databaseUrl = value
+						await this.plugin.saveSettings()
+					})
+			)
+
+		new Setting(containerEl)
+			.setName("Supabase API URL")
 			.setDesc(
 				"The URL for the Supabase API. Changing requires a restart."
 			)
 			.addText((text) =>
 				text
 					.setPlaceholder("Copy your token")
-					.setValue(this.plugin.settings.supabaseUrl)
+					.setValue(this.plugin.settings.supabaseApiUrl)
 					.onChange(async (value) => {
-						this.plugin.settings.supabaseUrl = value
+						this.plugin.settings.supabaseApiUrl = value
 						await this.plugin.saveSettings()
 					})
 			)
@@ -454,7 +484,7 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Use Local Supabase Docker Container")
 			.setDesc(
-				"Use a local Supabase container for plugin development. Requires setting the local anon and service keys below. Changing requires a restart."
+				"Use a local Supabase container for plugin development. Requires setting the local service key below. Changing requires a restart."
 			)
 			.addToggle(async (toggle) => {
 				toggle
@@ -466,15 +496,30 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 			})
 
 		new Setting(containerEl)
-			.setName("Supabase URL (Local)")
+			.setName("Database URL (Local)")
+			.setDesc(
+				"The URL for the Database connection of a local Supabase instance. You probably don't need to change this. Changing requires a restart."
+			)
+			.addText((text) =>
+				text
+					.setPlaceholder("Copy your token")
+					.setValue(this.plugin.settings.databaseUrlLocal)
+					.onChange(async (value) => {
+						this.plugin.settings.databaseUrlLocal = value
+						await this.plugin.saveSettings()
+					})
+			)
+
+		new Setting(containerEl)
+			.setName("Supabase API URL (Local)")
 			.setDesc(
 				"The URL for the API of a local Supabase instance. You probably don't need to change this. Changing requires a restart."
 			)
 			.addText((text) =>
 				text
-					.setValue(this.plugin.settings.supabaseUrlLocal)
+					.setValue(this.plugin.settings.supabaseApiUrlLocal)
 					.onChange(async (value) => {
-						this.plugin.settings.supabaseUrlLocal = value
+						this.plugin.settings.supabaseApiUrlLocal = value
 						await this.plugin.saveSettings()
 					})
 			)
@@ -506,5 +551,28 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings()
 					})
 			)
+
+		new Setting(containerEl)
+			.setName("Reset Database")
+			.setDesc("Reset the database to its initial state. All of your notes will be deleted from Supabase, but your media files will remain untouched. You can restore your notes by uploading them again.")
+			.addButton((button) => {
+				button
+					.setButtonText("Reset database")
+					.setCta()
+					.onClick(async () => {
+						new Notice("Resetting database...")
+						try {
+							await resetDatabase(
+								this.plugin.settings.supabaseUseLocal
+								? this.plugin.settings.databaseUrlLocal
+								: this.plugin.settings.databaseUrl
+							)
+							new Notice("Database successfully reset")
+						} catch (e) {
+							new Notice(`There was an error when resetting: ${e.message}`)
+							console.error(e.message)
+						}
+					})
+			})
 	}
 }

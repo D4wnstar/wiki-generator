@@ -44,15 +44,15 @@ export function createClientWrapper(settings: WikiGeneratorSettings) {
 
 	if (
 		settings.supabaseUseLocal &&
-		settings.supabaseUrlLocal &&
+		settings.supabaseApiUrlLocal &&
 		settings.supabaseServiceKeyLocal
 	) {
 		client = createClient(
-			settings.supabaseUrlLocal,
+			settings.supabaseApiUrlLocal,
 			settings.supabaseServiceKeyLocal
 		)
-	} else if (settings.supabaseUrl && settings.supabaseServiceKey) {
-		client = createClient(settings.supabaseUrl, settings.supabaseServiceKey)
+	} else if (settings.supabaseApiUrl && settings.supabaseServiceKey) {
+		client = createClient(settings.supabaseApiUrl, settings.supabaseServiceKey)
 	} else {
 		throw new Error(
 			"Please set both the URL and Service Key for Supabase in the settings"

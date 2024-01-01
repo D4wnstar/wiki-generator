@@ -3,7 +3,7 @@
 	"name": "Wiki Generator",
 	"version": "1.0.0",
 	"minAppVersion": "0.15.0",
-	"description": "Automatically generate a free online wiki from your notes.",
+	"description": "Automatically generate a free online wiki from your notes",
 	"author": "Dawnstar",
 	"authorUrl": "https://obsidian.md",
 	"isDesktopOnly": false

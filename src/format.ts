@@ -4,7 +4,7 @@ import { Notice, TFile, Vault, request } from "obsidian"
 import { convertWikilinks, uploadImage } from "./wikilinks"
 import { SupabaseClient } from "@supabase/supabase-js"
 import * as MarkdownIt from "markdown-it"
-import { Database } from "./database.types"
+import { Database } from "./database/database.types"
 import { storedMedia } from "./config"
 
 export class FrontPageError extends Error {
@@ -267,6 +267,14 @@ export async function convertNotesForUpload(
 	deployHookUrl: string | undefined
 ): Promise<void> {
 	const converter = markdownit()
+
+	// Create the media bucket if it doesn't exist
+	const { error: bucketError } = await supabase
+		.storage
+		.createBucket('images', {
+			public: true
+		})
+	if (bucketError) throw new DatabaseError(bucketError.message)
 
 	// Fetch a list of currently stored media files
 	const { data, error: storageError } = await supabase

@@ -3,7 +3,7 @@ import { Backreference, Note, slugifyPath } from "./format"
 import { SupabaseClient } from "@supabase/supabase-js"
 import Image from "image-js"
 import { storedMedia, uploadConfig } from "./config"
-import { Database } from "./database.types"
+import { Database } from "./database/database.types"
 
 function backrefAlreadyExists(
 	displayName: string,
