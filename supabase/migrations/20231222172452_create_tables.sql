@@ -1,6 +1,7 @@
 create table notes (
     id serial primary key,
     title text not null,
+    alt_title text,
     path text unique not null,
     slug text unique not null,
     content text,
@@ -34,9 +35,4 @@ create table stored_media (
     media_name text unique not null,
     url text not null,
     media_type text not null
-);
-
-create table wiki_settings (
-    id serial primary key,
-    settings jsonb not null
 );

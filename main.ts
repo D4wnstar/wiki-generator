@@ -20,6 +20,7 @@ import { createClientWrapper, getPublishableFiles } from "src/utils"
 export interface WikiGeneratorSettings {
 	wikiTitle: string
 	autopublishNotes: boolean
+	restrictFolders: boolean
 	publishedFolders: string[]
 	supabaseUrl: string
 	supabaseAnonKey: string
@@ -34,6 +35,7 @@ export interface WikiGeneratorSettings {
 const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 	wikiTitle: "Awesome Wiki",
 	autopublishNotes: true,
+	restrictFolders: false,
 	publishedFolders: [],
 	supabaseUrl: "",
 	supabaseAnonKey: "",
@@ -123,7 +125,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 							const fileFolder =
 								view.file?.path.match(/.*(?=\/)/)?.[0]
 							if (
-								s.publishedFolders.length === 0 ||
+								s.restrictFolders ||
 								(fileFolder &&
 									s.publishedFolders.some((path) =>
 										fileFolder.includes(path)
@@ -293,11 +295,25 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Autopublish New Notes")
 			.setDesc("Automatically set up newly created notes for publishing.")
-			.addToggle(async (toggle) => {
+			.addToggle((toggle) => {
 				toggle
 					.setValue(this.plugin.settings.autopublishNotes)
 					.onChange(async (value) => {
 						this.plugin.settings.autopublishNotes = value
+						await this.plugin.saveSettings()
+					})
+			})
+
+		new Setting(containerEl)
+			.setName("Restrict Folders")
+			.setDesc(
+				"Only publish notes within these folders. Set the folders below."
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.restrictFolders)
+					.onChange(async (value) => {
+						this.plugin.settings.restrictFolders = value
 						await this.plugin.saveSettings()
 					})
 			})

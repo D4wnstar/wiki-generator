@@ -122,6 +122,9 @@ export async function uploadImage(
 		}
 	}
 
+	// Push to the (local) list of stored files
+	storedMedia.files.push(newFilename)
+
 	// If it doesn't exists, load the image to manipulate it
 	let image = await Image.load(fileBuffer)
 
@@ -154,9 +157,6 @@ export async function uploadImage(
 	console.log(`Successfully uploaded file ${newFilename}`)
 	const urlData = supabase.storage.from("images").getPublicUrl(data.path)
 	const url = urlData.data.publicUrl
-
-	// Push to the (local) list of stored files
-	storedMedia.files.push(newFilename)
 
 	// Push to the (remote) list of stored files
 	if (uploadConfig.overwriteFiles) {

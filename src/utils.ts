@@ -30,7 +30,7 @@ export function getFilesFromFolders(vault: Vault, folders: string[] | string) {
 
 export function getPublishableFiles(vault: Vault, settings: WikiGeneratorSettings) {
     let notes: TFile[]
-    if (settings.publishedFolders.length > 0) {
+    if (settings.restrictFolders) {
         notes = getFilesFromFolders(vault, settings.publishedFolders)
     } else {
         notes = vault.getMarkdownFiles()

@@ -86,6 +86,7 @@ export interface Database {
       }
       notes: {
         Row: {
+          alt_title: string | null
           content: string | null
           frontpage: boolean | null
           id: number
@@ -95,6 +96,7 @@ export interface Database {
           title: string
         }
         Insert: {
+          alt_title?: string | null
           content?: string | null
           frontpage?: boolean | null
           id?: number
@@ -104,6 +106,7 @@ export interface Database {
           title: string
         }
         Update: {
+          alt_title?: string | null
           content?: string | null
           frontpage?: boolean | null
           id?: number

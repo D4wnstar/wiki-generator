@@ -41,6 +41,7 @@ export type Backreference = {
 type NoteProperties = {
 	publish: boolean
 	frontpage: boolean
+	alt_title: string | undefined
 }
 
 type SidebarImage = {
@@ -59,7 +60,11 @@ export function slugifyPath(path: string): string {
 }
 
 function parseProperties(match: string): NoteProperties {
-	const props: NoteProperties = { publish: false, frontpage: false }
+	const props: NoteProperties = {
+		publish: false,
+		frontpage: false,
+		alt_title: undefined
+	}
 	const propsLines = match.split("\n")
 	
 	for (const line of propsLines) {
@@ -72,6 +77,10 @@ function parseProperties(match: string): NoteProperties {
 			case "wg-home":
 			case "dg-home":
 				if (value === "true") props.frontpage = true
+				break
+			case "wg-title":
+			case "dg-title":
+				props.alt_title = value
 				break
 			default:
 				break
@@ -164,7 +173,11 @@ async function formatMd(
 }> {
 	const propsRegex = /^---\r?\n(.*?)\r?\n---/s
 	const propsMatch = md.match(propsRegex)
-	let props: NoteProperties = { publish: false, frontpage: false }
+	let props: NoteProperties = {
+		publish: false,
+		frontpage: false,
+		alt_title: undefined,
+	}
 	if (propsMatch) {
 		props = parseProperties(propsMatch[1]) // Save some properties before removing them
 		md = md.replace(propsRegex, "") // Remove obsidian properties
@@ -199,7 +212,7 @@ async function formatMd(
 async function vaultToNotes(
 	converter: MarkdownIt,
 	vault: Vault,
-	supabase: SupabaseClient
+	supabase: SupabaseClient<Database>
 ): Promise<[Note[], TFile[]]> {
 	const notes: Note[] = []
 	// Get the non-markdown media first
@@ -226,11 +239,11 @@ async function vaultToNotes(
 		html = html.replace(/<blockquote>/g, '<blockquote class="blockquote">')
 		html = html.replace(
 			/<ul(.*?)>/g,
-			'<ul$1 class="list-disc list-inside [&_&]:pl-5">'
+			'<ul$1 class="list-disc list-inside indent-cascade">'
 		)
 		html = html.replace(
 			/<ol(.*?)>/g,
-			'<ol$1 class="list-decimal list-inside [&_&]:pl-5">'
+			'<ol$1 class="list-decimal list-inside indent-cascade">'
 		)
 
 		notes.push({
@@ -312,6 +325,7 @@ export async function convertNotesForUpload(
 			notes.map((note) => {
 				return {
 					title: note.title,
+					alt_title: note.properties.alt_title,
 					path: note.path,
 					slug: note.slug,
 					content: note.content,
@@ -409,14 +423,22 @@ export async function convertNotesForUpload(
 			throw new DatabaseError(detailsDeletionError.message)
 
 		// ...all backreferences with matching id...
-		const { error: backrefDeletionError } = await supabase
+		const { error: backrefIdDeletionError } = await supabase
 			.from("backreferences")
 			.delete()
 			.in("note_id", idsToDelete)
-		if (backrefDeletionError)
-			throw new DatabaseError(backrefDeletionError.message)
+		if (backrefIdDeletionError)
+			throw new DatabaseError(backrefIdDeletionError.message)
 
-		// ... and all sidebar images with matching id
+		// ...all backreferences with matching slug...
+		const { error: backrefSlugDeletionError } = await supabase
+			.from("backreferences")
+			.delete()
+			.in("slug", slugsToDelete)
+		if (backrefSlugDeletionError)
+			throw new DatabaseError(backrefSlugDeletionError.message)
+
+		// ...and all sidebar images with matching id...
 		const { error: sidebarImageDeletionError } = await supabase
 			.from("sidebar_images")
 			.delete()
@@ -441,6 +463,8 @@ export async function convertNotesForUpload(
 			)
 		}
 	}
+
+	// Also delete all backreferences from notes that have been removed or unplu
 
 	// Clean up remote files by removing ones that have been deleted locally
 	// TODO: Also remove files that are no longer referenced by any note
