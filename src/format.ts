@@ -6,6 +6,7 @@ import { SupabaseClient } from "@supabase/supabase-js"
 import * as MarkdownIt from "markdown-it"
 import { Database } from "./database/database.types"
 import { storedMedia } from "./config"
+import { calloutIcons } from "./utils"
 
 export class FrontPageError extends Error {
 	constructor(message: string) {
@@ -160,6 +161,82 @@ async function parseImage(
 	}
 }
 
+function replaceCallouts(match: string, type: string, title: string, content: string) {
+	console.log(type, title, content)
+	let color: string
+	let svg: string
+	switch (type.toLowerCase()) {
+		case "info":
+			color = "primary"
+			svg = calloutIcons.info
+			break;
+		case "question":
+		case "faq":
+		case "help":
+			color = "warning"
+			svg = calloutIcons.circleQuestion
+			break
+		case "tip":
+		case "important":
+		case "hint":
+			color = "tertiary"
+			svg = calloutIcons.flame
+			break
+		case "success":
+		case "check":
+		case "done":
+			color = "success"
+			svg = calloutIcons.check
+			break
+		case "todo":
+			color = "primary"
+			svg = calloutIcons.circleCheck
+			break
+		case "warning":
+		case "caution":
+		case "attention":
+			color = "warning"
+			svg = calloutIcons.alertTriangle
+			break
+		case "failure":
+		case "fail":
+		case "missing":
+			color = "error"
+			svg = calloutIcons.cross
+			break
+		case "danger":
+		case "error":
+			color = "error"
+			svg = calloutIcons.zap
+			break
+		case "bug":
+			color = "error"
+			svg = calloutIcons.bug
+			break
+		case "example":
+			color = "secondary"
+			svg = calloutIcons.list
+			break
+		case "quote":
+		case "cite":
+			color = "surface"
+			svg = calloutIcons.quote
+			break
+		case "abstract":
+		case "summary":
+		case "tldr":
+			color = "tertiary"
+			svg = calloutIcons.clipboard
+			break
+		default:
+			color = ""
+			svg = ""
+			break;
+	}
+	
+	return `<div class="callout-${color}"><div class="flex"><div class="w-8 stroke-${color}-400">${svg}</div><div class="pb-2"><strong>${title}</strong></div></div><p>${content}</p></div>`
+}
+
 async function formatMd(
 	md: string,
 	vault: Vault,
@@ -201,6 +278,10 @@ async function formatMd(
 
 	md = md.replace(/^:::hidden\n.*?\n:::/gms, "") // Remove :::hidden::: blocks
 	md = md.replace(/^#+ GM.*?(?=^#|$(?![\r\n]))/gms, "") // Remove GM paragraphs
+	md = md.replace(
+		/> \[!(\w+)\](?:\s*(.+)(?:\n>\s*(.*))?)?/g, // Replace callouts
+		replaceCallouts
+	)
 	return {
 		md: md,
 		props: props,
@@ -266,15 +347,24 @@ export async function convertNotesForUpload(
 	supabase: SupabaseClient<Database>,
 	deployHookUrl: string | undefined
 ): Promise<void> {
-	const converter = markdownit()
+	const converter = markdownit({ html: true })
 
 	// Create the media bucket if it doesn't exist
-	const { error: bucketError } = await supabase
+	const { data: buckets } = await supabase
+		.storage
+		.listBuckets()
+
+	if (!buckets?.map((bucket) => bucket.name).includes("images")) {
+		const { error: bucketError } = await supabase
 		.storage
 		.createBucket('images', {
 			public: true
 		})
-	if (bucketError) throw new DatabaseError(bucketError.message)
+
+		if (bucketError && bucketError.message !== "The resource already exists") {
+			throw new DatabaseError(bucketError.message)
+		}
+	}
 
 	// Fetch a list of currently stored media files
 	const { data, error: storageError } = await supabase

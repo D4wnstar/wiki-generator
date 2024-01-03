@@ -9,7 +9,7 @@ import {
 	Vault,
 } from "obsidian"
 import { uploadConfig } from "src/config"
-import { Database } from "src/database.types"
+import { Database } from "src/database/database.types"
 import { initializeDatabase, resetDatabase } from "src/database/init"
 import {
 	DatabaseError,
@@ -414,7 +414,7 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 			)
 			.addText((text) =>
 				text
-					.setPlaceholder("Copy your token")
+					.setPlaceholder("Copy the URL")
 					.setValue(this.plugin.settings.databaseUrl)
 					.onChange(async (value) => {
 						this.plugin.settings.databaseUrl = value
@@ -429,7 +429,7 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 			)
 			.addText((text) =>
 				text
-					.setPlaceholder("Copy your token")
+					.setPlaceholder("Copy the URL")
 					.setValue(this.plugin.settings.supabaseApiUrl)
 					.onChange(async (value) => {
 						this.plugin.settings.supabaseApiUrl = value
@@ -457,7 +457,7 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 			)
 			.addText((text) =>
 				text
-					.setPlaceholder("Copy your token")
+					.setPlaceholder("Copy your key")
 					.setValue(this.plugin.settings.supabaseServiceKey)
 					.onChange(async (value) => {
 						this.plugin.settings.supabaseServiceKey = value
@@ -502,7 +502,7 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 			)
 			.addText((text) =>
 				text
-					.setPlaceholder("Copy your token")
+					.setPlaceholder("Copy the URL")
 					.setValue(this.plugin.settings.databaseUrlLocal)
 					.onChange(async (value) => {
 						this.plugin.settings.databaseUrlLocal = value
@@ -517,6 +517,7 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 			)
 			.addText((text) =>
 				text
+					.setPlaceholder("Copy the URL")
 					.setValue(this.plugin.settings.supabaseApiUrlLocal)
 					.onChange(async (value) => {
 						this.plugin.settings.supabaseApiUrlLocal = value
@@ -544,7 +545,7 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 			)
 			.addText((text) =>
 				text
-					.setPlaceholder("Copy your token")
+					.setPlaceholder("Copy your key")
 					.setValue(this.plugin.settings.supabaseServiceKeyLocal)
 					.onChange(async (value) => {
 						this.plugin.settings.supabaseServiceKeyLocal = value
