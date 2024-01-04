@@ -57,7 +57,6 @@ const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 async function uploadNotes(
 	vault: Vault,
 	supabase: SupabaseClient<Database> | undefined,
-	deployHookUrl: string | undefined,
 	settings: WikiGeneratorSettings
 ) {
 	if (!supabase) {
@@ -92,6 +91,10 @@ async function uploadNotes(
 		return
 	}
 
+	const deployHookUrl = settings.supabaseUseLocal
+		? undefined
+		: settings.vercelDeployHook
+
 	console.log("Uploading notes...")
 	new Notice("Uploading notes...")
 	try {
@@ -120,9 +123,11 @@ export default class WikiGeneratorPlugin extends Plugin {
 		// Automatically initialize the database the first time the user
 		// sets the database connection URL
 		if (this.settings.firstUsage && this.settings.databaseUrl) {
+			new Notice("Setting up the database...")
 			initializeDatabase(this.settings.databaseUrl)
 			this.settings.firstUsage = false
 			await this.saveSettings()
+			new Notice("Database fully set up!")
 		}
 
 		// Automatically add the dg-publish: true property on file creation
@@ -169,28 +174,14 @@ export default class WikiGeneratorPlugin extends Plugin {
 		}
 
 		this.addRibbonIcon("upload-cloud", "Upload Notes", async () => {
-			await uploadNotes(
-				this.app.vault,
-				supabase,
-				this.settings.supabaseUseLocal
-					? undefined
-					: this.settings.vercelDeployHook,
-				this.settings
-			)
+			await uploadNotes(this.app.vault, supabase, this.settings)
 		})
 
 		this.addCommand({
 			id: "upload-notes",
 			name: "Upload notes",
 			callback: async () => {
-				await uploadNotes(
-					this.app.vault,
-					supabase,
-					this.settings.supabaseUseLocal
-						? undefined
-						: this.settings.vercelDeployHook,
-					this.settings
-				)
+				await uploadNotes(this.app.vault, supabase, this.settings)
 			},
 		})
 
@@ -199,14 +190,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 			name: "Upload notes and overwrite media files",
 			callback: async () => {
 				uploadConfig.overwriteFiles = true
-				await uploadNotes(
-					this.app.vault,
-					supabase,
-					this.settings.supabaseUseLocal
-						? undefined
-						: this.settings.vercelDeployHook,
-					this.settings
-				)
+				await uploadNotes(this.app.vault, supabase, this.settings)
 			},
 		})
 
@@ -555,7 +539,9 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Reset Database")
-			.setDesc("Reset the database to its initial state. All of your notes will be deleted from Supabase, but your media files will remain untouched. You can restore your notes by uploading them again.")
+			.setDesc(
+				"Reset the database to its initial state. All of your notes will be deleted from Supabase, but your media files will remain untouched. You can restore your notes by uploading them again."
+			)
 			.addButton((button) => {
 				button
 					.setButtonText("Reset database")
@@ -565,12 +551,14 @@ class WikiGeneratorSettingTab extends PluginSettingTab {
 						try {
 							await resetDatabase(
 								this.plugin.settings.supabaseUseLocal
-								? this.plugin.settings.databaseUrlLocal
-								: this.plugin.settings.databaseUrl
+									? this.plugin.settings.databaseUrlLocal
+									: this.plugin.settings.databaseUrl
 							)
 							new Notice("Database successfully reset")
 						} catch (e) {
-							new Notice(`There was an error when resetting: ${e.message}`)
+							new Notice(
+								`There was an error when resetting: ${e.message}`
+							)
 							console.error(e.message)
 						}
 					})
