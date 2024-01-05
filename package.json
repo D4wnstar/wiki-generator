@@ -27,6 +27,7 @@
 	},
 	"dependencies": {
 		"@supabase/supabase-js": "^2.39.1",
+		"highlight.js": "^11.9.0",
 		"image-js": "^0.35.5",
 		"markdown-it": "^14.0.0",
 		"postgres": "^3.4.3",

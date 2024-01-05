@@ -1,12 +1,12 @@
 import markdownit from "markdown-it"
-import slugify from "slugify"
 import { Notice, TFile, Vault, request } from "obsidian"
 import { convertWikilinks, uploadImage } from "./wikilinks"
 import { SupabaseClient } from "@supabase/supabase-js"
 import * as MarkdownIt from "markdown-it"
+import hljs from "highlight.js"
 import { Database } from "./database/database.types"
 import { storedMedia } from "./config"
-import { calloutIcons } from "./utils"
+import { calloutIcons, slugifyPath } from "./utils"
 
 export class FrontPageError extends Error {
 	constructor(message: string) {
@@ -50,24 +50,14 @@ type SidebarImage = {
 	caption: string | undefined
 }
 
-export function slugifyPath(path: string): string {
-	const elems = path.split("/").filter((elem) => elem !== "")
-	const slugged = []
-	for (const elem of elems) {
-		slugged.push(slugify(elem, { lower: true, remove: /[^\w\d\s]/g }))
-	}
-
-	return slugged.join("/")
-}
-
 function parseProperties(match: string): NoteProperties {
 	const props: NoteProperties = {
 		publish: false,
 		frontpage: false,
-		alt_title: undefined
+		alt_title: undefined,
 	}
 	const propsLines = match.split("\n")
-	
+
 	for (const line of propsLines) {
 		const [key, value] = line.split(": ")
 		switch (key) {
@@ -87,7 +77,7 @@ function parseProperties(match: string): NoteProperties {
 				break
 		}
 	}
-	
+
 	return props
 }
 
@@ -161,15 +151,19 @@ async function parseImage(
 	}
 }
 
-function replaceCallouts(match: string, type: string, title: string, content: string) {
-	console.log(type, title, content)
+function replaceCallouts(
+	_match: string,
+	type: string,
+	title: string,
+	content: string
+) {
 	let color: string
 	let svg: string
 	switch (type.toLowerCase()) {
 		case "info":
 			color = "primary"
 			svg = calloutIcons.info
-			break;
+			break
 		case "question":
 		case "faq":
 		case "help":
@@ -231,10 +225,26 @@ function replaceCallouts(match: string, type: string, title: string, content: st
 		default:
 			color = ""
 			svg = ""
-			break;
+			break
 	}
-	
+
 	return `<div class="callout-${color}"><div class="flex"><div class="w-8 stroke-${color}-400">${svg}</div><div class="pb-2"><strong>${title}</strong></div></div><p>${content}</p></div>`
+}
+
+function highlightCode(_match: string, lang: string, code: string) {
+	let displayCode
+	const langs = hljs.listLanguages()
+	if (lang && langs.includes(lang)) {
+		displayCode = hljs.highlight(code, { language: lang }).value
+	} else displayCode = code
+
+	return `
+<div class="codeblock-base">
+	<header class="codeblock-header">
+		<span>${lang}</span>
+	</header>
+	<pre class="codeblock-pre">${displayCode}</pre>
+</div>`
 }
 
 async function formatMd(
@@ -282,6 +292,8 @@ async function formatMd(
 		/> \[!(\w+)\](?:\s*(.+)(?:\n>\s*(.*))?)?/g, // Replace callouts
 		replaceCallouts
 	)
+	md = md.replace(/^```(\w*)\n(.*?)\n```/gms, highlightCode) // Highlight code blocks
+
 	return {
 		md: md,
 		props: props,
@@ -326,6 +338,7 @@ async function vaultToNotes(
 			/<ol(.*?)>/g,
 			'<ol$1 class="list-decimal list-inside indent-cascade">'
 		)
+		html = html.replace(/<code>/g, '<code class="code">')
 
 		notes.push({
 			title: file.name.replace(".md", ""),
@@ -350,18 +363,20 @@ export async function convertNotesForUpload(
 	const converter = markdownit({ html: true })
 
 	// Create the media bucket if it doesn't exist
-	const { data: buckets } = await supabase
-		.storage
-		.listBuckets()
+	const { data: buckets } = await supabase.storage.listBuckets()
 
 	if (!buckets?.map((bucket) => bucket.name).includes("images")) {
-		const { error: bucketError } = await supabase
-		.storage
-		.createBucket('images', {
-			public: true
-		})
+		const { error: bucketError } = await supabase.storage.createBucket(
+			"images",
+			{
+				public: true,
+			}
+		)
 
-		if (bucketError && bucketError.message !== "The resource already exists") {
+		if (
+			bucketError &&
+			bucketError.message !== "The resource already exists"
+		) {
 			throw new DatabaseError(bucketError.message)
 		}
 	}
@@ -597,7 +612,6 @@ export async function convertNotesForUpload(
 
 		if (dbDeletionError) throw new DatabaseError(dbDeletionError.message)
 	}
-
 
 	if (deployHookUrl) {
 		console.log("Deploying the website...")
