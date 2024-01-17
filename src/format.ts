@@ -62,15 +62,15 @@ function parseProperties(match: string): NoteProperties {
 	for (const line of propsLines) {
 		const [key, value] = line.split(": ")
 		switch (key) {
-			case "wg-publish":
+			case "wiki-publish":
 			case "dg-publish":
 				if (value === "true") props.publish = true
 				break
-			case "wg-home":
+			case "wiki-home":
 			case "dg-home":
 				if (value === "true") props.frontpage = true
 				break
-			case "wg-title":
+			case "wiki-title":
 			case "dg-title":
 				props.alt_title = value
 				break
@@ -408,7 +408,7 @@ export async function convertNotesForUpload(
 	const frontpageArray = notes.filter((note) => note.properties.frontpage)
 	if (frontpageArray.length === 0) {
 		throw new FrontPageError(
-			"ERROR: No page has been set as the front page. One front page must be set by adding the dg-home: true property to a note."
+			"ERROR: No page has been set as the front page. One front page must be set by adding the wiki-home: true property to a note."
 		)
 	} else if (frontpageArray.length > 1) {
 		throw new FrontPageError(

@@ -86,6 +86,7 @@ export interface Database {
       }
       notes: {
         Row: {
+          allowed_users: string[] | null
           alt_title: string | null
           content: string | null
           frontpage: boolean | null
@@ -96,6 +97,7 @@ export interface Database {
           title: string
         }
         Insert: {
+          allowed_users?: string[] | null
           alt_title?: string | null
           content?: string | null
           frontpage?: boolean | null
@@ -106,6 +108,7 @@ export interface Database {
           title: string
         }
         Update: {
+          allowed_users?: string[] | null
           alt_title?: string | null
           content?: string | null
           frontpage?: boolean | null

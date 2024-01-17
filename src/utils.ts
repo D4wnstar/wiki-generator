@@ -1,7 +1,8 @@
 import { SupabaseClient, createClient } from "@supabase/supabase-js"
-import { WikiGeneratorSettings } from "main"
-import { TFile, TFolder, Vault, normalizePath } from "obsidian"
+
+import { Editor, TFile, TFolder, Vault, normalizePath } from "obsidian"
 import slugify from "slugify"
+import { WikiGeneratorSettings } from "./settings"
 
 export const calloutIcons = {
 	info: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-info"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`,
@@ -94,4 +95,44 @@ export function createClientWrapper(settings: WikiGeneratorSettings) {
 	}
 
 	return client
+}
+
+export function getPropertiesFromEditor(editor: Editor): Map<string, string> {
+	const contents = editor.getValue()
+    const match = contents.match(/^---\n(.*?)\n---/s)
+    if (!match) return new Map()
+
+    const propsStrings = match[1].split("\n")
+    const props = new Map<string, string>()
+    for (const prop of propsStrings) {
+        const [k, v] = prop.split(": ")
+        props.set(k, v)
+    }
+
+	return props
+}
+
+export function replacePropertiesFromEditor(editor: Editor, newProps: string) {
+	// Scuffed way to change properties. Why is there no API for this lmao
+	
+	// Check if there are any properties
+	const startPos = { line: 0, ch: 0 }
+	if (editor.getLine(0) !== "---") {
+		// If not, just prepend the new ones to the file
+		// Make sure new text ends with a newline
+		if (!newProps.endsWith("\n")) newProps += "\n"
+		editor.replaceRange(newProps, startPos)
+		return
+	}
+
+	// If yes, check how many lines need to be replaced
+	let i = 0
+	for (; i < editor.lineCount(); i++) {
+		const line = editor.getLine(i)
+		if (i > 0 && line === "---") break
+	}
+	const endPos = { line: i, ch: 3 }
+
+	// Finally, replace all characters between the start and the final line
+	editor.replaceRange(newProps, startPos, endPos)
 }

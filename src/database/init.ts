@@ -64,9 +64,23 @@ async function setupInitialSchema(sql: Sql) {
             slug text unique not null,
             content text,
             frontpage boolean default false,
-            "references" text array
+            "references" text array,
+            allowed_users text array
         );`
     console.log(notes)
+
+    const notesRls = await sql`
+        alter table "notes" enable row level security;
+    `
+    console.log(notesRls)
+
+    const notesPolicy = await sql`
+        create policy "Notes are visible to everyone."
+        on notes for select
+        to anon
+        using ( true );
+    `
+    console.log(notesPolicy)
 
 	const backreferences = await sql`
         create table if not exists backreferences (
