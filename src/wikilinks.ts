@@ -130,11 +130,11 @@ export async function uploadImage(
 	let image = await Image.load(fileBuffer)
 
 	// Compress the image if it's overly large
-	if (image.width > 1600) {
-		image = image.resize({ width: 1600 })
-	}
 	if (image.height > 1600) {
 		image = image.resize({ height: 1600 })
+	}
+	if (image.width > 1600) {
+		image = image.resize({ width: 1600 })
 	}
 
 	// Convert to webp and upload
@@ -158,41 +158,6 @@ export async function uploadImage(
 	console.log(`Successfully uploaded file ${newFilename}`)
 	const urlData = supabase.storage.from("images").getPublicUrl(data.path)
 	const url = urlData.data.publicUrl
-
-	// Push to the (remote) list of stored files
-	if (uploadConfig.overwriteFiles) {
-		const { error: imageError } = await supabase
-			.from("stored_media")
-			.upsert(
-				{
-					media_name: newFilename,
-					url: url,
-					media_type: "image",
-				},
-				{
-					onConflict: "media_name",
-					ignoreDuplicates: false,
-				}
-			)
-		if (imageError) {
-			console.error(
-				`Couldn't add ${newFilename} to stored_media table. Error message: "${imageError.message}"`
-			)
-		}
-	} else {
-		const { error: imageError } = await supabase
-			.from("stored_media")
-			.insert({
-				media_name: newFilename,
-				url: url,
-				media_type: "image",
-			})
-		if (imageError) {
-			console.error(
-				`Couldn't add ${newFilename} to stored_media table. Error message: "${imageError.message}"`
-			)
-		}
-	}
 
 	return url
 }
@@ -236,9 +201,9 @@ function handleNoteReference(
 			})
 		}
 	} else {
-		console.warn(
-			`Could not find note "${realName}". If this note doesn't yet exist, this is expected`
-		)
+		// console.warn(
+		// 	`Could not find note "${realName}". If this note doesn't yet exist, this is expected`
+		// )
 		return altName ?? realName
 	}
 
@@ -260,9 +225,9 @@ async function handleFile(
 	const refFile = localMedia.find((file) => file.name === filename)
 
 	if (!refFile) {
-		console.warn(
-			`Could not find file "${filename}". If this file doesn't yet exist, this is expected`
-		)
+		// console.warn(
+		// 	`Could not find file "${filename}". If this file doesn't yet exist, this is expected`
+		// )
 		return `[${filename}]`
 	}
 

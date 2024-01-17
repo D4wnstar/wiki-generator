@@ -47,6 +47,7 @@ type NoteProperties = {
 
 type SidebarImage = {
 	image_name: string
+	url: string | undefined
 	caption: string | undefined
 }
 
@@ -131,6 +132,7 @@ async function parseImage(
 		)
 		return {
 			image_name: filename,
+			url: undefined,
 			caption: caption,
 		}
 	}
@@ -138,16 +140,10 @@ async function parseImage(
 	// If it exists, read it as a binary ArrayBuffer and upload it
 	const refFileBinary = await vault.readBinary(refFile)
 	const url = await uploadImage(refFileBinary, filename, supabase)
-	if (!url) {
-		return {
-			image_name: filename,
-			caption: caption,
-		}
-	} else {
-		return {
-			image_name: url,
-			caption: caption,
-		}
+	return {
+		image_name: filename,
+		url: url,
+		caption: caption,
 	}
 }
 
@@ -379,12 +375,15 @@ export async function convertNotesForUpload(
 		) {
 			throw new DatabaseError(bucketError.message)
 		}
+	} else {
+		console.log("Media bucket already set up. Continuing...")
 	}
 
 	// Fetch a list of currently stored media files
 	const { data, error: storageError } = await supabase
-		.from("stored_media")
-		.select("media_name")
+		.storage
+		.from("images")
+		.list()
 
 	if (storageError) {
 		throw new DatabaseError(
@@ -392,8 +391,10 @@ export async function convertNotesForUpload(
 		)
 	}
 
+	console.log("Media files:", data)
+
 	// Store those files globally (see storedMedia comment for why)
-	storedMedia.files = data.map((file) => file.media_name)
+	storedMedia.files = data.map((file) => file.name)
 
 	// Grab all the files, parse all markdown for custom syntax and upload sidebar images
 	console.log("Fetching files from vault...")
@@ -493,6 +494,7 @@ export async function convertNotesForUpload(
 					return {
 						note_id: addedNotes[index].id,
 						image_name: img.image_name,
+						url: img.url,
 						caption: img.caption,
 					}
 				})
@@ -613,6 +615,7 @@ export async function convertNotesForUpload(
 		if (dbDeletionError) throw new DatabaseError(dbDeletionError.message)
 	}
 
+	// Finally, send a request to Vercel to rebuild the website
 	if (deployHookUrl) {
 		console.log("Deploying the website...")
 		new Notice("Deploying the website...")

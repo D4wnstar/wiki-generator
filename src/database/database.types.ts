@@ -122,16 +122,19 @@ export interface Database {
           caption: string | null
           image_name: string
           note_id: number
+          url: string | null
         }
         Insert: {
           caption?: string | null
           image_name: string
           note_id: number
+          url?: string | null
         }
         Update: {
           caption?: string | null
           image_name?: string
           note_id?: number
+          url?: string | null
         }
         Relationships: [
           {
@@ -141,27 +144,6 @@ export interface Database {
             referencedColumns: ["id"]
           }
         ]
-      }
-      stored_media: {
-        Row: {
-          id: number
-          media_name: string
-          media_type: string
-          url: string
-        }
-        Insert: {
-          id?: number
-          media_name: string
-          media_type: string
-          url: string
-        }
-        Update: {
-          id?: number
-          media_name?: string
-          media_type?: string
-          url?: string
-        }
-        Relationships: []
       }
       wiki_settings: {
         Row: {

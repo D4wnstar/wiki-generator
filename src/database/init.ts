@@ -65,9 +65,8 @@ async function setupInitialSchema(sql: Sql) {
             content text,
             frontpage boolean default false,
             "references" text array
-        );
-    `
-	console.log(notes)
+        );`
+    console.log(notes)
 
 	const backreferences = await sql`
         create table if not exists backreferences (
@@ -93,22 +92,24 @@ async function setupInitialSchema(sql: Sql) {
         create table if not exists sidebar_images (
             note_id integer not null references notes (id),
             image_name text not null,
+            url text,
             caption text,
             primary key (note_id, image_name)
         );
     `
 	console.log(sidebar_images)
 
-	const stored_media = await sql`
-        create table if not exists stored_media (
-            id serial primary key,
-            media_name text unique not null,
-            url text not null,
-            media_type text not null
-        );
-    `
-	console.log(stored_media)
+	// const stored_media = await sql`
+    //     create table if not exists stored_media (
+    //         id serial primary key,
+    //         media_name text unique not null,
+    //         url text not null,
+    //         media_type text not null
+    //     );
+    // `
+	// console.log(stored_media)
 
+    // TODO: Remember to update this every time the settings change
 	const wiki_settings = await sql`
         create table if not exists wiki_settings (
             id serial primary key,
@@ -138,10 +139,10 @@ async function nukeDatabase(sql: Sql) {
    `
 	console.log(dropSettings)
 
-	const dropStoredMedia = await sql`
-        drop table if exists stored_media
-   `
-	console.log(dropStoredMedia)
+// 	const dropStoredMedia = await sql`
+//         drop table if exists stored_media
+//    `
+// 	console.log(dropStoredMedia)
 
 	const dropSidebarImages = await sql`
         drop table if exists sidebar_images
