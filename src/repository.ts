@@ -189,8 +189,8 @@ async function handleBranchSplit(
 ) {
 	// Create a new branch
 	new Notice("Creating a new branch...")
-	const randomUuid = randomUUID()
-	const branchName = `sync-from-template-${randomUuid}`
+	const shortSha = latestTemplateCommitSha.substring(0,7)
+	const branchName = `sync-from-template-${shortSha}`
 	await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
 		owner: username,
 		repo: repo,
@@ -206,7 +206,7 @@ async function handleBranchSplit(
 	const prRes = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
 		owner: username,
 		repo: repo,
-		title: `Sync with template commit ${randomUuid}`,
+		title: `Sync template to ${shortSha}`,
 		body: `Sync with template commit ${templateOwner}/${templateRepo}@${latestTemplateCommitSha}.`,
 		head: branchName,
 		base: "main",
