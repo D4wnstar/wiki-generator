@@ -24,3 +24,4 @@ data.json
 notes-data.*
 .env
 .env.*
+supabase
