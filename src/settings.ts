@@ -1,6 +1,7 @@
 import WikiGeneratorPlugin from "main"
 import { PluginSettingTab, App, Setting, Notice } from "obsidian"
 import { resetDatabase } from "./database/init"
+import { updateUserRepository } from "./repository"
 
 export interface WikiGeneratorSettings {
 	firstUsage: boolean
@@ -13,6 +14,10 @@ export interface WikiGeneratorSettings {
 	supabaseAnonKey: string
 	supabaseServiceKey: string
 	vercelDeployHook: string
+	githubUsername: string
+	githubRepoName: string
+	githubRepoToken: string
+	githubAutoapplyUpdates: boolean
 	supabaseUseLocal: boolean
 	databaseUrlLocal: string
 	supabaseApiUrlLocal: string
@@ -31,6 +36,10 @@ export const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 	supabaseAnonKey: "",
 	supabaseServiceKey: "",
 	vercelDeployHook: "",
+	githubUsername: "",
+	githubRepoName: "",
+	githubRepoToken: "",
+	githubAutoapplyUpdates: true,
 	supabaseUseLocal: false,
 	databaseUrlLocal: "postgresql://postgres:postgres@localhost:54322/postgres",
 	supabaseApiUrlLocal: "http://localhost:54321",
@@ -55,7 +64,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Autopublish New Notes")
-			.setDesc("Automatically set up newly created notes for publishing.")
+			.setDesc("Automatically add the 'wiki-publish' property to new notes. Can be restricted.")
 			.addToggle((toggle) => {
 				toggle
 					.setValue(this.plugin.settings.autopublishNotes)
@@ -68,7 +77,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Restrict Folders")
 			.setDesc(
-				"Only publish notes within these folders. Set the folders below."
+				"Restrict publishing-related commands to work only within these folders. Set the folders below."
 			)
 			.addToggle((toggle) => {
 				toggle
@@ -183,19 +192,6 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					})
 			)
 
-		// new Setting(containerEl)
-		// 	.setName("Supabase Anon Key")
-		// 	.setDesc("The anon key for Supabase. Changing requires a restart.")
-		// 	.addText((text) =>
-		// 		text
-		// 			.setPlaceholder("Copy your token")
-		// 			.setValue(this.plugin.settings.supabaseAnonKey)
-		// 			.onChange(async (value) => {
-		// 				this.plugin.settings.supabaseAnonKey = value
-		// 				await this.plugin.saveSettings()
-		// 			})
-		// 	)
-
 		new Setting(containerEl)
 			.setName("Supabase Service Key")
 			.setDesc(
@@ -222,6 +218,85 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.vercelDeployHook = value
 						await this.plugin.saveSettings()
+					})
+			})
+		
+		new Setting(containerEl).setName("GitHub").setHeading()
+		
+		new Setting(containerEl)
+			.setName("GitHub Username")
+			.setDesc("Your GitHub username.")
+			.addText((text) => {
+				text.setPlaceholder("Copy your username")
+				.setValue(this.plugin.settings.githubUsername)
+				.onChange(async (value) => {
+					this.plugin.settings.githubUsername = value
+					await this.plugin.saveSettings()
+				})
+			})
+
+		new Setting(containerEl)
+			.setName("GitHub Repository Name")
+			.setDesc("The name of your website's repository.")
+			.addText((text) => {
+				text.setPlaceholder("Copy the name")
+				.setValue(this.plugin.settings.githubRepoName)
+				.onChange(async (value) => {
+					this.plugin.settings.githubRepoName = value
+					await this.plugin.saveSettings()
+				})
+			})
+
+		new Setting(containerEl)
+			.setName("GitHub Repository Token")
+			.setDesc("The token required to access your website's GitHub repository.")
+			.addText((text) => {
+				text.setPlaceholder("Copy the token")
+				.setValue(this.plugin.settings.githubRepoToken)
+				.onChange(async (value) => {
+					this.plugin.settings.githubRepoToken = value
+					await this.plugin.saveSettings()
+				})
+			})
+
+		const autoapplyUpdateDesc = document.createDocumentFragment()
+		autoapplyUpdateDesc.append(
+			"If true, will apply updates to your code as soon as you click the Update Website button. ",
+			folderDesc.createEl("strong", { text: "THIS IS IRREVERSIBLE." }),
+			" If you never touched your website's code directly, this can stay on.",
+			" If you made any commits to your repository, set this to false or it will overwrite your changes.",
+			" If false, updating will create a new branch and update files there.",
+			" It'll then create a pull request to merge into the main branch so you can pick and choose updates and solve merge conflicts."
+		)
+		new Setting(containerEl)
+			.setName("Apply Website Updates Automatically")
+			.setDesc(autoapplyUpdateDesc)
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.githubAutoapplyUpdates)
+				.onChange(async (value) => {
+					this.plugin.settings.githubAutoapplyUpdates = value
+					await this.plugin.saveSettings()
+				})
+			})
+
+		new Setting(containerEl)
+			.setName("Update Website Repository")
+			.setDesc("Update your website to synchronize with all new template additions. This may take some time. Please don't close Obsidian while updating.")
+			.addButton((button) => {
+				button
+					.setButtonText("Update Website")
+					.setCta()
+					.onClick(async () => {
+						new Notice("Updating your website...")
+						const prUrl = await updateUserRepository(
+							this.plugin.settings.githubRepoToken,
+							this.plugin.settings.githubUsername,
+							this.plugin.settings.githubRepoName,
+							this.plugin.settings.githubAutoapplyUpdates,
+						)
+						if (prUrl) {
+							new Notice("A new pull request has been opened in your website's repository. You must merge it for the update to apply.")
+						}
 					})
 			})
 
@@ -270,19 +345,6 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings()
 					})
 			)
-
-		// new Setting(containerEl)
-		// 	.setName("Supabase Anon Key (Local)")
-		// 	.setDesc("The anon key for a local Supabase instance. Changing requires a restart.")
-		// 	.addText((text) =>
-		// 		text
-		// 			.setPlaceholder("Copy your token")
-		// 			.setValue(this.plugin.settings.supabaseAnonKeyLocal)
-		// 			.onChange(async (value) => {
-		// 				this.plugin.settings.supabaseAnonKeyLocal = value
-		// 				await this.plugin.saveSettings()
-		// 			})
-		// 	)
 
 		new Setting(containerEl)
 			.setName("Supabase Service Key (Local)")

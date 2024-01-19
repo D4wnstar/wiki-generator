@@ -52,13 +52,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 		}
 
 		this.addRibbonIcon("upload-cloud", "Upload Notes", async () => {
-			// await uploadNotes(vault, supabase, settings)
-			const mdFiles = vault.getMarkdownFiles()
-			for (const file of mdFiles) {
-				vault.process(file, (data) => {
-					return data.replace(/^---\n(.*?)---\n/s, "")
-				})
-			}
+			await uploadNotes(vault, supabase, settings)
 		})
 
 		this.addCommand({
@@ -99,7 +93,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 		this.addCommand({
 			id: "update-wiki-property",
 			name: "Update Wiki property",
-			editorCallback: (editor, view) => addWikiProperty(this.app, editor),
+			editorCallback: (editor, _view) => addWikiProperty(this.app, editor),
 		})
 
 		this.addSettingTab(new WikiGeneratorSettingTab(this.app, this))

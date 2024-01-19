@@ -123,22 +123,28 @@ export function massSetPublishState(
 const BUILTIN_PROPS: Property[] = [
 	{
 		name: "wiki-publish",
-		description: "Defines whether the note is published or not.",
+		description: "Choose whether this note is published or not.",
 		valueType: "true/false",
 		defaultValue: "true",
 	},
 	{
 		name: "wiki-home",
-		description: "Set note as the front page. Can only be set to one note.",
+		description: "Set this note as the front page. Can only be set to one note.",
 		valueType: "true/false",
 		defaultValue: "true",
 	},
     {
         name: "wiki-title",
-        description: "Set your page title independently from the notes' file name.",
+        description: "Set your page title independently from this note's file name.",
         valueType: "text",
-        defaultValue: ""
-    }
+        defaultValue: "",
+    },
+	{
+		name: "wiki-allowed-users",
+		description: "A list of users who can see this note. It will be hidden to everyone else.",
+		valueType: "case-insensitive, comma-separated list of usernames (e.g. Jacob123, TheLegend27, bob)",
+		defaultValue: "",
+	},
 ]
 
 class PropertyModal extends SuggestModal<Property> {

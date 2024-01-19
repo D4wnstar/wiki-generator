@@ -43,6 +43,7 @@ type NoteProperties = {
 	publish: boolean
 	frontpage: boolean
 	alt_title: string | undefined
+	allowed_users: string[]
 }
 
 type SidebarImage = {
@@ -56,6 +57,7 @@ function parseProperties(match: string): NoteProperties {
 		publish: false,
 		frontpage: false,
 		alt_title: undefined,
+		allowed_users: []
 	}
 	const propsLines = match.split("\n")
 
@@ -73,6 +75,10 @@ function parseProperties(match: string): NoteProperties {
 			case "wiki-title":
 			case "dg-title":
 				props.alt_title = value
+				break
+			case "wiki-allowed-users":
+				props.allowed_users = value.split(",")
+				props.allowed_users.forEach((username) => username.trim())
 				break
 			default:
 				break
@@ -260,6 +266,7 @@ async function formatMd(
 		publish: false,
 		frontpage: false,
 		alt_title: undefined,
+		allowed_users: [],
 	}
 	if (propsMatch) {
 		props = parseProperties(propsMatch[1]) // Save some properties before removing them
@@ -391,8 +398,6 @@ export async function convertNotesForUpload(
 		)
 	}
 
-	console.log("Media files:", data)
-
 	// Store those files globally (see storedMedia comment for why)
 	storedMedia.files = data.map((file) => file.name)
 
@@ -445,6 +450,7 @@ export async function convertNotesForUpload(
 					content: note.content,
 					frontpage: note.properties.frontpage,
 					references: [...note.references],
+					allowed_users: note.properties.allowed_users,
 				}
 			}),
 			{

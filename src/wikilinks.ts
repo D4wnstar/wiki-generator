@@ -114,7 +114,6 @@ export async function uploadImage(
 
 		// If it exists, avoid attempting a new upload and just get the URL instead
 		if (storedFile) {
-			console.log(`Found existing file ${storedFile}`)
 			const urlData = supabase.storage
 				.from("images")
 				.getPublicUrl(storedFile)
