@@ -1,9 +1,15 @@
 import { SupabaseClient } from "@supabase/supabase-js"
 import { Notice, Plugin } from "obsidian"
-import { addWikiProperty, massAddPublish, massSetPublishState, uploadNotes } from "src/commands"
+import {
+	addWikiProperty,
+	massAddPublish,
+	massSetPublishState,
+	uploadNotes,
+} from "src/commands"
 import { uploadConfig } from "src/config"
 import { initializeDatabase } from "src/database/init"
 import { autopublishNotes } from "src/events"
+import { checkForTemplateUpdates } from "src/repository"
 import {
 	DEFAULT_SETTINGS,
 	WikiGeneratorSettingTab,
@@ -30,6 +36,24 @@ export default class WikiGeneratorPlugin extends Plugin {
 			settings.firstUsage = false
 			await this.saveSettings()
 			new Notice("Database fully set up!")
+		}
+
+		// Check for website updates
+		if (
+			settings.githubUsername &&
+			settings.githubRepoName &&
+			settings.githubRepoToken
+		) {
+			const websiteUpdates = await checkForTemplateUpdates(
+				settings.githubUsername,
+				settings.githubRepoName,
+				undefined,
+				settings.githubRepoToken
+			)
+			if (websiteUpdates)
+				new Notice(
+					"There is an update available for your website. Update it from the settings tab."
+				)
 		}
 
 		// Automatically add the wiki-publish: true property on file creation
@@ -93,7 +117,8 @@ export default class WikiGeneratorPlugin extends Plugin {
 		this.addCommand({
 			id: "update-wiki-property",
 			name: "Update Wiki property",
-			editorCallback: (editor, _view) => addWikiProperty(this.app, editor),
+			editorCallback: (editor, _view) =>
+				addWikiProperty(this.app, editor),
 		})
 
 		this.addSettingTab(new WikiGeneratorSettingTab(this.app, this))

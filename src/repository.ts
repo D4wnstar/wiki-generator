@@ -18,52 +18,31 @@ import { randomUUID } from "crypto"
 import { Notice } from "obsidian"
 import { Octokit } from "octokit"
 
+const templateOwner = "D4wnstar"
+const templateRepo = "wiki-generator-template"
+
 export async function updateUserRepository(
 	token: string,
 	username: string,
 	repo: string,
 	overwrite: boolean
 ) {
-	const templateOwner = "D4wnstar"
-	const templateRepo = "wiki-generator-template"
-
 	const octokit = new Octokit({
 		auth: token,
 	})
 
 	try {
-		const userCommitsRes = await octokit.request(
-			"GET /repos/{owner}/{repo}/commits",
-			{
-				owner: username,
-				repo: repo,
-				headers: {
-					"X-GitHub-Api-Version": "2022-11-28",
-				},
-			}
-		)
-		const latestUserCommitSha = userCommitsRes.data[0].sha
-		// console.log(
-		// 	`Success! Rate limit remaining: ${res.headers["x-ratelimit-remaining"]}.`
-		// )
-		const lastUpdated = userCommitsRes.data[0].commit.committer?.date
-		console.log("Last update date:", lastUpdated)
+		const updates = await checkForTemplateUpdates(username, repo, octokit)
+		if (!updates) {
+			new Notice("Your website is already up to date!")
+			return
+		}
 
-		const templateCommitsRes = await octokit.request(
-			"GET /repos/{owner}/{repo}/commits",
-			{
-				owner: templateOwner,
-				repo: templateRepo,
-				since: lastUpdated,
-				headers: {
-					"X-GitHub-Api-Version": "2022-11-28",
-				},
-			}
-		)
-		const latestTemplateCommitSha = templateCommitsRes.data[0].sha
+		const { latestUserCommit, newTemplateCommits } = updates
 
+		// Compile a list of all files that have changed since the last time the user updated
 		const changedFiles = new Set<string>()
-		for (const commitInfo of templateCommitsRes.data) {
+		for (const commitInfo of newTemplateCommits) {
 			const commitRes = await octokit.request(
 				"GET /repos/{owner}/{repo}/commits/{ref}",
 				{
@@ -118,6 +97,7 @@ export async function updateUserRepository(
 						},
 					}
 				)
+				// @ts-expect-error
 				fileContents.set(filepath, fileGrabRes.data.content)
 			} catch (error) {
 				console.warn(
@@ -128,7 +108,12 @@ export async function updateUserRepository(
 		console.log("Got file contents")
 
 		if (overwrite) {
-			return await updateAndAddFiles(octokit, username, repo, fileContents)
+			return await updateAndAddFiles(
+				octokit,
+				username,
+				repo,
+				fileContents
+			)
 		} else {
 			return await handleBranchSplit(
 				octokit,
@@ -136,8 +121,8 @@ export async function updateUserRepository(
 				repo,
 				templateOwner,
 				templateRepo,
-				latestUserCommitSha,
-				latestTemplateCommitSha,
+				latestUserCommit.sha,
+				newTemplateCommits[0].sha,
 				fileContents
 			)
 		}
@@ -202,8 +187,9 @@ async function handleBranchSplit(
 	latestTemplateCommitSha: string,
 	fileContents: Map<string, string>
 ) {
-	const randomUuid = randomUUID()
 	// Create a new branch
+	new Notice("Creating a new branch...")
+	const randomUuid = randomUUID()
 	const branchName = `sync-from-template-${randomUuid}`
 	await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
 		owner: username,
@@ -216,6 +202,7 @@ async function handleBranchSplit(
 	await updateAndAddFiles(octokit, username, repo, fileContents, branchName)
 
 	// Create a pull request to merge into main
+	new Notice("Creating a pull request...")
 	const prRes = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
 		owner: username,
 		repo: repo,
@@ -230,4 +217,64 @@ async function handleBranchSplit(
 	console.log(`Created pull request at API URL: ${prRes.data.url}`)
 
 	return prRes.data.url
+}
+
+export async function checkForTemplateUpdates(
+	username: string,
+	repo: string,
+	octokit: Octokit | undefined = undefined,
+	token: string | undefined = undefined,
+) {
+	if (!octokit) {
+		if (!token) throw new Error("Got not authentication token when creating the octokit client")
+		octokit = new Octokit({
+			auth: token,
+		})
+	}
+
+	try {
+		// Fetch most recent user commit on main branch
+		const latestUserCommitRes = await octokit.request(
+			"GET /repos/{owner}/{repo}/commits/{ref}",
+			{
+				owner: username,
+				repo: repo,
+				ref: "HEAD",
+				headers: {
+					"X-GitHub-Api-Version": "2022-11-28",
+				},
+			}
+		)
+		const lastUpdated = latestUserCommitRes.data.commit.committer?.date
+		console.log("User repo was last updated on:", lastUpdated)
+
+		// Fetch all template commits since the user last updated their repo
+		const templateCommitsRes = await octokit.request(
+			"GET /repos/{owner}/{repo}/commits",
+			{
+				owner: templateOwner,
+				repo: templateRepo,
+				since: lastUpdated,
+				headers: {
+					"X-GitHub-Api-Version": "2022-11-28",
+				},
+			}
+		)
+
+		if (templateCommitsRes.data.length === 0) {
+			return undefined
+		} else {
+			return {
+				latestUserCommit: latestUserCommitRes.data,
+				newTemplateCommits: templateCommitsRes.data,
+			}
+		}
+	} catch (error) {
+		console.error(
+			`Error! Status: ${error.status}. Error message: ${error.response.data.message}`
+		)
+		new Notice(
+			`[Wiki Generator] There was an error while checking for template updates.`
+		)
+	}
 }

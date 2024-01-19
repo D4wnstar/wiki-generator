@@ -1,7 +1,7 @@
 import WikiGeneratorPlugin from "main"
 import { PluginSettingTab, App, Setting, Notice } from "obsidian"
 import { resetDatabase } from "./database/init"
-import { updateUserRepository } from "./repository"
+import { checkForTemplateUpdates, updateUserRepository } from "./repository"
 
 export interface WikiGeneratorSettings {
 	firstUsage: boolean
@@ -259,32 +259,34 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 				})
 			})
 
-		const autoapplyUpdateDesc = document.createDocumentFragment()
-		autoapplyUpdateDesc.append(
-			"If true, will apply updates to your code as soon as you click the Update Website button. ",
-			folderDesc.createEl("strong", { text: "THIS IS IRREVERSIBLE." }),
-			" If you never touched your website's code directly, this can stay on.",
-			" If you made any commits to your repository, set this to false or it will overwrite your changes.",
-			" If false, updating will create a new branch and update files there.",
-			" It'll then create a pull request to merge into the main branch so you can pick and choose updates and solve merge conflicts."
-		)
 		new Setting(containerEl)
-			.setName("Apply Website Updates Automatically")
-			.setDesc(autoapplyUpdateDesc)
-			.addToggle((toggle) => {
-				toggle.setValue(this.plugin.settings.githubAutoapplyUpdates)
-				.onChange(async (value) => {
-					this.plugin.settings.githubAutoapplyUpdates = value
-					await this.plugin.saveSettings()
-				})
+			.setName("Check For Website Updates")
+			.setDesc("Check if your website's template has any updates. By default this check is also done every time you start Obsidian.")
+			.addButton((button) => {
+				button
+					.setButtonText("Check for updates")
+					.setCta()
+					.onClick(async () => {
+						const updates = await checkForTemplateUpdates(
+							this.plugin.settings.githubUsername,
+							this.plugin.settings.githubRepoName,
+							undefined,
+							this.plugin.settings.githubRepoToken,
+						)
+						if (!updates) {
+							new Notice("Your website is already up to date!")
+						} else {
+							new Notice("There is an update available for your website. Update it from the settings tab.")
+						}
+					})
 			})
-
+		
 		new Setting(containerEl)
 			.setName("Update Website Repository")
 			.setDesc("Update your website to synchronize with all new template additions. This may take some time. Please don't close Obsidian while updating.")
 			.addButton((button) => {
 				button
-					.setButtonText("Update Website")
+					.setButtonText("Update website")
 					.setCta()
 					.onClick(async () => {
 						new Notice("Updating your website...")
@@ -299,6 +301,26 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 						}
 					})
 			})
+
+		const autoapplyUpdateDesc = document.createDocumentFragment()
+			autoapplyUpdateDesc.append(
+				"If true, will apply updates to your code as soon as you click the Update Website button. ",
+				folderDesc.createEl("strong", { text: "THIS IS IRREVERSIBLE." }),
+				" If you never touched your website's code directly, this can stay on.",
+				" If you made any commits to your repository, set this to false or it will overwrite your changes.",
+				" If false, updating will create a new branch and update files there.",
+				" It'll then create a pull request to merge into the main branch so you can pick and choose updates and solve merge conflicts."
+			)
+			new Setting(containerEl)
+				.setName("Apply Website Updates Automatically")
+				.setDesc(autoapplyUpdateDesc)
+				.addToggle((toggle) => {
+					toggle.setValue(this.plugin.settings.githubAutoapplyUpdates)
+					.onChange(async (value) => {
+						this.plugin.settings.githubAutoapplyUpdates = value
+						await this.plugin.saveSettings()
+					})
+				})
 
 		new Setting(containerEl).setName("Developer Options").setHeading()
 
@@ -364,12 +386,11 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Reset Database")
 			.setDesc(
-				"Reset the database to its initial state. All of your notes will be deleted from Supabase, but your media files will remain untouched. You can restore your notes by uploading them again."
+				"Reset the database to its initial state. All of your notes will be deleted from Supabase, but media files and user profiles will remain untouched. You can restore your notes by uploading them again."
 			)
 			.addButton((button) => {
 				button
 					.setButtonText("Reset database")
-					.setCta()
 					.onClick(async () => {
 						new Notice("Resetting database...")
 						try {
