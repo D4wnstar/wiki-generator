@@ -8,7 +8,13 @@ The Wiki Generator is an [Obsidian](https://obsidian.md/) plugin designed to mak
 
 To begin, add this plugin to your vault and follow the [Getting started](https://wiki-generator-documentation.vercel.app/getting-started) guide in the documentation.
 
-### Installation
+## Features
+- It's free!
+- Fine-grained control over what you publish - no need to make your entire vault public
+- Leverage user accounts to restrict who can see to your notes
+- Update your website without having to leave your Obsidian vault
+
+## Installation
 
 This plugin is still early in development and is not yet available as an official Obsidian plugin that you can discover from the third-party plugin tab. As such, you will need to do a manual installation. To do so, make sure you have `npm` installed on your system. Then, follow these steps:
 
@@ -19,6 +25,6 @@ This plugin is still early in development and is not yet available as an officia
 
 If you see the Wiki Generator tab in your settings, the plugin is now up and running.
 
-### License
+## License
 
 This project is licensed under the GNU GPLv3 license.
