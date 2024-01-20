@@ -1,9 +1,15 @@
+import { TFile } from "obsidian"
+
 class UploadConfig {
     overwriteFiles = false
 }
 
-class StoredMedia {
+class SupabaseMedia {
     files: string[] = []
+}
+
+class LocalMedia {
+    files: TFile[] = []
 }
 
 /**
@@ -22,4 +28,7 @@ export const uploadConfig = new UploadConfig()
  *    going to be shown in the list of uploaded media. This causes bugs that are hard to track down. Thus,
  *    this plugin keeps track of uploaded file locally in this variable, which is synchronous and instant
  */
-export const storedMedia = new StoredMedia()
+export const supabaseMedia = new SupabaseMedia()
+
+// Same reasoning as uploadConfig
+export const localMedia = new LocalMedia()

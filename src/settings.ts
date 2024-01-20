@@ -18,6 +18,7 @@ export interface WikiGeneratorSettings {
 	githubRepoName: string
 	githubRepoToken: string
 	githubAutoapplyUpdates: boolean
+	githubCheckUpdatesOnStartup: boolean
 	supabaseUseLocal: boolean
 	databaseUrlLocal: string
 	supabaseApiUrlLocal: string
@@ -40,6 +41,7 @@ export const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 	githubRepoName: "",
 	githubRepoToken: "",
 	githubAutoapplyUpdates: true,
+	githubCheckUpdatesOnStartup: true,
 	supabaseUseLocal: false,
 	databaseUrlLocal: "postgresql://postgres:postgres@localhost:54322/postgres",
 	supabaseApiUrlLocal: "http://localhost:54321",
@@ -286,6 +288,21 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					})
 			})
 
+
+		new Setting(containerEl)
+			.setName("Check For Updates On Startup")
+			.setDesc(
+				"Automatically check for updates on the website template every time you start Obsidian."
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(settings.githubCheckUpdatesOnStartup)
+					.onChange(async (value) => {
+						settings.githubCheckUpdatesOnStartup = value
+						await this.plugin.saveSettings()
+					})
+			})
+
 		new Setting(containerEl)
 			.setName("Update Website Repository")
 			.setDesc(
@@ -312,6 +329,8 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 								new Notice(
 									"A new pull request has been opened in your website's repository. You must merge it for the update to apply."
 								)
+							} else {
+								new Notice("Your website is now up to date.")
 							}
 						} else {
 							new Notice("Please set your GitHub username, repository and token.")

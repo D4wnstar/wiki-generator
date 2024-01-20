@@ -1,5 +1,5 @@
 import { SupabaseClient } from "@supabase/supabase-js"
-import { Notice, Plugin } from "obsidian"
+import { Notice, Plugin, Vault } from "obsidian"
 import {
 	addWikiProperty,
 	massAddPublish,
@@ -7,6 +7,7 @@ import {
 	uploadNotes,
 } from "src/commands"
 import { uploadConfig } from "src/config"
+import { Database } from "src/database/database.types"
 import { initializeDatabase } from "src/database/init"
 import { autopublishNotes } from "src/events"
 import { checkForTemplateUpdates } from "src/repository"
@@ -17,6 +18,17 @@ import {
 } from "src/settings"
 import { createClientWrapper } from "src/utils"
 
+/**
+ * A global reference to the vault to avoid having to pass it down the whole call stack.
+ */
+export let globalVault: Vault
+
+/**
+ * A global reference to the Supabase client to avoid having to pass it down the whole call stack.
+ */
+export let supabase: SupabaseClient<Database>
+
+
 export default class WikiGeneratorPlugin extends Plugin {
 	settings: WikiGeneratorSettings
 
@@ -25,8 +37,9 @@ export default class WikiGeneratorPlugin extends Plugin {
 
 		// Define shorthands for common variables
 		const settings = this.settings
-		const vault = this.app.vault
 		const workspace = this.app.workspace
+
+		globalVault = this.app.vault
 
 		// Automatically initialize the database the first time the user
 		// sets the database connection URL
@@ -38,11 +51,22 @@ export default class WikiGeneratorPlugin extends Plugin {
 			new Notice("Database fully set up!")
 		}
 
+		// Create the Supabase client on startup
+		// Client is created on startup as there's no exposed API to remove them
+		// so creating one on each uploadNotes call creates warnings about having
+		// multiple GoTrueClients active at the same time, which is undefined behaviour
+		try {
+			supabase = createClientWrapper(settings)
+		} catch (e) {
+			new Notice(`Supabase Error: ${e.message}`)
+		}
+
 		// Check for website updates
 		if (
 			settings.githubUsername &&
 			settings.githubRepoName &&
-			settings.githubRepoToken
+			settings.githubRepoToken &&
+			settings.githubCheckUpdatesOnStartup
 		) {
 			const websiteUpdates = await checkForTemplateUpdates(
 				settings.githubUsername,
@@ -60,30 +84,19 @@ export default class WikiGeneratorPlugin extends Plugin {
 		// if the user allows it in the settings
 		workspace.onLayoutReady(() => {
 			this.registerEvent(
-				vault.on("create", () => autopublishNotes(settings, workspace))
+				this.app.vault.on("create", () => autopublishNotes(settings, workspace))
 			)
 		})
 
-		// Create the Supabase client on startup
-		// Client is created on startup as there's no exposed API to remove them
-		// so creating one on each uploadNotes call creates warnings about having
-		// multiple GoTrueClients active at the same time, which is undefined behaviour
-		let supabase: SupabaseClient
-		try {
-			supabase = createClientWrapper(settings)
-		} catch (e) {
-			new Notice(`Supabase Error: ${e.message}`)
-		}
-
 		this.addRibbonIcon("upload-cloud", "Upload Notes", async () => {
-			await uploadNotes(vault, supabase, settings)
+			await uploadNotes(settings)
 		})
 
 		this.addCommand({
 			id: "upload-notes",
 			name: "Upload notes",
 			callback: async () => {
-				await uploadNotes(vault, supabase, settings)
+				await uploadNotes(settings)
 			},
 		})
 
@@ -92,31 +105,31 @@ export default class WikiGeneratorPlugin extends Plugin {
 			name: "Upload notes and overwrite media files",
 			callback: async () => {
 				uploadConfig.overwriteFiles = true
-				await uploadNotes(vault, supabase, settings)
+				await uploadNotes(settings)
 			},
 		})
 
 		this.addCommand({
 			id: "mass-add-publish",
 			name: "Add publish property to publishable notes",
-			callback: () => massAddPublish(vault, settings),
+			callback: () => massAddPublish(settings),
 		})
 
 		this.addCommand({
 			id: "mass-set-publish-true",
 			name: "Set publish property to true on publishable notes",
-			callback: () => massSetPublishState(vault, settings, true),
+			callback: () => massSetPublishState(settings, true),
 		})
 
 		this.addCommand({
 			id: "mass-set-publish-false",
 			name: "Set publish property to false on publishable notes",
-			callback: () => massSetPublishState(vault, settings, false),
+			callback: () => massSetPublishState(settings, false),
 		})
 
 		this.addCommand({
-			id: "update-wiki-property",
-			name: "Update Wiki property",
+			id: "add-update-wiki-property",
+			name: "Add or update Wiki property",
 			editorCallback: (editor, _view) =>
 				addWikiProperty(this.app, editor),
 		})

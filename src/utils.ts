@@ -1,8 +1,8 @@
 import { SupabaseClient, createClient } from "@supabase/supabase-js"
-
 import { Editor, TFile, TFolder, Vault, normalizePath } from "obsidian"
 import slugify from "slugify"
 import { WikiGeneratorSettings } from "./settings"
+import { globalVault } from "main"
 
 export const calloutIcons = {
 	info: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-info"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`,
@@ -29,9 +29,9 @@ export function slugifyPath(path: string): string {
 	return slugged.join("/")
 }
 
-export function resolveTFolder(folderPath: string, vault: Vault) {
+export function resolveTFolder(folderPath: string) {
 	const folderPathNorm = normalizePath(folderPath)
-	const folder = vault.getAbstractFileByPath(folderPathNorm)
+	const folder = globalVault.getAbstractFileByPath(folderPathNorm)
 
 	if (folder instanceof TFolder) {
 		return folder
@@ -42,13 +42,13 @@ export function resolveTFolder(folderPath: string, vault: Vault) {
 	}
 }
 
-export function getFilesFromFolders(vault: Vault, folders: string[] | string) {
+export function getFilesFromFolders(folders: string[] | string) {
 	const files: TFile[] = []
 	if (folders instanceof String) {
 		folders = <string[]>[folders]
 	}
 	for (const folder of folders) {
-		const folderObj = resolveTFolder(folder, vault)
+		const folderObj = resolveTFolder(folder)
 		Vault.recurseChildren(folderObj, (file) => {
 			if (file instanceof TFile) files.push(file)
 		})
@@ -58,14 +58,13 @@ export function getFilesFromFolders(vault: Vault, folders: string[] | string) {
 }
 
 export function getPublishableFiles(
-	vault: Vault,
 	settings: WikiGeneratorSettings
 ) {
 	let notes: TFile[]
 	if (settings.restrictFolders) {
-		notes = getFilesFromFolders(vault, settings.publishedFolders)
+		notes = getFilesFromFolders(settings.publishedFolders)
 	} else {
-		notes = vault.getMarkdownFiles()
+		notes = globalVault.getMarkdownFiles()
 	}
 
 	return notes

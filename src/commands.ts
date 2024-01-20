@@ -1,13 +1,13 @@
-import { SupabaseClient } from "@supabase/supabase-js"
-import { Vault, Notice, Editor, App, SuggestModal } from "obsidian"
-import { Database } from "./database/database.types"
-import { convertNotesForUpload, FrontPageError, DatabaseError } from "./format"
+import { Notice, Editor, App, SuggestModal } from "obsidian"
+import { convertNotesForUpload } from "./notes/format"
 import { WikiGeneratorSettings } from "./settings"
 import {
 	getPropertiesFromEditor,
 	getPublishableFiles,
 	replacePropertiesFromEditor,
 } from "./utils"
+import { FrontPageError, DatabaseError } from "./notes/types"
+import { globalVault, supabase } from "main"
 
 type Property = {
 	name: string
@@ -17,8 +17,6 @@ type Property = {
 }
 
 export async function uploadNotes(
-	vault: Vault,
-	supabase: SupabaseClient<Database> | undefined,
 	settings: WikiGeneratorSettings
 ) {
 	if (!supabase) {
@@ -60,7 +58,7 @@ export async function uploadNotes(
 	console.log("Uploading notes...")
 	new Notice("Uploading notes...")
 	try {
-		await convertNotesForUpload(vault, supabase, deployHookUrl)
+		await convertNotesForUpload(deployHookUrl)
 	} catch (error) {
 		new Notice(error.message)
 		if (error instanceof FrontPageError || error instanceof DatabaseError) {
@@ -76,10 +74,10 @@ export async function uploadNotes(
 	new Notice("Finshed uploading notes!")
 }
 
-export function massAddPublish(vault: Vault, settings: WikiGeneratorSettings) {
-	const notes = getPublishableFiles(vault, settings)
+export function massAddPublish(settings: WikiGeneratorSettings) {
+	const notes = getPublishableFiles(settings)
 	for (const note of notes) {
-		vault.process(note, (noteText) => {
+		globalVault.process(note, (noteText) => {
 			const propsRegex = /^---\n(.*?)\n---/s
             // Isolate properties
 			const props = noteText.match(propsRegex)
@@ -104,14 +102,13 @@ export function massAddPublish(vault: Vault, settings: WikiGeneratorSettings) {
 }
 
 export function massSetPublishState(
-	vault: Vault,
 	settings: WikiGeneratorSettings,
 	state: boolean
 ) {
-	const notes = getPublishableFiles(vault, settings)
+	const notes = getPublishableFiles(settings)
 	const regex = RegExp(`^---\n(.*?)(wiki)|(dg)-publish: ${state}(.*?)\n---`, "s")
 	for (const note of notes) {
-		vault.process(note, (noteText) => {
+		globalVault.process(note, (noteText) => {
 			return noteText.replace(
 				regex,
 				`---\n$1$2g-publish: ${state}$3\n---`
@@ -170,7 +167,7 @@ class PropertyModal extends SuggestModal<Property> {
 
 	onChooseSuggestion(
 		selectedProp: Property,
-		evt: MouseEvent | KeyboardEvent
+		_evt: MouseEvent | KeyboardEvent
 	) {
 		const props = getPropertiesFromEditor(this.editor)
 		props.set(selectedProp.name, selectedProp.defaultValue)

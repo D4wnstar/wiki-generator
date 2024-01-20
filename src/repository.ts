@@ -175,6 +175,7 @@ async function updateAndAddFiles(
 			},
 		})
 	}
+	console.log("Updated files in main")
 }
 
 async function handleBranchSplit(

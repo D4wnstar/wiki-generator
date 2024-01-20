@@ -1,5 +1,7 @@
+import { supabase } from "main"
 import { Notice } from "obsidian"
 import postgres, { Sql } from "postgres"
+import { DatabaseError } from "src/notes/types"
 
 /**
  * A convenience wrapper to transform a raw connection URL into a Postgres Sql
@@ -357,4 +359,31 @@ async function nukeDatabase(sql: Sql) {
         drop table if exists notes
    `
 	console.log(dropNotes)
+}
+
+/**
+ * Set up the storage bucket for media content. If the bucket already exists,
+ * this doesn't take any actions.
+ */
+export async function setupMediaBucket() {
+    // Create the media bucket if it doesn't exist
+	const { data: buckets } = await supabase.storage.listBuckets()
+
+	if (!buckets?.map((bucket) => bucket.name).includes("images")) {
+		const { error: bucketError } = await supabase.storage.createBucket(
+			"images",
+			{
+				public: true,
+			}
+		)
+
+		if (
+			bucketError &&
+			bucketError.message !== "The resource already exists"
+		) {
+			throw new DatabaseError(bucketError.message)
+		}
+	} else {
+		console.log("Media bucket already set up. Continuing...")
+	}
 }
