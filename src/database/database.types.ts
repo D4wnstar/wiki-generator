@@ -120,6 +120,27 @@ export interface Database {
         }
         Relationships: []
       }
+      profiles: {
+        Row: {
+          email: string
+          groups: string[] | null
+          id: string
+          username: string
+        }
+        Insert: {
+          email: string
+          groups?: string[] | null
+          id: string
+          username: string
+        }
+        Update: {
+          email?: string
+          groups?: string[] | null
+          id?: string
+          username?: string
+        }
+        Relationships: []
+      }
       sidebar_images: {
         Row: {
           caption: string | null

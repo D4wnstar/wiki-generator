@@ -80,7 +80,18 @@ async function setupInitialSchema(sql: Sql) {
         );`
     console.log(notes)
 
-	const backreferences = await sql`
+	const note_contents = await sql`
+        create table if not exists note_contents (
+            note_id integer not null references notes (id),
+            chunk_id integer not null,
+            chunk text not null,
+            allowed_users text array,
+            primary key (note_id, chunk_id)
+        );
+    `
+	console.log(note_contents)
+
+    const backreferences = await sql`
         create table if not exists backreferences (
             note_id integer not null references notes (id),
             slug text not null,
@@ -290,13 +301,19 @@ async function applySecurityPolicies(sql: Sql) {
     `
     console.log(profilesRls)
 
-    const profilesPolicy = await sql`
-        create policy "Profiles are visible only to the owner of the profiles"
-        on profiles for select
-        to authenticated
-        using ( auth.uid() = id );
-    `
-    console.log(profilesPolicy)
+    try {
+        // Profiles aren't reset and there is no "create or replace policy" command
+        // so this is a workaround
+        const profilesPolicy = await sql`
+            create policy "Profiles are visible only to the owner of the profiles"
+            on profiles for select
+            to authenticated
+            using ( auth.uid() = id );
+        `
+        console.log(profilesPolicy)
+    } catch (error) {
+        if (!error.message.includes("already exists")) throw error
+    }
 }
 
 /**
@@ -354,6 +371,11 @@ async function nukeDatabase(sql: Sql) {
         drop table if exists backreferences
    `
 	console.log(dropBackreferences)
+
+    const dropContents = await sql`
+        drop table if exists note_contents
+    `
+    console.log(dropContents)
 
 	const dropNotes = await sql`
         drop table if exists notes

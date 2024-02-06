@@ -210,6 +210,24 @@ function highlightCode(_match: string, lang: string, code: string) {
 </div>`
 }
 
+function splitMd(md: string) {
+	const hiddens = md.match(/^:::hidden\n.*?\n:::/gms)
+	if (!hiddens) return
+	const chunks: string[] = md.split(hiddens[0])
+	chunks.splice(1, 0, hiddens[0])
+
+	if (hiddens.length > 1) {
+		for (const match of hiddens.slice(1)) {
+			const temp = chunks[chunks.length - 1].split(match)
+			temp.splice(1, 0, match)
+			chunks.pop()
+			chunks.concat(temp)
+		}
+	}
+
+	return chunks
+}
+
 async function formatMd(
 	md: string,
 	media: TFile[]
@@ -248,7 +266,7 @@ async function formatMd(
 		md = md.replace(match[0], "")
 	}
 
-	md = md.replace(/^:::hidden\n.*?\n:::/gms, "") // Remove :::hidden::: blocks
+	// TODO: Remove the whole GM paragraph thing
 	md = md.replace(/^#+ GM.*?(?=^#|$(?![\r\n]))/gms, "") // Remove GM paragraphs
 	md = md.replace(
 		/> \[!(\w+)\](?:\s*(.+)(?:\n>\s*(.*))?)?/g, // Replace callouts
@@ -256,6 +274,7 @@ async function formatMd(
 	)
 	md = md.replace(/^```(\w*)\n(.*?)\n```/gms, highlightCode) // Highlight code blocks
 
+	const chunks = splitMd(md) // Split by :::hidden::: blocks
 	return {
 		md: md,
 		props: props,

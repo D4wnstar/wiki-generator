@@ -29,6 +29,7 @@ export type Backreference = {
 	slug: string
 }
 
+// TODO: change snake_case to camelCase for consistency
 export type NoteProperties = {
 	publish: boolean
 	frontpage: boolean
@@ -40,6 +41,12 @@ export type SidebarImage = {
 	image_name: string
 	url: string | undefined
 	caption: string | undefined
+}
+
+export type ContentChunk = {
+	chunk_id: number,
+	chunk: string,
+	allowedUsers: string[],
 }
 
 export type Wikilink = {
