@@ -73,7 +73,6 @@ async function setupInitialSchema(sql: Sql) {
             alt_title text,
             path text unique not null,
             slug text unique not null,
-            content text,
             frontpage boolean default false,
             "references" text array,
             allowed_users text array
@@ -84,7 +83,7 @@ async function setupInitialSchema(sql: Sql) {
         create table if not exists note_contents (
             note_id integer not null references notes (id),
             chunk_id integer not null,
-            chunk text not null,
+            "text" text not null,
             allowed_users text array,
             primary key (note_id, chunk_id)
         );

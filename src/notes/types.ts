@@ -16,7 +16,7 @@ export type Note = {
 	title: string
 	path: string
 	slug: string
-	content: string
+	content: ContentChunk[]
 	references: Set<string>
 	backreferences: Backreference[]
 	properties: NoteProperties
@@ -29,7 +29,7 @@ export type Backreference = {
 	slug: string
 }
 
-// TODO: change snake_case to camelCase for consistency
+// TODO: change snake_case for consistency with the related Postgres columns
 export type NoteProperties = {
 	publish: boolean
 	frontpage: boolean
@@ -45,8 +45,8 @@ export type SidebarImage = {
 
 export type ContentChunk = {
 	chunk_id: number,
-	chunk: string,
-	allowedUsers: string[],
+	text: string,
+	allowed_users: string[],
 }
 
 export type Wikilink = {

@@ -14,7 +14,6 @@
  *   9. Tell the user to merge the pull request manually
  */
 
-import { randomUUID } from "crypto"
 import { Notice } from "obsidian"
 import { Octokit } from "octokit"
 

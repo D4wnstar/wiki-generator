@@ -4,13 +4,14 @@ import { convertWikilinks, uploadImage } from "./wikilinks"
 import * as MarkdownIt from "markdown-it"
 import hljs from "highlight.js"
 import { localMedia, supabaseMedia } from "../config"
-import { calloutIcons, slugifyPath } from "../utils"
+import { calloutIcons, partition, slugifyPath } from "../utils"
 import {
 	NoteProperties,
 	SidebarImage,
 	Note,
 	DatabaseError,
 	FrontPageError,
+	ContentChunk,
 } from "./types"
 import { setupMediaBucket } from "src/database/init"
 import { globalVault, supabase } from "main"
@@ -210,18 +211,46 @@ function highlightCode(_match: string, lang: string, code: string) {
 </div>`
 }
 
-function splitMd(md: string) {
-	const hiddens = md.match(/^:::hidden\n.*?\n:::/gms)
-	if (!hiddens) return
-	const chunks: string[] = md.split(hiddens[0])
-	chunks.splice(1, 0, hiddens[0])
+/**
+ * Splits markdown into chunks with metadata attached to them. Primarily, this allows each
+ * chunk to have a different authorization level so that it's possible to hide only certain
+ * parts of a page instead of just the whole page.
+ * @param md The text to split
+ * @returns An array of chunks with metadata
+ */
+function chunkMd(md: string): ContentChunk[] {
+	const privateChunks = Array.from(
+		md.matchAll(/^:::private\s*\((.*?)\)\n(.*?)\n:::/gms)
+	)
+	if (privateChunks.length === 0) return [{ chunk_id: 1, text: md, allowed_users: [] }]
 
-	if (hiddens.length > 1) {
-		for (const match of hiddens.slice(1)) {
-			const temp = chunks[chunks.length - 1].split(match)
-			temp.splice(1, 0, match)
-			chunks.pop()
-			chunks.concat(temp)
+	// Unwrap the tags and keep only the inner content
+	md = md.replace(/^:::private\s*\((.*?)\)\n(.*?)\n:::/gms, "$2")
+
+	let currChunkId = 1
+	const chunks: ContentChunk[] = []
+
+	for (const match of privateChunks) {
+		let currText: string
+		const users = match[1]?.split(",").map((s) => s.trim()) ?? []
+
+		if (chunks.length > 0) {
+			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+			currText = chunks.pop()!.text
+			currChunkId -= 1
+		} else {
+			currText = md
+		}
+
+		const parts = partition(currText, match[2])
+		for (const i in parts) {
+			chunks.push({
+				chunk_id: currChunkId,
+				text: parts[i],
+				allowed_users: parseInt(i) % 2 !== 0 ? users : [],
+				// The way `partition` works puts all private chunks on odd indexes
+			})
+			currChunkId += 1
 		}
 	}
 
@@ -232,7 +261,7 @@ async function formatMd(
 	md: string,
 	media: TFile[]
 ): Promise<{
-	md: string
+	chunks: ContentChunk[]
 	props: NoteProperties
 	details: Map<string, string>
 	sidebarImgs: SidebarImage[]
@@ -266,6 +295,7 @@ async function formatMd(
 		md = md.replace(match[0], "")
 	}
 
+	md = md.replace(/^:::hidden\n.*?\n:::/gms, "") // Remove :::hidden::: blocks
 	// TODO: Remove the whole GM paragraph thing
 	md = md.replace(/^#+ GM.*?(?=^#|$(?![\r\n]))/gms, "") // Remove GM paragraphs
 	md = md.replace(
@@ -274,18 +304,16 @@ async function formatMd(
 	)
 	md = md.replace(/^```(\w*)\n(.*?)\n```/gms, highlightCode) // Highlight code blocks
 
-	const chunks = splitMd(md) // Split by :::hidden::: blocks
+	const chunks = chunkMd(md) // Split by :::private::: blocks
 	return {
-		md: md,
+		chunks: chunks,
 		props: props,
 		details: details,
 		sidebarImgs: sidebarImages,
 	}
 }
 
-async function vaultToNotes(
-	converter: MarkdownIt
-): Promise<[Note[], TFile[]]> {
+async function vaultToNotes(converter: MarkdownIt): Promise<[Note[], TFile[]]> {
 	const notes: Note[] = []
 	// Get the non-markdown media first
 	let files = globalVault.getFiles()
@@ -299,34 +327,46 @@ async function vaultToNotes(
 		const content = await globalVault.read(file)
 		const formatted = await formatMd(content, media)
 
-		let html = converter.render(formatted.md)
-		html = html.replace(
-			/<h(\d)(.*?)>(.*?)<\/h\d>/g,
-			(_substring, num, props, content) => {
-				const id = slugifyPath(content)
-				return `<h${num}${props} class="h${num}" id="${id}">${content}</h${num}>`
-			}
-		)
-		html = html.replace(
-			/<a(.*?)>(.*?)<\/a>/g,
-			'<a$1 class="anchor" target="_blank">$2</a>'
-		)
-		html = html.replace(/<blockquote>/g, '<blockquote class="blockquote">')
-		html = html.replace(
-			/<ul(.*?)>/g,
-			'<ul$1 class="list-disc list-inside indent-cascade">'
-		)
-		html = html.replace(
-			/<ol(.*?)>/g,
-			'<ol$1 class="list-decimal list-inside indent-cascade">'
-		)
-		html = html.replace(/<code>/g, '<code class="code">')
+		for (const i in formatted.chunks) {
+			let html = converter.render(formatted.chunks[i].text)
+
+			// Improve headers
+			html = html.replace(
+				/<h(\d)(.*?)>(.*?)<\/h\d>/g,
+				(_substring, num, props, content) => {
+					const id = slugifyPath(content)
+					return `<h${num}${props} class="h${num}" id="${id}">${content}</h${num}>`
+				}
+			)
+			// Make all external links open a new tab
+			html = html.replace(
+				/<a(.*?)>(.*?)<\/a>/g,
+				'<a$1 class="anchor" target="_blank">$2</a>'
+			)
+			// Add tailwind classes to blockquotes, code and lists
+			html = html.replace(
+				/<blockquote>/g,
+				'<blockquote class="blockquote">'
+			)
+			html = html.replace(
+				/<ul(.*?)>/g,
+				'<ul$1 class="list-disc list-inside indent-cascade">'
+			)
+			html = html.replace(
+				/<ol(.*?)>/g,
+				'<ol$1 class="list-decimal list-inside indent-cascade">'
+			)
+			html = html.replace(/<code>/g, '<code class="code">')
+
+			// Replace the markdown with the HTML
+			formatted.chunks[i].text = html
+		}
 
 		notes.push({
 			title: file.name.replace(".md", ""),
 			path: file.path.replace(".md", ""),
 			slug: slug,
-			content: html,
+			content: formatted.chunks,
 			references: new Set<string>(),
 			backreferences: [],
 			properties: formatted.props,
@@ -360,8 +400,7 @@ export async function convertNotesForUpload(
 
 	// Grab all the files, parse all markdown for custom syntax and upload sidebar images
 	console.log("Fetching files from vault...")
-	const files = await vaultToNotes(converter)
-	const [allNotes, mediaInVault] = files
+	const [allNotes, mediaInVault] = await vaultToNotes(converter)
 
 	// Store local files globally (same reasoning as supabaseMedia)
 	localMedia.files = mediaInVault
@@ -386,9 +425,9 @@ export async function convertNotesForUpload(
 		)
 	}
 
+	// Convert all the [[wikilinks]] in the notes
 	console.log("Converting notes...")
 	new Notice("Converting notes...")
-	// Convert all the [[wikilinks]] in the notes
 	notes = await convertWikilinks(notes)
 	notes.sort((a, b) => a.slug.localeCompare(b.slug))
 
@@ -403,7 +442,6 @@ export async function convertNotesForUpload(
 					alt_title: note.properties.alt_title,
 					path: note.path,
 					slug: note.slug,
-					content: note.content,
 					frontpage: note.properties.frontpage,
 					references: [...note.references],
 					allowed_users: note.properties.allowed_users,
@@ -423,6 +461,20 @@ export async function convertNotesForUpload(
 	const addedNotes = notesInsertionResult.data
 
 	for (const index in notes) {
+		const { error: contentError } = await supabase
+			.from("note_contents")
+			.upsert(
+				notes[index].content.map((chunk) => {
+					return {
+						note_id: addedNotes[index].id,
+						...chunk,
+					}
+				}),
+				{ ignoreDuplicates: false },
+			)
+
+		if (contentError) throw new DatabaseError(contentError.message)
+
 		const { error: detailsError } = await supabase.from("details").upsert(
 			[...notes[index].details.entries()].map((pair) => {
 				return {
@@ -540,8 +592,6 @@ export async function convertNotesForUpload(
 			)
 		}
 	}
-
-	// Also delete all backreferences from notes that have been removed or unplu
 
 	// Clean up remote files by removing ones that have been deleted locally
 	// TODO: Also remove files that are no longer referenced by any note

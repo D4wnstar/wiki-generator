@@ -3,6 +3,7 @@ import { Editor, TFile, TFolder, Vault, normalizePath } from "obsidian"
 import slugify from "slugify"
 import { WikiGeneratorSettings } from "./settings"
 import { globalVault } from "main"
+import { ContentChunk } from "./notes/types"
 
 export const calloutIcons = {
 	info: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-info"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`,
@@ -27,6 +28,33 @@ export function slugifyPath(path: string): string {
 	}
 
 	return slugged.join("/")
+}
+
+/**
+ * Splits the text by the splitter string and retains it in the return value, unlike `split`
+ * which drops it. Assumes `splitter` exists in `text`.
+ * @param text The text to partition
+ * @param splitter The string to partition by
+ * @returns An array containing the partitioned text
+ */
+export function partition(text: string, splitter: string): string[] {
+	const split = text.split(splitter)
+	const length = split.length
+	for (let i=1; i < length; i++) {
+		split.splice(i, 0, splitter)
+	}
+	return split
+}
+
+/**
+ * Helper to get the text of all chunks as a single string.
+ * @param chunks An array of ContentChunks to join
+ * @returns All the text of the chunks joined with no whitespace
+ */
+export function joinChunks(chunks: ContentChunk[]): string {
+	let out = ""
+	chunks.forEach((chunk) => out += chunk.text)
+	return out
 }
 
 export function resolveTFolder(folderPath: string) {

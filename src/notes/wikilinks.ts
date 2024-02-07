@@ -1,6 +1,6 @@
 import Image from "image-js"
 import { localMedia, supabaseMedia, uploadConfig } from "../config"
-import { slugifyPath } from "../utils"
+import { joinChunks, slugifyPath } from "../utils"
 import { Backreference, Note, Wikilink } from "./types"
 import { globalVault, supabase } from "main"
 
@@ -168,9 +168,11 @@ function handleNoteTransclusion(wl: Wikilink, notes: Note[]): string {
 		let refContent = ""
 		// TODO: Add handling of block references
 		if (wl.header && !wl.isBlockRef) {
+			// If the transclusion is only for a single section, just grab that
 			refTitle = wl.altName ?? wl.header
 			const headerSlug = slugifyPath(wl.header)
-			const match = refNote.content.match(
+			const text = joinChunks(refNote.content)
+			const match = text.match(
 				new RegExp(
 					`<h\\d[^\\n]*?id="${headerSlug}".*?>.*?</h\\d>\\s*(.*?)(?=<h\\d)`,
 					"s"
@@ -182,11 +184,12 @@ function handleNoteTransclusion(wl: Wikilink, notes: Note[]): string {
 				console.warn(
 					`Could not find header ${wl.header} in note ${wl.title}`
 				)
-				refContent = refNote.content
+				refContent = joinChunks(refNote.content)
 			}
 		} else {
+			// Otherwise grab the entire note
 			refTitle = wl.altName ?? refNote.title
-			refContent = refNote.content
+			refContent = joinChunks(refNote.content)
 		}
 
 		return `<blockquote class="blockquote not-italic"><h2 class="h2">${refTitle}</h2>
@@ -368,70 +371,75 @@ function matchWikilinks(text: string) {
 export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 	const convertedNotes: Note[] = []
 	for (const note of notes) {
-		// First, handle the references
-		const references = matchWikilinks(note.content).filter(
-			(wl) => !wl.isTransclusion
-		)
-		const refReplacements = await Promise.all(
-			references.map((ref) => getReferenceReplacements(ref, note, notes))
-		)
-
-		for (const index in references) {
-			note.content = note.content.replace(
-				references[index].fullLink,
-				refReplacements[index]
+		for (const chunk of note.content) {
+			// First, handle the references
+			const references = matchWikilinks(chunk.text).filter(
+				(wl) => !wl.isTransclusion
 			)
+			const refReplacements = await Promise.all(
+				references.map((ref) => getReferenceReplacements(ref, note, notes))
+			)
+	
+			for (const index in references) {
+				chunk.text = chunk.text.replace(
+					references[index].fullLink,
+					refReplacements[index]
+				)
+			}
 		}
 	}
 
 	for (const note of notes) {
-		// Then, handle the transclusions. Using a separate loop guarantees
-		// that the transcluded pages will have all wikilinks already converted
-		const transclusions = matchWikilinks(note.content).filter(
-			(wl) => wl.isTransclusion
-		)
-		const transReplacements = await Promise.all(
-			transclusions.map((trans) =>
-				getTransclusionReplacements(trans, note, notes)
+		for (const chunk of note.content) {
+			// Then, handle the transclusions. Using a separate loop guarantees
+			// that the transcluded pages will have all wikilinks already converted
+			const transclusions = matchWikilinks(chunk.text).filter(
+				(wl) => wl.isTransclusion
 			)
-		)
-
-		for (const index in transclusions) {
-			note.content = note.content.replace(
-				transclusions[index].fullLink,
-				transReplacements[index]
-			)
-		}
-
-		// Caption all images in the note
-		note.content = captionImages(note.content)
-
-		// Then, replace references in the details. Details should not have transclusion
-		// because they don't fit in the UI
-		for (const [key, value] of note.details.entries()) {
-			const detailLinks = matchWikilinks(value).filter(
-				(wl) => !wl.isTransclusion
-			)
-
-			const detailReplacements = await Promise.all(
-				detailLinks.map((ref) =>
-					getReferenceReplacements(ref, note, notes)
+			const transReplacements = await Promise.all(
+				transclusions.map((trans) =>
+					getTransclusionReplacements(trans, note, notes)
 				)
 			)
-
-			for (const index in detailLinks) {
-				note.details.set(
-					key,
-					value.replace(
-						detailLinks[index].fullLink,
-						detailReplacements[index]
-					)
+	
+			for (const index in transclusions) {
+				chunk.text = chunk.text.replace(
+					transclusions[index].fullLink,
+					transReplacements[index]
 				)
 			}
+	
+			// Caption all images in the note
+			chunk.text = captionImages(chunk.text)
+	
+			// Then, replace references in the details. Details should not have transclusion
+			// because they don't fit in the UI
+			for (const [key, value] of note.details.entries()) {
+				const detailLinks = matchWikilinks(value).filter(
+					(wl) => !wl.isTransclusion
+				)
+	
+				const detailReplacements = await Promise.all(
+					detailLinks.map((ref) =>
+						getReferenceReplacements(ref, note, notes)
+					)
+				)
+	
+				for (const index in detailLinks) {
+					note.details.set(
+						key,
+						value.replace(
+							detailLinks[index].fullLink,
+							detailReplacements[index]
+						)
+					)
+				}
+			}
+			
 		}
 
 		convertedNotes.push(note)
 	}
-
+	
 	return convertedNotes
 }

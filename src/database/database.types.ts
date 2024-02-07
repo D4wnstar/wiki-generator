@@ -84,11 +84,38 @@ export interface Database {
           }
         ]
       }
+      note_contents: {
+        Row: {
+          allowed_users: string[] | null
+          chunk_id: number
+          note_id: number
+          text: string
+        }
+        Insert: {
+          allowed_users?: string[] | null
+          chunk_id: number
+          note_id: number
+          text: string
+        }
+        Update: {
+          allowed_users?: string[] | null
+          chunk_id?: number
+          note_id?: number
+          text?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "note_contents_note_id_fkey"
+            columns: ["note_id"]
+            referencedRelation: "notes"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
       notes: {
         Row: {
           allowed_users: string[] | null
           alt_title: string | null
-          content: string | null
           frontpage: boolean | null
           id: number
           path: string
@@ -99,7 +126,6 @@ export interface Database {
         Insert: {
           allowed_users?: string[] | null
           alt_title?: string | null
-          content?: string | null
           frontpage?: boolean | null
           id?: number
           path: string
@@ -110,7 +136,6 @@ export interface Database {
         Update: {
           allowed_users?: string[] | null
           alt_title?: string | null
-          content?: string | null
           frontpage?: boolean | null
           id?: number
           path?: string
