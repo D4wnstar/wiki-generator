@@ -71,6 +71,7 @@ async function setupInitialSchema(sql: Sql) {
             id serial primary key,
             title text not null,
             alt_title text,
+            lead text not null,
             path text unique not null,
             slug text unique not null,
             frontpage boolean default false,

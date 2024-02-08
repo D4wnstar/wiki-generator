@@ -118,6 +118,7 @@ export interface Database {
           alt_title: string | null
           frontpage: boolean | null
           id: number
+          lead: string
           path: string
           references: string[] | null
           slug: string
@@ -128,6 +129,7 @@ export interface Database {
           alt_title?: string | null
           frontpage?: boolean | null
           id?: number
+          lead: string
           path: string
           references?: string[] | null
           slug: string
@@ -138,6 +140,7 @@ export interface Database {
           alt_title?: string | null
           frontpage?: boolean | null
           id?: number
+          lead?: string
           path?: string
           references?: string[] | null
           slug?: string

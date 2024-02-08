@@ -262,6 +262,7 @@ async function formatMd(
 	media: TFile[]
 ): Promise<{
 	chunks: ContentChunk[]
+	lead: string,
 	props: NoteProperties
 	details: Map<string, string>
 	sidebarImgs: SidebarImage[]
@@ -304,13 +305,53 @@ async function formatMd(
 	)
 	md = md.replace(/^```(\w*)\n(.*?)\n```/gms, highlightCode) // Highlight code blocks
 
+	const match = md.match(/\n*(.*?)\n\n/) // Get everything until the first double newline as the lead
+	let lead = md
+	if (match) lead = match[1]
+	// Remove wikilinks from lead
+	lead = lead.replace(/\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/g, "$1")
+	lead = lead.replace(/!\[\[(.*?)\]\]/g, "")
+
 	const chunks = chunkMd(md) // Split by :::private::: blocks
 	return {
 		chunks: chunks,
+		lead: lead,
 		props: props,
 		details: details,
 		sidebarImgs: sidebarImages,
 	}
+}
+
+function fixHtml(html: string): string {
+	// Improve headers
+	html = html.replace(
+		/<h(\d)(.*?)>(.*?)<\/h\d>/g,
+		(_substring, num, props, content) => {
+			const id = slugifyPath(content)
+			return `<h${num}${props} class="h${num}" id="${id}">${content}</h${num}>`
+		}
+	)
+	// Make all external links open a new tab
+	html = html.replace(
+		/<a(.*?)>(.*?)<\/a>/g,
+		'<a$1 class="anchor" target="_blank">$2</a>'
+	)
+	// Add tailwind classes to blockquotes, code and lists
+	html = html.replace(
+		/<blockquote>/g,
+		'<blockquote class="blockquote">'
+	)
+	html = html.replace(
+		/<ul(.*?)>/g,
+		'<ul$1 class="list-disc list-inside indent-cascade">'
+	)
+	html = html.replace(
+		/<ol(.*?)>/g,
+		'<ol$1 class="list-decimal list-inside indent-cascade">'
+	)
+	html = html.replace(/<code>/g, '<code class="code">')
+
+	return html
 }
 
 async function vaultToNotes(converter: MarkdownIt): Promise<[Note[], TFile[]]> {
@@ -328,45 +369,20 @@ async function vaultToNotes(converter: MarkdownIt): Promise<[Note[], TFile[]]> {
 		const formatted = await formatMd(content, media)
 
 		for (const i in formatted.chunks) {
-			let html = converter.render(formatted.chunks[i].text)
-
-			// Improve headers
-			html = html.replace(
-				/<h(\d)(.*?)>(.*?)<\/h\d>/g,
-				(_substring, num, props, content) => {
-					const id = slugifyPath(content)
-					return `<h${num}${props} class="h${num}" id="${id}">${content}</h${num}>`
-				}
-			)
-			// Make all external links open a new tab
-			html = html.replace(
-				/<a(.*?)>(.*?)<\/a>/g,
-				'<a$1 class="anchor" target="_blank">$2</a>'
-			)
-			// Add tailwind classes to blockquotes, code and lists
-			html = html.replace(
-				/<blockquote>/g,
-				'<blockquote class="blockquote">'
-			)
-			html = html.replace(
-				/<ul(.*?)>/g,
-				'<ul$1 class="list-disc list-inside indent-cascade">'
-			)
-			html = html.replace(
-				/<ol(.*?)>/g,
-				'<ol$1 class="list-decimal list-inside indent-cascade">'
-			)
-			html = html.replace(/<code>/g, '<code class="code">')
-
 			// Replace the markdown with the HTML
-			formatted.chunks[i].text = html
+			const html = converter.render(formatted.chunks[i].text)
+			formatted.chunks[i].text = fixHtml(html)
 		}
+
+		const leadHtml = converter.render(formatted.lead)
+		formatted.lead = fixHtml(leadHtml)
 
 		notes.push({
 			title: file.name.replace(".md", ""),
 			path: file.path.replace(".md", ""),
 			slug: slug,
 			content: formatted.chunks,
+			lead: formatted.lead,
 			references: new Set<string>(),
 			backreferences: [],
 			properties: formatted.props,
@@ -441,6 +457,7 @@ export async function convertNotesForUpload(
 					title: note.title,
 					alt_title: note.properties.alt_title,
 					path: note.path,
+					lead: note.lead,
 					slug: note.slug,
 					frontpage: note.properties.frontpage,
 					references: [...note.references],

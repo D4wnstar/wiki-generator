@@ -17,6 +17,7 @@ export type Note = {
 	path: string
 	slug: string
 	content: ContentChunk[]
+	lead: string,
 	references: Set<string>
 	backreferences: Backreference[]
 	properties: NoteProperties
