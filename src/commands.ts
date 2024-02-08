@@ -1,5 +1,5 @@
 import { Notice, Editor, App, SuggestModal } from "obsidian"
-import { convertNotesForUpload } from "./notes/format"
+import { convertNotesAndUpload } from "./notes/upload"
 import { WikiGeneratorSettings } from "./settings"
 import {
 	getPropertiesFromEditor,
@@ -16,9 +16,7 @@ type Property = {
 	defaultValue: string
 }
 
-export async function uploadNotes(
-	settings: WikiGeneratorSettings
-) {
+export async function uploadNotes(settings: WikiGeneratorSettings) {
 	if (!supabase) {
 		console.error(
 			"The Supabase client has not been initialized properly. Please check the URL and Service Key and reconnect."
@@ -58,7 +56,7 @@ export async function uploadNotes(
 	console.log("Uploading notes...")
 	new Notice("Uploading notes...")
 	try {
-		await convertNotesForUpload(deployHookUrl)
+		await convertNotesAndUpload(deployHookUrl)
 	} catch (error) {
 		new Notice(error.message)
 		if (error instanceof FrontPageError || error instanceof DatabaseError) {
@@ -79,20 +77,22 @@ export function massAddPublish(settings: WikiGeneratorSettings) {
 	for (const note of notes) {
 		globalVault.process(note, (noteText) => {
 			const propsRegex = /^---\n(.*?)\n---/s
-            // Isolate properties
+			// Isolate properties
 			const props = noteText.match(propsRegex)
 			if (props) {
-                // Check if a publish propery is already there
-				const publish = props[1].match(/(wiki)|(dg)-publish: (true)|(false)/)
-                // If it is, leave it as is
+				// Check if a publish propery is already there
+				const publish = props[1].match(
+					/(wiki)|(dg)-publish: (true)|(false)/
+				)
+				// If it is, leave it as is
 				if (publish) return noteText
-                // Otherwise add a new property, defaulting to true
+				// Otherwise add a new property, defaulting to true
 				noteText = noteText.replace(
 					propsRegex,
 					`---\nwiki-publish: true\n$1\n---`
 				)
 			} else {
-                // If there are no properties, prepend a new publish one
+				// If there are no properties, prepend a new publish one
 				noteText = `---\nwiki-publish: true\n---\n` + noteText
 			}
 
@@ -106,7 +106,10 @@ export function massSetPublishState(
 	state: boolean
 ) {
 	const notes = getPublishableFiles(settings)
-	const regex = RegExp(`^---\n(.*?)(wiki)|(dg)-publish: ${state}(.*?)\n---`, "s")
+	const regex = RegExp(
+		`^---\n(.*?)(wiki)|(dg)-publish: ${state}(.*?)\n---`,
+		"s"
+	)
 	for (const note of notes) {
 		globalVault.process(note, (noteText) => {
 			return noteText.replace(
@@ -126,20 +129,24 @@ const BUILTIN_PROPS: Property[] = [
 	},
 	{
 		name: "wiki-home",
-		description: "Set this note as the front page. Can only be set to one note.",
+		description:
+			"Set this note as the front page. Can only be set to one note.",
 		valueType: "true/false",
 		defaultValue: "true",
 	},
-    {
-        name: "wiki-title",
-        description: "Set your page title independently from this note's file name.",
-        valueType: "text",
-        defaultValue: "",
-    },
+	{
+		name: "wiki-title",
+		description:
+			"Set your page title independently from this note's file name.",
+		valueType: "text",
+		defaultValue: "",
+	},
 	{
 		name: "wiki-allowed-users",
-		description: "A list of users who can see this note. It will be hidden to everyone else.",
-		valueType: "case-insensitive, comma-separated list of usernames (e.g. Jacob123, TheLegend27, bob)",
+		description:
+			"A list of users who can see this note. It will be hidden to everyone else.",
+		valueType:
+			"case-insensitive, comma-separated list of usernames (e.g. Jacob123, TheLegend27, bob)",
 		defaultValue: "",
 	},
 ]

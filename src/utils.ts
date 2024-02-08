@@ -1,4 +1,3 @@
-import { SupabaseClient, createClient } from "@supabase/supabase-js"
 import { Editor, TFile, TFolder, Vault, normalizePath } from "obsidian"
 import slugify from "slugify"
 import { WikiGeneratorSettings } from "./settings"
@@ -96,32 +95,6 @@ export function getPublishableFiles(
 	}
 
 	return notes
-}
-
-export function createClientWrapper(settings: WikiGeneratorSettings) {
-	let client: SupabaseClient
-
-	if (
-		settings.supabaseUseLocal &&
-		settings.supabaseApiUrlLocal &&
-		settings.supabaseServiceKeyLocal
-	) {
-		client = createClient(
-			settings.supabaseApiUrlLocal,
-			settings.supabaseServiceKeyLocal
-		)
-	} else if (settings.supabaseApiUrl && settings.supabaseServiceKey) {
-		client = createClient(
-			settings.supabaseApiUrl,
-			settings.supabaseServiceKey
-		)
-	} else {
-		throw new Error(
-			"Please set both the URL and Service Key for Supabase in the settings"
-		)
-	}
-
-	return client
 }
 
 export function getPropertiesFromEditor(editor: Editor): Map<string, string> {

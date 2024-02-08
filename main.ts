@@ -16,7 +16,7 @@ import {
 	WikiGeneratorSettingTab,
 	WikiGeneratorSettings,
 } from "src/settings"
-import { createClientWrapper } from "src/utils"
+import { createClientWrapper } from "src/database/requests"
 
 /**
  * A global reference to the vault to avoid having to pass it down the whole call stack.
