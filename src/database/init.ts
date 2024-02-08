@@ -237,12 +237,28 @@ async function applySecurityPolicies(sql: Sql) {
         create policy "Notes are visible to either everyone or allowed users"
         on notes for select
         to authenticated, anon
-        using ( 
+        using (
             not exists (select 1 from unnest(allowed_users)) -- allows on an empty array
             or allowed_users @> array[(select username from profiles where auth.uid() = id)]
         );
     `
     console.log(notesPolicy)
+    
+    const noteContentsRls = await sql`
+        alter table "note_contents" enable row level security;
+    `
+    console.log(noteContentsRls)
+
+    const noteContentsPolicy = await sql`
+        create policy "Note contents are visible to either everyone or allowed users"
+        on note_contents for select
+        to authenticated, anon
+        using (
+            not exists (select 1 from unnest(allowed_users)) -- allows on an empty array
+            or allowed_users @> array[(select username from profiles where auth.uid() = id)]
+        );
+    `
+    console.log(noteContentsPolicy)
 
     const backreferencesRls = await sql`
         alter table backreferences enable row level security;

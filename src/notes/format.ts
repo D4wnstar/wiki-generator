@@ -11,6 +11,45 @@ import {
 } from "./types"
 import { globalVault } from "main"
 
+export async function vaultToNotes(converter: MarkdownIt): Promise<[Note[], TFile[]]> {
+	const notes: Note[] = []
+	// Get the non-markdown media first
+	let files = globalVault.getFiles()
+	const media = files.filter((file) => file.extension !== "md")
+
+	// Then go through the markdown notes
+	files = globalVault.getMarkdownFiles()
+	for (const file of files) {
+		const slug = slugifyPath(file.path.replace(".md", ""))
+
+		const content = await globalVault.read(file)
+		const formatted = await formatMd(content, media)
+
+		for (const i in formatted.chunks) {
+			// Replace the markdown with the HTML
+			const html = converter.render(formatted.chunks[i].text)
+			formatted.chunks[i].text = fixHtml(html)
+		}
+
+		const leadHtml = converter.render(formatted.lead)
+		formatted.lead = fixHtml(leadHtml)
+
+		notes.push({
+			title: file.name.replace(".md", ""),
+			path: file.path.replace(".md", ""),
+			slug: slug,
+			content: formatted.chunks,
+			lead: formatted.lead,
+			references: new Set<string>(),
+			backreferences: [],
+			properties: formatted.props,
+			details: formatted.details,
+			sidebarImages: formatted.sidebarImgs,
+		})
+	}
+	return [notes, media]
+}
+
 function parseProperties(match: string): NoteProperties {
 	const props: NoteProperties = {
 		publish: false,
@@ -213,11 +252,11 @@ function highlightCode(_match: string, lang: string, code: string) {
  * @param md The text to split
  * @returns An array of chunks with metadata
  */
-function chunkMd(md: string): ContentChunk[] {
+function chunkMd(md: string, allowedUsers: string[]): ContentChunk[] {
 	const privateChunks = Array.from(
 		md.matchAll(/^:::private\s*\((.*?)\)\n(.*?)\n:::/gms)
 	)
-	if (privateChunks.length === 0) return [{ chunk_id: 1, text: md, allowed_users: [] }]
+	if (privateChunks.length === 0) return [{ chunk_id: 1, text: md, allowed_users: allowedUsers }]
 
 	// Unwrap the tags and keep only the inner content
 	md = md.replace(/^:::private\s*\((.*?)\)\n(.*?)\n:::/gms, "$2")
@@ -227,7 +266,7 @@ function chunkMd(md: string): ContentChunk[] {
 
 	for (const match of privateChunks) {
 		let currText: string
-		const users = match[1]?.split(",").map((s) => s.trim()) ?? []
+		const users = match[1].split(",").map((s) => s.trim())
 
 		if (chunks.length > 0) {
 			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
@@ -242,7 +281,7 @@ function chunkMd(md: string): ContentChunk[] {
 			chunks.push({
 				chunk_id: currChunkId,
 				text: parts[i],
-				allowed_users: parseInt(i) % 2 !== 0 ? users : [],
+				allowed_users: parseInt(i) % 2 !== 0 ? users : allowedUsers,
 				// The way `partition` works puts all private chunks on odd indexes
 			})
 			currChunkId += 1
@@ -262,6 +301,7 @@ async function formatMd(
 	details: Map<string, string>
 	sidebarImgs: SidebarImage[]
 }> {
+	// Collect all properties
 	const propsRegex = /^---\r?\n(.*?)\r?\n---/s
 	const propsMatch = md.match(propsRegex)
 	let props: NoteProperties = {
@@ -275,7 +315,8 @@ async function formatMd(
 		md = md.replace(propsRegex, "") // Remove obsidian properties
 	}
 
-	const detailsRegex = /^:::details\n(.*?)\n:::/ms // Finds the first occurence of :::details:::
+	// Find the first occurence of :::details:::
+	const detailsRegex = /^:::details\n(.*?)\n:::/ms
 	const detailsMatch = md.match(detailsRegex)
 	let details = new Map<string, string>()
 	if (detailsMatch) {
@@ -283,7 +324,8 @@ async function formatMd(
 		md = md.replace(detailsRegex, "") // Remove details from the main page
 	}
 
-	const imageRegex = /^:::image\n(.*?)\n:::/gms // Finds all occurences of :::image:::
+	// Find all occurences of :::image:::
+	const imageRegex = /^:::image\n(.*?)\n:::/gms
 	const imageMatch = md.matchAll(imageRegex)
 	const sidebarImages: SidebarImage[] = []
 	for (const match of imageMatch) {
@@ -300,14 +342,15 @@ async function formatMd(
 	)
 	md = md.replace(/^```(\w*)\n(.*?)\n```/gms, highlightCode) // Highlight code blocks
 
-	const match = md.match(/\n*(.*?)\n\n/) // Get everything until the first double newline as the lead
+	// Get everything until the first header as the lead
+	const match = md.match(/\n*#*(.+?)(?=#)/s)
 	let lead = md
 	if (match) lead = match[1]
 	// Remove wikilinks from lead
 	lead = lead.replace(/\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/g, "$1")
 	lead = lead.replace(/!\[\[(.*?)\]\]/g, "")
 
-	const chunks = chunkMd(md) // Split by :::private::: blocks
+	const chunks = chunkMd(md, props.allowed_users) // Split by :::private::: blocks
 	return {
 		chunks: chunks,
 		lead: lead,
@@ -347,43 +390,4 @@ function fixHtml(html: string): string {
 	html = html.replace(/<code>/g, '<code class="code">')
 
 	return html
-}
-
-export async function vaultToNotes(converter: MarkdownIt): Promise<[Note[], TFile[]]> {
-	const notes: Note[] = []
-	// Get the non-markdown media first
-	let files = globalVault.getFiles()
-	const media = files.filter((file) => file.extension !== "md")
-
-	// Then go through the markdown notes
-	files = globalVault.getMarkdownFiles()
-	for (const file of files) {
-		const slug = slugifyPath(file.path.replace(".md", ""))
-
-		const content = await globalVault.read(file)
-		const formatted = await formatMd(content, media)
-
-		for (const i in formatted.chunks) {
-			// Replace the markdown with the HTML
-			const html = converter.render(formatted.chunks[i].text)
-			formatted.chunks[i].text = fixHtml(html)
-		}
-
-		const leadHtml = converter.render(formatted.lead)
-		formatted.lead = fixHtml(leadHtml)
-
-		notes.push({
-			title: file.name.replace(".md", ""),
-			path: file.path.replace(".md", ""),
-			slug: slug,
-			content: formatted.chunks,
-			lead: formatted.lead,
-			references: new Set<string>(),
-			backreferences: [],
-			properties: formatted.props,
-			details: formatted.details,
-			sidebarImages: formatted.sidebarImgs,
-		})
-	}
-	return [notes, media]
 }

@@ -160,46 +160,74 @@ export async function uploadImage(
 	return url
 }
 
-function handleNoteTransclusion(wl: Wikilink, notes: Note[]): string {
+function handleNoteTransclusion(wl: Wikilink, notes: Note[]) {
 	const refNote = findReferencedNote(wl.title, notes)
 
-	if (refNote) {
-		let refTitle = ""
-		let refContent = ""
-		// TODO: Add handling of block references
-		if (wl.header && !wl.isBlockRef) {
-			// If the transclusion is only for a single section, just grab that
-			refTitle = wl.altName ?? wl.header
+	if (!refNote) {
+		console.warn(
+			`Could not find note "${wl.title}". If this note doesn't yet exist, this is expected`
+		)
+		return { replacement: wl.title, allowed_users: [] }
+	}
+
+	let refTitle = ""
+	let refContent = ""
+	let allowedUsers: string[] = []
+	// TODO: Add handling of block references
+	if (wl.header && !wl.isBlockRef) {
+		// If the transclusion is only for a single section, grab it in the correct chunk
+		for (const chunk of refNote.content) {
 			const headerSlug = slugifyPath(wl.header)
-			const text = joinChunks(refNote.content)
-			const match = text.match(
+			// This matches only if there is another header after the section, which means the last section is ignored
+			const match = chunk.text.match(
 				new RegExp(
 					`<h\\d[^\\n]*?id="${headerSlug}".*?>.*?</h\\d>\\s*(.*?)(?=<h\\d)`,
 					"s"
 				)
 			)
 			if (match) {
+				refTitle = wl.altName ?? wl.header
 				refContent = match[1]
-			} else {
-				console.warn(
-					`Could not find header ${wl.header} in note ${wl.title}`
-				)
-				refContent = joinChunks(refNote.content)
+				allowedUsers = chunk.allowed_users
+				break
 			}
-		} else {
-			// Otherwise grab the entire note
-			refTitle = wl.altName ?? refNote.title
-			refContent = joinChunks(refNote.content)
+
+			// This instead matches until the end-of-file, which is used for the last section only
+			const matchTillEOF = chunk.text.match(
+				new RegExp(
+					`<h\\d[^\\n]*?id="${headerSlug}".*?>.*?</h\\d>\\s*(.*?)$(?![\r\n])`,
+					"s"
+				)
+			)
+			if (matchTillEOF) {
+				refTitle = wl.altName ?? wl.header
+				refContent = matchTillEOF[1]
+				allowedUsers = chunk.allowed_users
+				break
+			}
 		}
 
-		return `<blockquote class="blockquote not-italic"><h2 class="h2">${refTitle}</h2>
-		
-		<div class="space-y-2">${refContent}</div></blockquote>`
+		// If the header can't be found for some reason, just transclude the whole thing as a fallback
+		if (!refContent) {
+			console.warn(
+				`Could not find header ${wl.header} in note ${wl.title}`
+			)
+			refTitle = wl.altName ?? refNote.title
+			refContent = joinChunks(refNote.content)
+			allowedUsers = refNote.properties.allowed_users
+		}
 	} else {
-		console.warn(
-			`Could not find note "${wl.title}". If this note doesn't yet exist, this is expected`
-		)
-		return wl.title
+		// Otherwise grab the entire note
+		refTitle = wl.altName ?? refNote.title
+		refContent = joinChunks(refNote.content)
+		allowedUsers = refNote.properties.allowed_users
+	}
+
+	return {
+		replacement: `<blockquote class="blockquote not-italic"><h2 class="h2">${refTitle}</h2>
+	
+	<div class="space-y-2">${refContent}</div></blockquote>`,
+		allowed_users: allowedUsers,
 	}
 }
 
@@ -302,13 +330,20 @@ async function getTransclusionReplacements(
 
 	if (!wikilink.title) {
 		console.warn(`Could not find match for note ${note.title}`)
-		return note.title
+		return { replacement: note.title, type: "error", allowed_users: [] }
 	}
 
 	if (wikilink.isMedia) {
-		return await handleFile(wikilink.title, wikilink.altName, true)
+		return {
+			replacement: await handleFile(wikilink.title, wikilink.altName, true),
+			type: "file",
+			allowed_users: [],
+		}
 	} else {
-		return handleNoteTransclusion(wikilink, notes)
+		return {
+			type: "note",
+			...handleNoteTransclusion(wikilink, notes),
+		}
 	}
 }
 
@@ -373,13 +408,16 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 	for (const note of notes) {
 		for (const chunk of note.content) {
 			// First, handle the references
+			// Find all the references
 			const references = matchWikilinks(chunk.text).filter(
 				(wl) => !wl.isTransclusion
 			)
+			// then get their replacements
 			const refReplacements = await Promise.all(
 				references.map((ref) => getReferenceReplacements(ref, note, notes))
 			)
 	
+			// and finally actually replace them
 			for (const index in references) {
 				chunk.text = chunk.text.replace(
 					references[index].fullLink,
@@ -392,7 +430,9 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 	for (const note of notes) {
 		for (const chunk of note.content) {
 			// Then, handle the transclusions. Using a separate loop guarantees
-			// that the transcluded pages will have all wikilinks already converted
+			// that the transcluded pages will have all references already converted
+			// FIXME: There's still probably issues with unconverted transclusions, especially
+			// between pages that transclude each other
 			const transclusions = matchWikilinks(chunk.text).filter(
 				(wl) => wl.isTransclusion
 			)
@@ -403,39 +443,64 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 			)
 	
 			for (const index in transclusions) {
-				chunk.text = chunk.text.replace(
-					transclusions[index].fullLink,
-					transReplacements[index]
-				)
-			}
-	
-			// Caption all images in the note
-			chunk.text = captionImages(chunk.text)
-	
-			// Then, replace references in the details. Details should not have transclusion
-			// because they don't fit in the UI
-			for (const [key, value] of note.details.entries()) {
-				const detailLinks = matchWikilinks(value).filter(
-					(wl) => !wl.isTransclusion
-				)
-	
-				const detailReplacements = await Promise.all(
-					detailLinks.map((ref) =>
-						getReferenceReplacements(ref, note, notes)
-					)
-				)
-	
-				for (const index in detailLinks) {
-					note.details.set(
-						key,
-						value.replace(
-							detailLinks[index].fullLink,
-							detailReplacements[index]
-						)
+				if (transReplacements[index].type === "note") {
+					// TODO: Add transclusion authorization
+					const part = chunk.text.split(transclusions[index].fullLink)
+					const partObj = part.map((p) => {
+						return {
+							text: p,
+							allowed_users: chunk.allowed_users
+						}
+					})
+					partObj.splice(1, 0, {
+						text: transReplacements[index].replacement,
+						allowed_users: transReplacements[index].allowed_users
+					})
+					const newChunks = partObj.map((obj, i) => {
+						return {
+							chunk_id: chunk.chunk_id + i,
+							...obj,
+						}
+					})
+					note.content.splice(chunk.chunk_id - 1, 1, ...newChunks)
+				}
+				else {
+					chunk.text = chunk.text.replace(
+						transclusions[index].fullLink,
+						transReplacements[index].replacement,
 					)
 				}
 			}
-			
+
+			// Caption all images in the note
+			chunk.text = captionImages(chunk.text)
+		}
+
+		// Renumber chunks after potentially splicing them, knowing that the array order is correct
+		note.content.forEach((chunk, index) => chunk.chunk_id = index + 1)
+	
+		// Then, replace references in the details. Details should not have transclusion
+		// because they don't fit in the UI
+		for (const [key, value] of note.details.entries()) {
+			const detailLinks = matchWikilinks(value).filter(
+				(wl) => !wl.isTransclusion
+			)
+
+			const detailReplacements = await Promise.all(
+				detailLinks.map((ref) =>
+					getReferenceReplacements(ref, note, notes)
+				)
+			)
+
+			for (const index in detailLinks) {
+				note.details.set(
+					key,
+					value.replace(
+						detailLinks[index].fullLink,
+						detailReplacements[index]
+					)
+				)
+			}
 		}
 
 		convertedNotes.push(note)

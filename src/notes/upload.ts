@@ -1,15 +1,12 @@
 import { supabase } from "main"
-import markdownit from "markdown-it/lib"
+import markdownit from "markdown-it"
 import { Notice, request } from "obsidian"
 import { supabaseMedia, localMedia } from "src/config"
 import { setupMediaBucket } from "src/database/init"
 import { vaultToNotes } from "./format"
-import { DatabaseError, FrontPageError, Note } from "./types"
+import { DatabaseError, DatabaseNote, FrontPageError, Note } from "./types"
 import { convertWikilinks } from "./wikilinks"
 import { getFilesInStorage } from "src/database/requests"
-import { Database } from "src/database/database.types"
-
-type DatabaseNote = Database["public"]["Tables"]["notes"]["Row"]
 
 export async function convertNotesAndUpload(
 	deployHookUrl: string | undefined
@@ -18,7 +15,7 @@ export async function convertNotesAndUpload(
 
 	await setupMediaBucket()
 
-	// Fetch a list of currently stored media files and
+	// Fetch a list of media files in the remote database and
 	// store those files globally (see supabaseMedia comment for why)
 	const mediaInStorage = await getFilesInStorage(supabase)
 	supabaseMedia.files = mediaInStorage.map((file) => file.name)
@@ -43,7 +40,6 @@ export async function convertNotesAndUpload(
 
 	console.log("Inserting content into Supabase. This might take a while...")
 	new Notice("Inserting content into Supabase. This might take a while...")
-
 	const uploadedNotes = await uploadNotes(notes)
 	await uploadExtraInfo(notes, uploadedNotes)
 
@@ -53,7 +49,6 @@ export async function convertNotesAndUpload(
 	if (notesToDelete.length > 0) {
 		console.log("Syncing notes...")
 		new Notice("Syncing notes...")
-
 		const deletedNotes = await deleteUnusedNotes(notesToDelete)
 
 		if (deletedNotes.length > 0) {

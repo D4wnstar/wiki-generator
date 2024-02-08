@@ -1,3 +1,5 @@
+import { Database } from "src/database/database.types"
+
 export class FrontPageError extends Error {
 	constructor(message: string) {
 		super(message) // Pass the message to the Error constructor
@@ -11,6 +13,8 @@ export class DatabaseError extends Error {
 		this.name = "DatabaseError" // Set the name of the error
 	}
 }
+
+export type DatabaseNote = Database["public"]["Tables"]["notes"]["Row"]
 
 export type Note = {
 	title: string
@@ -45,9 +49,9 @@ export type SidebarImage = {
 }
 
 export type ContentChunk = {
-	chunk_id: number,
-	text: string,
-	allowed_users: string[],
+	chunk_id: number
+	text: string
+	allowed_users: string[]
 }
 
 export type Wikilink = {
