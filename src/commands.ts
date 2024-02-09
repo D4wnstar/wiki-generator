@@ -1,20 +1,11 @@
-import { Notice, Editor, App, SuggestModal } from "obsidian"
+import { Notice } from "obsidian"
 import { convertNotesAndUpload } from "./notes/upload"
 import { WikiGeneratorSettings } from "./settings"
 import {
-	getPropertiesFromEditor,
 	getPublishableFiles,
-	replacePropertiesFromEditor,
 } from "./utils"
 import { FrontPageError, DatabaseError } from "./notes/types"
 import { globalVault, supabase } from "main"
-
-type Property = {
-	name: string
-	description: string
-	valueType: string
-	defaultValue: string
-}
 
 export async function uploadNotes(settings: WikiGeneratorSettings) {
 	if (!supabase) {
@@ -76,11 +67,11 @@ export function massAddPublish(settings: WikiGeneratorSettings) {
 	const notes = getPublishableFiles(settings)
 	for (const note of notes) {
 		globalVault.process(note, (noteText) => {
-			const propsRegex = /^---\n(.*?)\n---/s
+			const propsRegex = /^---\n+(.*?)\n+---/s
 			// Isolate properties
 			const props = noteText.match(propsRegex)
 			if (props) {
-				// Check if a publish propery is already there
+				// Check if a publish property is already there
 				const publish = props[1].match(
 					/(wiki)|(dg)-publish: (true)|(false)/
 				)
@@ -107,89 +98,15 @@ export function massSetPublishState(
 ) {
 	const notes = getPublishableFiles(settings)
 	const regex = RegExp(
-		`^---\n(.*?)(wiki)|(dg)-publish: ${state}(.*?)\n---`,
+		`^---\n(.*?)wiki-publish: ${state}(.*?)\n---\n`,
 		"s"
 	)
 	for (const note of notes) {
 		globalVault.process(note, (noteText) => {
 			return noteText.replace(
 				regex,
-				`---\n$1$2g-publish: ${state}$3\n---`
+				`---\n$1$2-publish: ${state}$3\n---`
 			)
 		})
 	}
-}
-
-const BUILTIN_PROPS: Property[] = [
-	{
-		name: "wiki-publish",
-		description: "Choose whether this note is published or not.",
-		valueType: "true/false",
-		defaultValue: "true",
-	},
-	{
-		name: "wiki-home",
-		description:
-			"Set this note as the front page. Can only be set to one note.",
-		valueType: "true/false",
-		defaultValue: "true",
-	},
-	{
-		name: "wiki-title",
-		description:
-			"Set your page title independently from this note's file name.",
-		valueType: "text",
-		defaultValue: "",
-	},
-	{
-		name: "wiki-allowed-users",
-		description:
-			"A list of users who can see this note. It will be hidden to everyone else.",
-		valueType:
-			"case-insensitive, comma-separated list of usernames (e.g. Jacob123, TheLegend27, bob)",
-		defaultValue: "",
-	},
-]
-
-class PropertyModal extends SuggestModal<Property> {
-	editor: Editor
-
-	constructor(app: App, editor: Editor) {
-		super(app)
-		this.editor = editor
-	}
-
-	getSuggestions(query: string): Property[] | Promise<Property[]> {
-		return BUILTIN_PROPS.filter((prop) =>
-			prop.name.includes(query.toLocaleLowerCase())
-		)
-	}
-
-	renderSuggestion(value: Property, el: HTMLElement) {
-		el.createEl("div", { text: value.name })
-		el.createEl("small", { text: value.description }).style.display =
-			"block"
-		el.createEl("small", { text: `Accepted values: ${value.valueType}` })
-	}
-
-	onChooseSuggestion(
-		selectedProp: Property,
-		_evt: MouseEvent | KeyboardEvent
-	) {
-		const props = getPropertiesFromEditor(this.editor)
-		props.set(selectedProp.name, selectedProp.defaultValue)
-		let newProps = "---\n"
-		for (const [k, v] of props.entries()) {
-			newProps += `${k}: ${v}\n`
-		}
-		newProps += "---"
-
-		replacePropertiesFromEditor(this.editor, newProps)
-
-		new Notice(`Added ${selectedProp.name}`)
-	}
-}
-
-export function addWikiProperty(app: App, editor: Editor) {
-	new PropertyModal(app, editor).open()
 }

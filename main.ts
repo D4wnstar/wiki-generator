@@ -1,11 +1,6 @@
 import { SupabaseClient } from "@supabase/supabase-js"
 import { Notice, Plugin, Vault } from "obsidian"
-import {
-	addWikiProperty,
-	massAddPublish,
-	massSetPublishState,
-	uploadNotes,
-} from "src/commands"
+import { massAddPublish, massSetPublishState, uploadNotes } from "src/commands"
 import { uploadConfig } from "src/config"
 import { Database } from "src/database/database.types"
 import { initializeDatabase } from "src/database/init"
@@ -16,7 +11,8 @@ import {
 	WikiGeneratorSettingTab,
 	WikiGeneratorSettings,
 } from "src/settings"
-import { createClientWrapper } from "src/database/requests"
+import { createClientWrapper, getProfiles } from "src/database/requests"
+import { PropertyModal, UserListModal } from "src/modals"
 
 /**
  * A global reference to the vault to avoid having to pass it down the whole call stack.
@@ -27,7 +23,6 @@ export let globalVault: Vault
  * A global reference to the Supabase client to avoid having to pass it down the whole call stack.
  */
 export let supabase: SupabaseClient<Database>
-
 
 export default class WikiGeneratorPlugin extends Plugin {
 	settings: WikiGeneratorSettings
@@ -45,10 +40,21 @@ export default class WikiGeneratorPlugin extends Plugin {
 		// sets the database connection URL
 		if (settings.firstUsage && settings.databaseUrl) {
 			new Notice("Setting up the database...")
-			initializeDatabase(settings.databaseUrl)
-			settings.firstUsage = false
-			await this.saveSettings()
-			new Notice("Database fully set up!")
+			try {
+				initializeDatabase(settings.databaseUrl)
+				settings.firstUsage = false
+				await this.saveSettings()
+				new Notice("Database fully set up!")
+			} catch (e) {
+				new Notice(
+					"The following error occured when initializing the database:",
+					e.message
+				)
+				console.error(
+					"The following error occured when initializing the database:",
+					e.message
+				)
+			}
 		}
 
 		// Create the Supabase client on startup
@@ -84,7 +90,9 @@ export default class WikiGeneratorPlugin extends Plugin {
 		// if the user allows it in the settings
 		workspace.onLayoutReady(() => {
 			this.registerEvent(
-				this.app.vault.on("create", () => autopublishNotes(settings, workspace))
+				this.app.vault.on("create", () =>
+					autopublishNotes(settings, workspace)
+				)
 			)
 		})
 
@@ -131,7 +139,14 @@ export default class WikiGeneratorPlugin extends Plugin {
 			id: "add-update-wiki-property",
 			name: "Add or update Wiki property",
 			editorCallback: (editor, _view) =>
-				addWikiProperty(this.app, editor),
+				new PropertyModal(this.app, editor).open(),
+		})
+
+		this.addCommand({
+			id: "get-user-list",
+			name: "Get list of registered users",
+			callback: async () =>
+				new UserListModal(this.app, await getProfiles()).open(),
 		})
 
 		this.addSettingTab(new WikiGeneratorSettingTab(this.app, this))

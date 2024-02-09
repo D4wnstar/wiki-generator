@@ -39,7 +39,7 @@ export function slugifyPath(path: string): string {
 export function partition(text: string, splitter: string): string[] {
 	const split = text.split(splitter)
 	const length = split.length
-	for (let i=1; i < length; i++) {
+	for (let i = 1; i < length; i++) {
 		split.splice(i, 0, splitter)
 	}
 	return split
@@ -52,7 +52,7 @@ export function partition(text: string, splitter: string): string[] {
  */
 export function joinChunks(chunks: ContentChunk[]): string {
 	let out = ""
-	chunks.forEach((chunk) => out += chunk.text)
+	chunks.forEach((chunk) => (out += chunk.text))
 	return out
 }
 
@@ -69,7 +69,17 @@ export function resolveTFolder(folderPath: string) {
 	}
 }
 
-export function getFilesFromFolders(folders: string[] | string) {
+/**
+ * Get all files in the vault within the given array of folders. Optionally give some
+ * additional folders to filter out.
+ * @param folders The folders to get files from
+ * @param privateFolders Optional argument. Files within these folders won't be returned
+ * @returns An array of TFile objects
+ */
+export function getFilesFromFolders(
+	folders: string[] | string,
+	privateFolders?: string[]
+) {
 	const files: TFile[] = []
 	if (folders instanceof String) {
 		folders = <string[]>[folders]
@@ -77,19 +87,29 @@ export function getFilesFromFolders(folders: string[] | string) {
 	for (const folder of folders) {
 		const folderObj = resolveTFolder(folder)
 		Vault.recurseChildren(folderObj, (file) => {
-			if (file instanceof TFile) files.push(file)
+			if (file instanceof TFile) {
+				if (
+					privateFolders &&
+					privateFolders.some((path) => file.path.startsWith(path))
+				) {
+					return
+				}
+
+				files.push(file)
+			}
 		})
 	}
 
 	return files
 }
 
-export function getPublishableFiles(
-	settings: WikiGeneratorSettings
-) {
+export function getPublishableFiles(settings: WikiGeneratorSettings) {
 	let notes: TFile[]
 	if (settings.restrictFolders) {
-		notes = getFilesFromFolders(settings.publishedFolders)
+		notes = getFilesFromFolders(
+			settings.publicFolders,
+			settings.privateFolders
+		)
 	} else {
 		notes = globalVault.getMarkdownFiles()
 	}
@@ -99,22 +119,22 @@ export function getPublishableFiles(
 
 export function getPropertiesFromEditor(editor: Editor): Map<string, string> {
 	const contents = editor.getValue()
-    const match = contents.match(/^---\n(.*?)\n---/s)
-    if (!match) return new Map()
+	const match = contents.match(/^---\n(.*?)\n---/s)
+	if (!match) return new Map()
 
-    const propsStrings = match[1].split("\n")
-    const props = new Map<string, string>()
-    for (const prop of propsStrings) {
-        const [k, v] = prop.split(": ")
-        props.set(k, v)
-    }
+	const propsStrings = match[1].split("\n")
+	const props = new Map<string, string>()
+	for (const prop of propsStrings) {
+		const [k, v] = prop.split(": ")
+		props.set(k, v)
+	}
 
 	return props
 }
 
 export function replacePropertiesFromEditor(editor: Editor, newProps: string) {
 	// Scuffed way to change properties. Why is there no API for this lmao
-	
+
 	// Check if there are any properties
 	const startPos = { line: 0, ch: 0 }
 	if (editor.getLine(0) !== "---") {

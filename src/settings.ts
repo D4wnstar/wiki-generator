@@ -8,7 +8,8 @@ export interface WikiGeneratorSettings {
 	wikiTitle: string
 	autopublishNotes: boolean
 	restrictFolders: boolean
-	publishedFolders: string[]
+	publicFolders: string[]
+	privateFolders: string[]
 	databaseUrl: string
 	supabaseApiUrl: string
 	supabaseAnonKey: string
@@ -31,7 +32,8 @@ export const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 	wikiTitle: "Awesome Wiki",
 	autopublishNotes: true,
 	restrictFolders: false,
-	publishedFolders: [],
+	publicFolders: [],
+	privateFolders: [],
 	databaseUrl: "",
 	supabaseApiUrl: "",
 	supabaseAnonKey: "",
@@ -95,7 +97,8 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 
 		const folderDesc = document.createDocumentFragment()
 		folderDesc.append(
-			"Set folders to publish notes from. Commands and settings that automatically set publish state, such as the above Autopublish New Notes, will only apply to notes created and present in these folders.",
+			"Set folders to publish notes from. Commands and settings that automatically set publish state, such as the above Autopublish New Notes, will only apply to notes created and present in these folders. Note that the 'wiki-publish' property has the final say on whether the note gets published or not, regardless of what folder it's in.",
+			folderDesc.createEl("br"),
 			folderDesc.createEl("br"),
 			"You must provide the full path to the folder, separated by forward slashes. For example:",
 			folderDesc.createEl("br"),
@@ -105,27 +108,27 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			' If you right click on a folder and press "Search in Folder", you can copy and paste the search parameter it gives you after path: (without the quotes!) and use it here.'
 		)
 		new Setting(containerEl)
-			.setName("Folders To Publish")
+			.setName("Public Folders")
 			.setDesc(folderDesc)
 			.addButton((button) => {
 				button
 					.setButtonText("Add folder")
 					.setCta()
 					.onClick(async () => {
-						settings.publishedFolders.push("")
+						settings.publicFolders.push("")
 						await this.plugin.saveSettings()
 						this.display()
 					})
 			})
 
-		settings.publishedFolders.forEach((folder, index) => {
+		settings.publicFolders.forEach((folder, index) => {
 			new Setting(containerEl)
 				.addText((text) => {
 					text.setPlaceholder("Add folder...")
 						.setValue(folder)
 						.onChange(async (newFolder) => {
 							newFolder = newFolder.replace(/\/$/, "")
-							settings.publishedFolders[index] = newFolder
+							settings.publicFolders[index] = newFolder
 							await this.plugin.saveSettings()
 						})
 
@@ -138,7 +141,50 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 						.setIcon("x")
 						.setTooltip("Remove folder")
 						.onClick(async () => {
-							settings.publishedFolders.splice(index, 1)
+							settings.publicFolders.splice(index, 1)
+							await this.plugin.saveSettings()
+							this.display()
+						})
+				})
+		})
+
+		new Setting(containerEl)
+			.setName("Private Folders")
+			.setDesc(
+				'Set folders to NOT publish notes from. Works exactly as above, but in reverse. Use this as a way to filter out some things from Public Folders, as in "Publish everything in here, except..."'
+			)
+			.addButton((button) => {
+				button
+					.setButtonText("Add folder")
+					.setCta()
+					.onClick(async () => {
+						settings.privateFolders.push("")
+						await this.plugin.saveSettings()
+						this.display()
+					})
+			})
+
+		settings.privateFolders.forEach((folder, index) => {
+			new Setting(containerEl)
+				.addText((text) => {
+					text.setPlaceholder("Add folder...")
+						.setValue(folder)
+						.onChange(async (newFolder) => {
+							newFolder = newFolder.replace(/\/$/, "")
+							settings.privateFolders[index] = newFolder
+							await this.plugin.saveSettings()
+						})
+
+					const parentDiv = text.inputEl.parentElement
+					if (parentDiv) parentDiv.style.width = "100%"
+					text.inputEl.style.width = "100%"
+				})
+				.addExtraButton((button) => {
+					button
+						.setIcon("x")
+						.setTooltip("Remove folder")
+						.onClick(async () => {
+							settings.privateFolders.splice(index, 1)
 							await this.plugin.saveSettings()
 							this.display()
 						})
@@ -288,7 +334,6 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					})
 			})
 
-
 		new Setting(containerEl)
 			.setName("Check For Updates On Startup")
 			.setDesc(
@@ -333,7 +378,9 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 								new Notice("Your website is now up to date.")
 							}
 						} else {
-							new Notice("Please set your GitHub username, repository and token.")
+							new Notice(
+								"Please set your GitHub username, repository and token."
+							)
 						}
 					})
 			})

@@ -10,14 +10,21 @@ export function autopublishNotes(
 	setTimeout(() => {
 		const view = workspace.getActiveViewOfType(MarkdownView)
 		if (s.autopublishNotes && view) {
-			const fileFolder = view.file?.path.match(/.*(?=\/)/)?.[0]
-            if (!fileFolder) return
+			const filepath = view.file?.path
+			if (!filepath) return
 
-			const isInPublishedFolder = s.publishedFolders.some((path) =>
-				fileFolder.includes(path)
+			const isInPublishedFolder = s.publicFolders.some((publicPath) =>
+				filepath.startsWith(publicPath)
 			)
-			
-            if (!s.restrictFolders || isInPublishedFolder) {
+
+			const isInPrivateFolder = s.privateFolders.some((privatePath) =>
+				filepath.startsWith(privatePath)
+			)
+
+			if (
+				!s.restrictFolders ||
+				(isInPublishedFolder && !isInPrivateFolder)
+			) {
 				view.editor.replaceRange(
 					"---\nwg-publish: true\n---\n",
 					view.editor.getCursor()

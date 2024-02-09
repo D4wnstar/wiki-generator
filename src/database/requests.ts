@@ -1,4 +1,6 @@
 import { SupabaseClient, createClient } from "@supabase/supabase-js"
+import { supabase } from "main"
+import { Notice } from "obsidian"
 import { DatabaseError } from "src/notes/types"
 import { WikiGeneratorSettings } from "src/settings"
 
@@ -40,4 +42,17 @@ export async function getFilesInStorage(supabase: SupabaseClient) {
 	}
 
 	return mediaInStorage
+}
+
+export async function getProfiles() {
+	const { data, error } = await supabase.from("profiles").select("*")
+	if (error) {
+		new Notice(
+			`There was an error fetching the users.\nError: ${error.message}`
+		)
+		console.error(`There was an error fetching the users.\nError: ${error.message}`)
+		return []
+	}
+
+	return data.sort((a, b) => a.username.localeCompare(b.username))
 }
