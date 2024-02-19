@@ -297,15 +297,40 @@ async function applySecurityPolicies(sql: Sql) {
     try {
         // Profiles aren't reset and there is no "create or replace policy" command
         // so this is a workaround
-        const profilesPolicy = await sql`
-            create policy "Profiles are visible only to the owner of the profiles"
+        const profilesPolicySelect = await sql`
+            create policy "Public profiles are visible to everyone"
             on profiles for select
-            to authenticated
-            using ( auth.uid() = id );
+            to anon, authenticated
+            using ( true );
         `
-        console.log(profilesPolicy)
+        console.log(profilesPolicySelect)
     } catch (error) {
         if (!error.message.includes("already exists")) throw error
+    }
+
+    try {
+        const profilesPolicyUpdate = await sql`
+            create policy "Users can update their own profile"
+            on profiles for update
+            to authenticated
+            using ( (select auth.uid()) = id )
+            with check ( (select auth.uid()) = id );
+        `
+        console.log(profilesPolicyUpdate)
+    } catch (error) {
+        if (!error.message.includes("already exists")) throw error   
+    }
+    
+    try {
+        const profilesPolicyDelete = await sql`
+            create policy "Users can delete their own profile"
+            on profiles for delete
+            to authenticated
+            using ( (select auth.uid()) = id );
+        `
+        console.log(profilesPolicyDelete)
+    } catch (error) {
+        if (!error.message.includes("already exists")) throw error   
     }
 }
 
