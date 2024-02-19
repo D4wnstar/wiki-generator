@@ -82,7 +82,7 @@ async function setupInitialSchema(sql: Sql) {
 
 	const note_contents = await sql`
         create table if not exists note_contents (
-            note_id integer not null references notes (id),
+            note_id integer not null references notes (id) on delete cascade,
             chunk_id integer not null,
             "text" text not null,
             allowed_users text array,
@@ -93,7 +93,7 @@ async function setupInitialSchema(sql: Sql) {
 
     const backreferences = await sql`
         create table if not exists backreferences (
-            note_id integer not null references notes (id),
+            note_id integer not null references notes (id) on delete cascade,
             slug text not null,
             display_name text not null,
             primary key (note_id, slug)
@@ -103,7 +103,7 @@ async function setupInitialSchema(sql: Sql) {
 
 	const details = await sql`
         create table if not exists details (
-            note_id integer not null references notes (id),
+            note_id integer not null references notes (id) on delete cascade,
             detail_name text not null,
             detail_content text not null,
             primary key (note_id, detail_name)
@@ -113,7 +113,7 @@ async function setupInitialSchema(sql: Sql) {
 
 	const sidebar_images = await sql`
         create table if not exists sidebar_images (
-            note_id integer not null references notes (id),
+            note_id integer not null references notes (id) on delete cascade,
             image_name text not null,
             url text,
             caption text,
@@ -143,7 +143,7 @@ async function setupInitialSchema(sql: Sql) {
 
 	const profiles = await sql`
         create table if not exists profiles (
-            id uuid primary key,
+            id uuid primary key references auth.users on delete cascade,
             email text not null unique,
             username text not null unique,
             groups text array
@@ -197,29 +197,6 @@ async function setupInitialSchema(sql: Sql) {
         execute function sync_update_profiles();
     `
     console.log(profileUpdateSyncTrigger)
-    
-    const profileDeleteSyncTriggerFunc = await sql`
-        create or replace function sync_delete_profiles()
-        returns trigger
-        language plpgsql
-        security definer set search_path = public
-        as $$
-        begin
-            delete from profiles
-            where id = new.id;
-            return new;
-        end;
-        $$;
-    `
-    console.log(profileDeleteSyncTriggerFunc)
-
-    const profileDeleteSyncTrigger = await sql`
-        create or replace trigger sync_delete_profiles_trigger
-        after delete on auth.users
-        for each row
-        execute function sync_delete_profiles();
-    `
-    console.log(profileDeleteSyncTrigger)
 }
 
 /**
