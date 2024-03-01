@@ -43,22 +43,30 @@ export async function convertNotesAndUpload(
 	const uploadedNotes = await uploadNotes(notes)
 	await uploadExtraInfo(notes, uploadedNotes)
 
+	// NOTE: Currently, all the notes are deleted every time the user uploads their notes.
+	// It's a little inefficient, as it's a lot of technically unnecessary DELETE and INSERT
+	// operations, but since all relevant tables are ON DELETE CASCADE, deleting the notes
+	// guarantees effortless database synchronization. Manually updating and deleting orphan
+	// references based on which notes were deleted is probably more efficient, but not enough
+	// to justify pursuing this method, considering how many problems it showed during previous
+	// development. Old deletion code is probably going to remain here just in case.
+
 	// Clean up remote notes by removing ones that have been deleted or set to unpublished locally
-	const notesToDelete = await getNotesToDelete(notes)
+	// const notesToDelete = await getNotesToDelete(notes)
 
-	if (notesToDelete.length > 0) {
-		console.log("Syncing notes...")
-		new Notice("Syncing notes...")
-		const deletedNotes = await deleteUnusedNotes(notesToDelete)
+	// if (notesToDelete.length > 0) {
+	// 	console.log("Syncing notes...")
+	// 	new Notice("Syncing notes...")
+	// 	const deletedNotes = await deleteUnusedNotes(notesToDelete)
 
-		if (deletedNotes.length > 0) {
-			console.log(
-				`Deleted the following notes to keep the database synchronized: ${deletedNotes.map(
-					(note) => note.slug
-				)}`
-			)
-		}
-	}
+	// 	if (deletedNotes.length > 0) {
+	// 		console.log(
+	// 			`Deleted the following notes to keep the database synchronized: ${deletedNotes.map(
+	// 				(note) => note.slug
+	// 			)}`
+	// 		)
+	// 	}
+	// }
 
 	// Clean up remote files by removing ones that have been deleted locally
 	// TODO: Also remove files that are no longer referenced by any note
@@ -66,13 +74,6 @@ export async function convertNotesAndUpload(
 		file.name.replace(/\..*$/, ".webp")
 	)
 	await deleteUnusedMedia(localMediaCorrectExt)
-
-	// Finally, send a request to Vercel to rebuild the website
-	if (deployHookUrl) {
-		console.log("Deploying the website...")
-		new Notice("Deploying the website...")
-		await request(deployHookUrl)
-	}
 }
 
 function checkFrontpageUniqueness(notes: Note[]) {
@@ -94,6 +95,13 @@ function checkFrontpageUniqueness(notes: Note[]) {
 }
 
 async function uploadNotes(notes: Note[]) {
+	const { error: nukeError } = await supabase
+		.from('notes')
+		.delete()
+		.gt('id', 0)
+
+	if (nukeError) throw new DatabaseError(nukeError.message)
+
 	const { data: uploadedNotes, error } = await supabase
 		.from("notes")
 		.upsert(
@@ -192,6 +200,7 @@ async function uploadExtraInfo(notes: Note[], uploadedNotes: DatabaseNote[]) {
 	if (imagesError) throw new DatabaseError(imagesError.message)
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function getNotesToDelete(notes: Note[]) {
 	const notesToDelete = []
 	const { data: storedNotes, error: retrievalError } = await supabase.from(
@@ -216,6 +225,7 @@ async function getNotesToDelete(notes: Note[]) {
 	return notesToDelete
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function deleteUnusedNotes(notesToDelete: DatabaseNote[]) {
 	const slugsToDelete = notesToDelete.map((note) => note.slug)
 	const idsToDelete = notesToDelete.map((note) => note.id)

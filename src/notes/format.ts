@@ -3,15 +3,12 @@ import { uploadImage } from "./wikilinks"
 import * as MarkdownIt from "markdown-it"
 import hljs from "highlight.js"
 import { calloutIcons, partition, slugifyPath } from "../utils"
-import {
-	NoteProperties,
-	SidebarImage,
-	Note,
-	ContentChunk,
-} from "./types"
+import { NoteProperties, SidebarImage, Note, ContentChunk } from "./types"
 import { globalVault } from "main"
 
-export async function vaultToNotes(converter: MarkdownIt): Promise<[Note[], TFile[]]> {
+export async function vaultToNotes(
+	converter: MarkdownIt
+): Promise<[Note[], TFile[]]> {
 	const notes: Note[] = []
 	// Get the non-markdown media first
 	let files = globalVault.getFiles()
@@ -153,7 +150,7 @@ function replaceCallouts(
 	_match: string,
 	type: string,
 	title: string,
-	content: string
+	content: string,
 ) {
 	let color: string
 	let svg: string
@@ -226,7 +223,16 @@ function replaceCallouts(
 			break
 	}
 
-	return `<div class="callout-${color}"><div class="flex"><div class="w-8 stroke-${color}-400">${svg}</div><div class="pb-2"><strong>${title}</strong></div></div><p>${content}</p></div>`
+	content = content
+		.split("\n")
+		.map((line) => {
+			line = line.replace(/^> */, "")
+			return `<p>${line}</p>`
+		})
+		.filter((line) => line !== "<p></p>")
+		.join("\n")
+
+	return `<div class="callout-${color}"><div class="flex"><div class="w-8 stroke-${color}-400">${svg}</div><div class="pb-2"><strong>${title}</strong></div></div><section class="space-y-4">${content}</section></div>`
 }
 
 function highlightCode(_match: string, lang: string, code: string) {
@@ -256,7 +262,8 @@ function chunkMd(md: string, allowedUsers: string[]): ContentChunk[] {
 	const privateChunks = Array.from(
 		md.matchAll(/^:::private\s*\((.*?)\)\n(.*?)\n:::/gms)
 	)
-	if (privateChunks.length === 0) return [{ chunk_id: 1, text: md, allowed_users: allowedUsers }]
+	if (privateChunks.length === 0)
+		return [{ chunk_id: 1, text: md, allowed_users: allowedUsers }]
 
 	// Unwrap the tags and keep only the inner content
 	md = md.replace(/^:::private\s*\((.*?)\)\n(.*?)\n:::/gms, "$2")
@@ -296,7 +303,7 @@ async function formatMd(
 	media: TFile[]
 ): Promise<{
 	chunks: ContentChunk[]
-	lead: string,
+	lead: string
 	props: NoteProperties
 	details: Map<string, string>
 	sidebarImgs: SidebarImage[]
@@ -337,15 +344,14 @@ async function formatMd(
 	// TODO: Remove the whole GM paragraph thing
 	md = md.replace(/^#+ GM.*?(?=^#|$(?![\r\n]))/gms, "") // Remove GM paragraphs
 	md = md.replace(
-		/> \[!(\w+)\](?:\s*(.+)(?:\n>\s*(.*))?)?/g, // Replace callouts
+		/^> +\[!(\w+)\] *(.*)(?:\n(>[^]*?))?(?=\n[^>])/gm, // Replace callouts
 		replaceCallouts
 	)
 	md = md.replace(/^```(\w*)\n(.*?)\n```/gms, highlightCode) // Highlight code blocks
 
 	// Get everything until the first header as the lead
 	const match = md.match(/\n*#*(.+?)(?=#)/s)
-	let lead = md
-	if (match) lead = match[1]
+	let lead = match ? match[1] : md
 	// Remove wikilinks from lead
 	lead = lead.replace(/\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/g, "$1")
 	lead = lead.replace(/!\[\[(.*?)\]\]/g, "")
@@ -375,10 +381,7 @@ function fixHtml(html: string): string {
 		'<a$1 class="anchor" target="_blank">$2</a>'
 	)
 	// Add tailwind classes to blockquotes, code and lists
-	html = html.replace(
-		/<blockquote>/g,
-		'<blockquote class="blockquote">'
-	)
+	html = html.replace(/<blockquote>/g, '<blockquote class="blockquote">')
 	html = html.replace(
 		/<ul(.*?)>/g,
 		'<ul$1 class="list-disc list-inside indent-cascade">'

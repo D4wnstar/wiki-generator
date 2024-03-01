@@ -212,13 +212,13 @@ function handleNoteTransclusion(wl: Wikilink, notes: Note[]) {
 			console.warn(
 				`Could not find header ${wl.header} in note ${wl.title}`
 			)
-			refTitle = wl.altName ?? refNote.title
+			refTitle = wl.altName ?? refNote.properties.alt_title ?? wl.title
 			refContent = joinChunks(refNote.content)
 			allowedUsers = refNote.properties.allowed_users
 		}
 	} else {
 		// Otherwise grab the entire note
-		refTitle = wl.altName ?? refNote.title
+		refTitle = wl.altName ?? refNote.properties.alt_title ?? wl.title
 		refContent = joinChunks(refNote.content)
 		allowedUsers = refNote.properties.allowed_users
 	}
@@ -238,6 +238,8 @@ function handleNoteReference(wl: Wikilink, note: Note, notes: Note[]): string {
 		return wl.altName ?? wl.title
 	}
 
+	const refName = wl.altName ?? refNote.properties.alt_title ?? wl.title
+
 	if (!backrefAlreadyExists(note.title, note.slug, refNote.backreferences)) {
 		refNote.backreferences.push({
 			displayName: note.title,
@@ -250,9 +252,7 @@ function handleNoteReference(wl: Wikilink, note: Note, notes: Note[]): string {
 	// TODO: Add handling of block references
 	const headerLink =
 		wl.header && !wl.isBlockRef ? `#${slugifyPath(wl.header)}` : ""
-	return `<a href="/${refNote.slug}${headerLink}" class="anchor popup">${
-		wl.altName ?? wl.title
-	}</a>`
+	return `<a href="/${refNote.slug}${headerLink}" class="anchor popup">${refName}</a>`
 }
 
 async function handleFile(
@@ -335,7 +335,11 @@ async function getTransclusionReplacements(
 
 	if (wikilink.isMedia) {
 		return {
-			replacement: await handleFile(wikilink.title, wikilink.altName, true),
+			replacement: await handleFile(
+				wikilink.title,
+				wikilink.altName,
+				true
+			),
 			type: "file",
 			allowed_users: [],
 		}
@@ -414,9 +418,11 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 			)
 			// then get their replacements
 			const refReplacements = await Promise.all(
-				references.map((ref) => getReferenceReplacements(ref, note, notes))
+				references.map((ref) =>
+					getReferenceReplacements(ref, note, notes)
+				)
 			)
-	
+
 			// and finally actually replace them
 			for (const index in references) {
 				chunk.text = chunk.text.replace(
@@ -441,7 +447,7 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 					getTransclusionReplacements(trans, note, notes)
 				)
 			)
-	
+
 			for (const index in transclusions) {
 				if (transReplacements[index].type === "note") {
 					// TODO: Add transclusion authorization
@@ -449,12 +455,12 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 					const partObj = part.map((p) => {
 						return {
 							text: p,
-							allowed_users: chunk.allowed_users
+							allowed_users: chunk.allowed_users,
 						}
 					})
 					partObj.splice(1, 0, {
 						text: transReplacements[index].replacement,
-						allowed_users: transReplacements[index].allowed_users
+						allowed_users: transReplacements[index].allowed_users,
 					})
 					const newChunks = partObj.map((obj, i) => {
 						return {
@@ -463,11 +469,10 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 						}
 					})
 					note.content.splice(chunk.chunk_id - 1, 1, ...newChunks)
-				}
-				else {
+				} else {
 					chunk.text = chunk.text.replace(
 						transclusions[index].fullLink,
-						transReplacements[index].replacement,
+						transReplacements[index].replacement
 					)
 				}
 			}
@@ -477,8 +482,8 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 		}
 
 		// Renumber chunks after potentially splicing them, knowing that the array order is correct
-		note.content.forEach((chunk, index) => chunk.chunk_id = index + 1)
-	
+		note.content.forEach((chunk, index) => (chunk.chunk_id = index + 1))
+
 		// Then, replace references in the details. Details should not have transclusion
 		// because they don't fit in the UI
 		for (const [key, value] of note.details.entries()) {
@@ -505,6 +510,6 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 
 		convertedNotes.push(note)
 	}
-	
+
 	return convertedNotes
 }
