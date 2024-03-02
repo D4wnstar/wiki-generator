@@ -238,11 +238,12 @@ function handleNoteReference(wl: Wikilink, note: Note, notes: Note[]): string {
 		return wl.altName ?? wl.title
 	}
 
+	const thisName = note.properties.alt_title ?? note.title
 	const refName = wl.altName ?? refNote.properties.alt_title ?? wl.title
 
-	if (!backrefAlreadyExists(note.title, note.slug, refNote.backreferences)) {
+	if (!backrefAlreadyExists(thisName, note.slug, refNote.backreferences)) {
 		refNote.backreferences.push({
-			displayName: note.title,
+			displayName: thisName,
 			slug: note.slug,
 		})
 	}
