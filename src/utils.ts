@@ -73,12 +73,12 @@ export function resolveTFolder(folderPath: string) {
  * Get all files in the vault within the given array of folders. Optionally give some
  * additional folders to filter out.
  * @param folders The folders to get files from
- * @param privateFolders Optional argument. Files within these folders won't be returned
+ * @param secretFolders Optional argument. Files within these folders won't be returned
  * @returns An array of TFile objects
  */
 export function getFilesFromFolders(
 	folders: string[] | string,
-	privateFolders?: string[]
+	secretFolders?: string[]
 ) {
 	const files: TFile[] = []
 	if (folders instanceof String) {
@@ -89,8 +89,8 @@ export function getFilesFromFolders(
 		Vault.recurseChildren(folderObj, (file) => {
 			if (file instanceof TFile) {
 				if (
-					privateFolders &&
-					privateFolders.some((path) => file.path.startsWith(path))
+					secretFolders &&
+					secretFolders.some((path) => file.path.startsWith(path))
 				) {
 					return
 				}
@@ -108,7 +108,7 @@ export function getPublishableFiles(settings: WikiGeneratorSettings) {
 	if (settings.restrictFolders) {
 		notes = getFilesFromFolders(
 			settings.publicFolders,
-			settings.privateFolders
+			settings.secretFolders
 		)
 	} else {
 		notes = globalVault.getMarkdownFiles()

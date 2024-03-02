@@ -1,6 +1,6 @@
 import { supabase } from "main"
 import markdownit from "markdown-it"
-import { Notice, request } from "obsidian"
+import { Notice } from "obsidian"
 import { supabaseMedia, localMedia } from "src/config"
 import { setupMediaBucket } from "src/database/init"
 import { vaultToNotes } from "./format"

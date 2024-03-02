@@ -259,19 +259,19 @@ function highlightCode(_match: string, lang: string, code: string) {
  * @returns An array of chunks with metadata
  */
 function chunkMd(md: string, allowedUsers: string[]): ContentChunk[] {
-	const privateChunks = Array.from(
-		md.matchAll(/^:::private\s*\((.*?)\)\n(.*?)\n:::/gms)
+	const secretChunks = Array.from(
+		md.matchAll(/^:::secret\s*\((.*?)\)\n(.*?)\n:::/gms)
 	)
-	if (privateChunks.length === 0)
+	if (secretChunks.length === 0)
 		return [{ chunk_id: 1, text: md, allowed_users: allowedUsers }]
 
 	// Unwrap the tags and keep only the inner content
-	md = md.replace(/^:::private\s*\((.*?)\)\n(.*?)\n:::/gms, "$2")
+	md = md.replace(/^:::secret\s*\((.*?)\)\n(.*?)\n:::/gms, "$2")
 
 	let currChunkId = 1
 	const chunks: ContentChunk[] = []
 
-	for (const match of privateChunks) {
+	for (const match of secretChunks) {
 		let currText: string
 		const users = match[1].split(",").map((s) => s.trim())
 
@@ -289,7 +289,7 @@ function chunkMd(md: string, allowedUsers: string[]): ContentChunk[] {
 				chunk_id: currChunkId,
 				text: parts[i],
 				allowed_users: parseInt(i) % 2 !== 0 ? users : allowedUsers,
-				// The way `partition` works puts all private chunks on odd indexes
+				// The way `partition` works puts all secret chunks on odd indexes
 			})
 			currChunkId += 1
 		}
@@ -356,7 +356,7 @@ async function formatMd(
 	lead = lead.replace(/\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/g, "$1")
 	lead = lead.replace(/!\[\[(.*?)\]\]/g, "")
 
-	const chunks = chunkMd(md, props.allowed_users) // Split by :::private::: blocks
+	const chunks = chunkMd(md, props.allowed_users) // Split by :::secret::: blocks
 	return {
 		chunks: chunks,
 		lead: lead,

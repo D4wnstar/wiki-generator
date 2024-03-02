@@ -17,13 +17,13 @@ export function autopublishNotes(
 				filepath.startsWith(publicPath)
 			)
 
-			const isInPrivateFolder = s.privateFolders.some((privatePath) =>
-				filepath.startsWith(privatePath)
+			const isInSecretFolder = s.secretFolders.some((secretPath) =>
+				filepath.startsWith(secretPath)
 			)
 
 			if (
 				!s.restrictFolders ||
-				(isInPublishedFolder && !isInPrivateFolder)
+				(isInPublishedFolder && !isInSecretFolder)
 			) {
 				view.editor.replaceRange(
 					"---\nwg-publish: true\n---\n",

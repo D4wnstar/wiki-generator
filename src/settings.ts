@@ -9,7 +9,7 @@ export interface WikiGeneratorSettings {
 	autopublishNotes: boolean
 	restrictFolders: boolean
 	publicFolders: string[]
-	privateFolders: string[]
+	secretFolders: string[]
 	databaseUrl: string
 	supabaseApiUrl: string
 	supabaseAnonKey: string
@@ -33,7 +33,7 @@ export const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 	autopublishNotes: true,
 	restrictFolders: false,
 	publicFolders: [],
-	privateFolders: [],
+	secretFolders: [],
 	databaseUrl: "",
 	supabaseApiUrl: "",
 	supabaseAnonKey: "",
@@ -149,7 +149,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 		})
 
 		new Setting(containerEl)
-			.setName("Private Folders")
+			.setName("Secret Folders")
 			.setDesc(
 				'Set folders to NOT publish notes from. Works exactly as above, but in reverse. Use this as a way to filter out some things from Public Folders, as in "Publish everything in here, except..."'
 			)
@@ -158,20 +158,20 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					.setButtonText("Add folder")
 					.setCta()
 					.onClick(async () => {
-						settings.privateFolders.push("")
+						settings.secretFolders.push("")
 						await this.plugin.saveSettings()
 						this.display()
 					})
 			})
 
-		settings.privateFolders.forEach((folder, index) => {
+		settings.secretFolders.forEach((folder, index) => {
 			new Setting(containerEl)
 				.addText((text) => {
 					text.setPlaceholder("Add folder...")
 						.setValue(folder)
 						.onChange(async (newFolder) => {
 							newFolder = newFolder.replace(/\/$/, "")
-							settings.privateFolders[index] = newFolder
+							settings.secretFolders[index] = newFolder
 							await this.plugin.saveSettings()
 						})
 
@@ -184,7 +184,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 						.setIcon("x")
 						.setTooltip("Remove folder")
 						.onClick(async () => {
-							settings.privateFolders.splice(index, 1)
+							settings.secretFolders.splice(index, 1)
 							await this.plugin.saveSettings()
 							this.display()
 						})
