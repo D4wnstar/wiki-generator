@@ -368,6 +368,9 @@ ${groups[4]}\
 }
 
 function matchWikilinks(text: string) {
+	// Remove code blocks to avoid matching links in them
+	text = text.replace(/<code.*?>.*?<\/code>/gm, "")
+	text = text.replace(/<div class="codeblock-base">.*?<\/div>/gm, "")
 	const wikilinkRegex = /(!)?\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/g
 	const matches = [...text.matchAll(wikilinkRegex)]
 
@@ -389,7 +392,7 @@ function matchWikilinks(text: string) {
 
 		wikilink.title = match[2]
 
-		if (match[2].match(/\..*$/)) wikilink.isMedia = true
+		if (match[2].match(/\.\w+$/)) wikilink.isMedia = true
 
 		if (match[3]) {
 			if (match[3].startsWith("#^")) {

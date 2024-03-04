@@ -47,6 +47,75 @@ export async function vaultToNotes(
 	return [notes, media]
 }
 
+async function formatMd(
+	md: string,
+	media: TFile[]
+): Promise<{
+	chunks: ContentChunk[]
+	lead: string
+	props: NoteProperties
+	details: Map<string, string>
+	sidebarImgs: SidebarImage[]
+}> {
+	// Collect all properties
+	const propsRegex = /^---\r?\n(.*?)\r?\n---/s
+	const propsMatch = md.match(propsRegex)
+	let props: NoteProperties = {
+		publish: false,
+		frontpage: false,
+		alt_title: undefined,
+		allowed_users: [],
+	}
+	if (propsMatch) {
+		props = parseProperties(propsMatch[1]) // Save some properties before removing them
+		md = md.replace(propsRegex, "") // Remove obsidian properties
+	}
+
+	// Find the first occurence of :::details:::
+	const detailsRegex = /^:::details\n(.*?)\n:::/ms
+	const detailsMatch = md.match(detailsRegex)
+	let details = new Map<string, string>()
+	if (detailsMatch) {
+		details = parseDetails(detailsMatch[1])
+		md = md.replace(detailsRegex, "") // Remove details from the main page
+	}
+
+	// Find all occurences of :::image:::
+	const imageRegex = /^:::image\n(.*?)\n:::/gms
+	const imageMatch = md.matchAll(imageRegex)
+	const sidebarImages: SidebarImage[] = []
+	for (const match of imageMatch) {
+		sidebarImages.push(await parseImage(match, media))
+		md = md.replace(match[0], "")
+	}
+
+	md = md.replace(/^:::hidden\n.*?\n:::/gms, "") // Remove :::hidden::: blocks
+	// TODO: Remove the whole GM paragraph thing
+	md = md.replace(/^#+ GM.*?(?=^#|$(?![\r\n]))/gms, "") // Remove GM paragraphs
+	md = md.replace(
+		/^> +\[!(\w+)\] *(.*)(?:\n(>[^]*?))?(?=\n[^>])/gm, // Replace callouts
+		replaceCallouts
+	)
+	md = md.replace(/^```(\w*)\n(.*?)\n```/gms, highlightCode) // Highlight code blocks
+	// md = md.replace(/`(.+?)`/g, (_, text) => `\`${unwrapWikilinks(text)}\``) // Remove links from inline code
+
+	// Get everything until the first header as the lead
+	const match = md.match(/\n*#*(.+?)(?=#)/s)
+	let lead = match ? match[1] : md
+
+	// Remove wikilinks from lead
+	lead = unwrapWikilinks(lead, { removeTransclusions: true })
+
+	const chunks = chunkMd(md, props.allowed_users) // Split by :::secret::: blocks
+	return {
+		chunks: chunks,
+		lead: lead,
+		props: props,
+		details: details,
+		sidebarImgs: sidebarImages,
+	}
+}
+
 function parseProperties(match: string): NoteProperties {
 	const props: NoteProperties = {
 		publish: false,
@@ -150,7 +219,7 @@ function replaceCallouts(
 	_match: string,
 	type: string,
 	title: string,
-	content: string,
+	content: string
 ) {
 	let color: string
 	let svg: string
@@ -240,7 +309,11 @@ function highlightCode(_match: string, lang: string, code: string) {
 	const langs = hljs.listLanguages()
 	if (lang && langs.includes(lang)) {
 		displayCode = hljs.highlight(code, { language: lang }).value
-	} else displayCode = code
+	} else {
+		displayCode = code
+	}
+
+	// displayCode = unwrapWikilinks(displayCode)
 
 	return `
 <div class="codeblock-base">
@@ -298,78 +371,10 @@ function chunkMd(md: string, allowedUsers: string[]): ContentChunk[] {
 	return chunks
 }
 
-async function formatMd(
-	md: string,
-	media: TFile[]
-): Promise<{
-	chunks: ContentChunk[]
-	lead: string
-	props: NoteProperties
-	details: Map<string, string>
-	sidebarImgs: SidebarImage[]
-}> {
-	// Collect all properties
-	const propsRegex = /^---\r?\n(.*?)\r?\n---/s
-	const propsMatch = md.match(propsRegex)
-	let props: NoteProperties = {
-		publish: false,
-		frontpage: false,
-		alt_title: undefined,
-		allowed_users: [],
-	}
-	if (propsMatch) {
-		props = parseProperties(propsMatch[1]) // Save some properties before removing them
-		md = md.replace(propsRegex, "") // Remove obsidian properties
-	}
-
-	// Find the first occurence of :::details:::
-	const detailsRegex = /^:::details\n(.*?)\n:::/ms
-	const detailsMatch = md.match(detailsRegex)
-	let details = new Map<string, string>()
-	if (detailsMatch) {
-		details = parseDetails(detailsMatch[1])
-		md = md.replace(detailsRegex, "") // Remove details from the main page
-	}
-
-	// Find all occurences of :::image:::
-	const imageRegex = /^:::image\n(.*?)\n:::/gms
-	const imageMatch = md.matchAll(imageRegex)
-	const sidebarImages: SidebarImage[] = []
-	for (const match of imageMatch) {
-		sidebarImages.push(await parseImage(match, media))
-		md = md.replace(match[0], "")
-	}
-
-	md = md.replace(/^:::hidden\n.*?\n:::/gms, "") // Remove :::hidden::: blocks
-	// TODO: Remove the whole GM paragraph thing
-	md = md.replace(/^#+ GM.*?(?=^#|$(?![\r\n]))/gms, "") // Remove GM paragraphs
-	md = md.replace(
-		/^> +\[!(\w+)\] *(.*)(?:\n(>[^]*?))?(?=\n[^>])/gm, // Replace callouts
-		replaceCallouts
-	)
-	md = md.replace(/^```(\w*)\n(.*?)\n```/gms, highlightCode) // Highlight code blocks
-
-	// Get everything until the first header as the lead
-	const match = md.match(/\n*#*(.+?)(?=#)/s)
-	let lead = match ? match[1] : md
-	// Remove wikilinks from lead
-	lead = lead.replace(/\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/g, "$1")
-	lead = lead.replace(/!\[\[(.*?)\]\]/g, "")
-
-	const chunks = chunkMd(md, props.allowed_users) // Split by :::secret::: blocks
-	return {
-		chunks: chunks,
-		lead: lead,
-		props: props,
-		details: details,
-		sidebarImgs: sidebarImages,
-	}
-}
-
 function fixHtml(html: string): string {
 	// Improve headers
 	html = html.replace(
-		/<h(\d)(.*?)>(.*?)<\/h\d>/g,
+		/<h(\d)(.*?)>(.*?)<\/h\1>/g,
 		(_substring, num, props, content) => {
 			const id = slugifyPath(content)
 			return `<h${num}${props} class="h${num}" id="${id}">${content}</h${num}>`
@@ -393,4 +398,26 @@ function fixHtml(html: string): string {
 	html = html.replace(/<code>/g, '<code class="code">')
 
 	return html
+}
+
+function unwrapWikilinks(
+	text: string,
+	options?: {
+		removeReferences?: boolean,
+		removeTransclusions?: boolean,
+	}
+): string {
+	if (options?.removeTransclusions) {
+		text = text.replace(/!\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/g, "")
+	} else {
+		text = text.replace(/!\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/g, "$1")
+	}
+
+	if (options?.removeReferences) {
+		text = text.replace(/\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/g, "")
+	} else {
+		text = text.replace(/\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/g, "$1")
+	}
+
+	return text
 }
