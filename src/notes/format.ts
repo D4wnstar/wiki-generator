@@ -97,8 +97,10 @@ async function formatMd(
 		replaceCallouts
 	)
 	md = md.replace(/^```(\w*)\n(.*?)\n```/gms, highlightCode) // Highlight code blocks
-	// md = md.replace(/`(.+?)`/g, (_, text) => `\`${unwrapWikilinks(text)}\``) // Remove links from inline code
-
+	md = md.replace(/==(.*?)==/g, '<span class="bg-tertiary-50-900-token">$1</span>') // Highlight text
+	md = md.replace(/^\t*[-*] +\[(.)\](.*)/gm, replaceTaskLists) // Add task lists
+	md = md.replace(/^<li>.*(\n<li>.*)*/gm, (match) => `<ul class="indent-cascade">${match}</ul><br />`)
+	
 	// Get everything until the first header as the lead
 	const match = md.match(/\n*#*(.+?)(?=#)/s)
 	let lead = match ? match[1] : md
@@ -313,8 +315,6 @@ function highlightCode(_match: string, lang: string, code: string) {
 		displayCode = code
 	}
 
-	// displayCode = unwrapWikilinks(displayCode)
-
 	return `
 <div class="codeblock-base">
 	<header class="codeblock-header">
@@ -322,6 +322,12 @@ function highlightCode(_match: string, lang: string, code: string) {
 	</header>
 	<pre class="codeblock-pre">${displayCode}</pre>
 </div>`
+}
+
+function replaceTaskLists(_match: string, char: string, content: string): string {
+	const checked = char !== " " ? "checked" : ""
+	const linethrough = char === "x" ? "line-through" : ""
+	return `<li><input type="checkbox" class="task-checkbox" ${checked} /><span class="${linethrough}">${content}</span></li>`
 }
 
 /**

@@ -368,9 +368,6 @@ ${groups[4]}\
 }
 
 function matchWikilinks(text: string) {
-	// Remove code blocks to avoid matching links in them
-	text = text.replace(/<code.*?>.*?<\/code>/gm, "")
-	text = text.replace(/<div class="codeblock-base">.*?<\/div>/gm, "")
 	const wikilinkRegex = /(!)?\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/g
 	const matches = [...text.matchAll(wikilinkRegex)]
 
@@ -413,13 +410,24 @@ function matchWikilinks(text: string) {
 
 export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 	const convertedNotes: Note[] = []
+	// These prevent replacing links with inline code and code blocks
+	const lookbehinds =
+		'(?<!<code.*?>[^<>]*)(?<!<pre class="codeblock-pre">[^<>]*)'
+	const lookaheads = "(?![^<>]*</code>)(?![^<>]*</pre>)"
+
 	for (const note of notes) {
 		for (const chunk of note.content) {
+			// Remove code blocks to avoid matching links in them
+			const filteredChunk = chunk.text
+				.replace(/<code.*?>.*?<\/code>/gm, "")
+				.replace(/<div class="codeblock-base">.*?<\/div>/gm, "")
+
 			// First, handle the references
 			// Find all the references
-			const references = matchWikilinks(chunk.text).filter(
+			const references = matchWikilinks(filteredChunk).filter(
 				(wl) => !wl.isTransclusion
 			)
+
 			// then get their replacements
 			const refReplacements = await Promise.all(
 				references.map((ref) =>
@@ -429,8 +437,16 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 
 			// and finally actually replace them
 			for (const index in references) {
+				const linkNoBrackets = references[index].fullLink
+					.replace(/\[/g, "\\[")
+					.replace(/\]/g, "\\]")
+					.replace(/\|/g, "\\|")
+
 				chunk.text = chunk.text.replace(
-					references[index].fullLink,
+					new RegExp(
+						`${lookbehinds}${linkNoBrackets}${lookaheads}`,
+						"m"
+					),
 					refReplacements[index]
 				)
 			}
@@ -443,9 +459,16 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 			// that the transcluded pages will have all references already converted
 			// FIXME: There's still probably issues with unconverted transclusions, especially
 			// between pages that transclude each other
-			const transclusions = matchWikilinks(chunk.text).filter(
+
+			// Remove code blocks to avoid matching links in them
+			const filteredChunk = chunk.text
+				.replace(/<code.*?>.*?<\/code>/gm, "")
+				.replace(/<div class="codeblock-base">.*?<\/div>/gm, "")
+
+			const transclusions = matchWikilinks(filteredChunk).filter(
 				(wl) => wl.isTransclusion
 			)
+
 			const transReplacements = await Promise.all(
 				transclusions.map((trans) =>
 					getTransclusionReplacements(trans, note, notes)
@@ -453,9 +476,21 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 			)
 
 			for (const index in transclusions) {
+				const linkNoBrackets = transclusions[index].fullLink
+					.replace(/\[/g, "\\[")
+					.replace(/\]/g, "\\]")
+					.replace(/\|/g, "\\|")
+
 				if (transReplacements[index].type === "note") {
 					// TODO: Add transclusion authorization
-					const part = chunk.text.split(transclusions[index].fullLink)
+					const part = chunk.text.split(
+						new RegExp(
+							`${lookbehinds}${linkNoBrackets}${lookaheads}`,
+							"m"
+						)
+					)
+					if (part.length === 1) continue
+
 					const partObj = part.map((p) => {
 						return {
 							text: p,
@@ -475,7 +510,10 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 					note.content.splice(chunk.chunk_id - 1, 1, ...newChunks)
 				} else {
 					chunk.text = chunk.text.replace(
-						transclusions[index].fullLink,
+						new RegExp(
+							`${lookbehinds}${linkNoBrackets}${lookaheads}`,
+							"m"
+						),
 						transReplacements[index].replacement
 					)
 				}
