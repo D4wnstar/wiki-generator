@@ -99,7 +99,17 @@ async function formatMd(
 	md = md.replace(/^```(\w*)\n(.*?)\n```/gms, highlightCode) // Highlight code blocks
 	md = md.replace(/==(.*?)==/g, '<span class="bg-tertiary-50-900-token">$1</span>') // Highlight text
 	md = md.replace(/^\t*[-*] +\[(.)\](.*)/gm, replaceTaskLists) // Add task lists
-	md = md.replace(/^<li>.*(\n<li>.*)*/gm, (match) => `<ul class="indent-cascade">${match}</ul><br />`)
+	md = md.replace(/^<li>.*(\n<li>.*)*/gm, (match) => `<ul class="indent-cascade">${match}</ul>`)
+	md = md.replace(/(?<=\n)\[\^\d+\].*$/, (match) => {
+		const lines = match.split("\n")
+		let out = `<hr /><div>`
+		for (let line of lines) {
+			line = line.replace(/^\[(\^\d+)\]: +(.*)/, `<p><span class="text-slate-500 mr-2">$1</span>$2</p>\n`)
+			out += line
+		}
+		out += "</div>"
+		return out
+	})
 	
 	// Get everything until the first header as the lead
 	const match = md.match(/\n*#*(.+?)(?=#)/s)
