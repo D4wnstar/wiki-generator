@@ -99,18 +99,10 @@ async function formatMd(
 	md = md.replace(/^```(\w*)\n(.*?)\n```/gms, highlightCode) // Highlight code blocks
 	md = md.replace(/==(.*?)==/g, '<span class="bg-tertiary-50-900-token">$1</span>') // Highlight text
 	md = md.replace(/^\t*[-*] +\[(.)\](.*)/gm, replaceTaskLists) // Add task lists
-	md = md.replace(/^<li>.*(\n<li>.*)*/gm, (match) => `<ul class="indent-cascade">${match}</ul>`)
-	md = md.replace(/(?<=\n)\[\^\d+\].*$/, (match) => {
-		const lines = match.split("\n")
-		let out = `<hr /><div>`
-		for (let line of lines) {
-			line = line.replace(/^\[(\^\d+)\]: +(.*)/, `<p><span class="text-slate-500 mr-2">$1</span>$2</p>\n`)
-			out += line
-		}
-		out += "</div>"
-		return out
-	})
-	
+	md = md.replace(/^<li>.*(\n<li>.*)*/gm, (match) => `<ul class="indent-cascade">${match}</ul>`) // Wrap the tasks in a <ul>
+	md = md.replace(/\b\[\^(\d+)\]/g, `<sup><a class="no-target-blank anchor" href="#footnote-$1">[$1]</a></sup>`) // Adds links to footnotes
+	md = replaceFootnotes(md) // Add the actual footnotes at the bottom of the page
+
 	// Get everything until the first header as the lead
 	const match = md.match(/\n*#*(.+?)(?=#)/s)
 	let lead = match ? match[1] : md
@@ -340,6 +332,36 @@ function replaceTaskLists(_match: string, char: string, content: string): string
 	return `<li><input type="checkbox" class="task-checkbox" ${checked} /><span class="${linethrough}">${content}</span></li>`
 }
 
+function replaceFootnotes(text: string) {
+	// Find the index of the last numerical footnote. Necessary to calculate the index of inline footnotes
+	const footnoteMatch = text.match(/(?<=\n)\[\^(\d+)\].*$/) ?? undefined
+	let lastFootnoteIndex = footnoteMatch ? parseInt(footnoteMatch[1]) : 1
+	const inlineFootnotes: string[] = []
+	
+	// Format footnotes at the bottom of the note
+	text = text.replace(/(?<=\n)\[\^\d+\].*$/s, (match) => {
+		const lines = match.split("\n")
+		let out = `<hr /><div>`
+		for (let line of lines) {
+			line = line.replace(/^\[\^(\d+)\]: +(.*)/, `<p id="footnote-$1"><span class="text-slate-500 mr-2">^$1</span>$2</p>\n`)
+			out += line
+		}
+		return out
+	})
+
+	// And append inline footnotes while adding links
+	text = text.replace(/\b\^\[(.+?)\]/g, (_match, footnote) => {
+		const idx = lastFootnoteIndex + 1
+		inlineFootnotes.push(`<p id="footnote-${idx}"><span class="text-slate-500 mr-2">^${idx}</span>${footnote}</p>\n`)
+		lastFootnoteIndex += 1
+		return `<sup><a class="no-target-blank anchor" href="#footnote-${idx}">[${idx}]</a></sup>`
+	})
+	inlineFootnotes.forEach((footnote) => text += footnote)
+	text += "</div>"
+
+	return text
+}
+
 /**
  * Splits markdown into chunks with metadata attached to them. Primarily, this allows each
  * chunk to have a different authorization level so that it's possible to hide only certain
@@ -396,9 +418,9 @@ function fixHtml(html: string): string {
 			return `<h${num}${props} class="h${num}" id="${id}">${content}</h${num}>`
 		}
 	)
-	// Make all external links open a new tab
+	// Make all external links open a new tab, except ones that are marked as internal
 	html = html.replace(
-		/<a(.*?)>(.*?)<\/a>/g,
+		/<a(?![^>]*class="no-target-blank anchor")(.*?)>(.*?)<\/a>/g,
 		'<a$1 class="anchor" target="_blank">$2</a>'
 	)
 	// Add tailwind classes to blockquotes, code and lists
