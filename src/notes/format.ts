@@ -96,12 +96,15 @@ async function formatMd(
 		/^> +\[!(\w+)\] *(.*)(?:\n(>[^]*?))?(?=\n[^>])/gm, // Replace callouts
 		replaceCallouts
 	)
-	md = md.replace(/^```(\w*)\n(.*?)\n```/gms, highlightCode) // Highlight code blocks
 	md = md.replace(/==(.*?)==/g, '<span class="bg-tertiary-50-900-token">$1</span>') // Highlight text
 	md = md.replace(/^\t*[-*] +\[(.)\](.*)/gm, replaceTaskLists) // Add task lists
 	md = md.replace(/^<li>.*(\n<li>.*)*/gm, (match) => `<ul class="indent-cascade">${match}</ul>`) // Wrap the tasks in a <ul>
 	md = md.replace(/\b\[\^(\d+)\]/g, `<sup><a class="no-target-blank anchor" href="#footnote-$1">[$1]</a></sup>`) // Adds links to footnotes
 	md = replaceFootnotes(md) // Add the actual footnotes at the bottom of the page
+	md = removeComments(md) // Remove Obsidian comments
+	md = md.replace(/^```mermaid\n(.*?)\n```/gms, '<pre class="mermaid">$1</pre>') // Put mermaid graphs in a <pre> to be rendered in the browser
+	md = md.replace(/^```(\w*)\n(.*?)\n```/gms, highlightCode) // Highlight code blocks
+	md = md.replace(/\\\\/gs, "\\\\\\\\") // Double double backslashes before markdownIt halves them
 
 	// Get everything until the first header as the lead
 	const match = md.match(/\n*#*(.+?)(?=#)/s)
@@ -337,17 +340,19 @@ function replaceFootnotes(text: string) {
 	const footnoteMatch = text.match(/(?<=\n)\[\^(\d+)\].*$/) ?? undefined
 	let lastFootnoteIndex = footnoteMatch ? parseInt(footnoteMatch[1]) : 1
 	const inlineFootnotes: string[] = []
-	
-	// Format footnotes at the bottom of the note
-	text = text.replace(/(?<=\n)\[\^\d+\].*$/s, (match) => {
-		const lines = match.split("\n")
-		let out = `<hr /><div>`
-		for (let line of lines) {
-			line = line.replace(/^\[\^(\d+)\]: +(.*)/, `<p id="footnote-$1"><span class="text-slate-500 mr-2">^$1</span>$2</p>\n`)
-			out += line
-		}
-		return out
-	})
+
+	if (footnoteMatch) {
+		// Format footnotes at the bottom of the note
+		text = text.replace(/(?<=\n)\[\^\d+\].*$/s, (match) => {
+			const lines = match.split("\n")
+			let out = `<hr /><div>`
+			for (let line of lines) {
+				line = line.replace(/^\[\^(\d+)\]: +(.*)/, `<p id="footnote-$1"><span class="text-slate-500 mr-2">^$1</span>$2</p>\n`)
+				out += line
+			}
+			return out
+		})
+	}
 
 	// And append inline footnotes while adding links
 	text = text.replace(/\b\^\[(.+?)\]/g, (_match, footnote) => {
@@ -357,9 +362,19 @@ function replaceFootnotes(text: string) {
 		return `<sup><a class="no-target-blank anchor" href="#footnote-${idx}">[${idx}]</a></sup>`
 	})
 	inlineFootnotes.forEach((footnote) => text += footnote)
-	text += "</div>"
+	
+	if (footnoteMatch) text += "</div>"
 
 	return text
+}
+
+function removeComments(text: string) {
+	const splits = text.split(/^```/gm) // All odd strings are code blocks
+	for (const index in splits) {
+		if (parseInt(index) % 2 === 1) continue
+		splits[index] = splits[index].replace(/%%.*?%%/gs, "")
+	}
+	return splits.join("```")
 }
 
 /**
@@ -423,7 +438,7 @@ function fixHtml(html: string): string {
 		/<a(?![^>]*class="no-target-blank anchor")(.*?)>(.*?)<\/a>/g,
 		'<a$1 class="anchor" target="_blank">$2</a>'
 	)
-	// Add tailwind classes to blockquotes, code and lists
+	// Add tailwind classes to blockquotes, code, lists and tables
 	html = html.replace(/<blockquote>/g, '<blockquote class="blockquote">')
 	html = html.replace(
 		/<ul(.*?)>/g,
@@ -434,7 +449,11 @@ function fixHtml(html: string): string {
 		'<ol$1 class="list-decimal list-inside indent-cascade">'
 	)
 	html = html.replace(/<code>/g, '<code class="code">')
-
+	html = html.replace(/<table>/g, '<table class="border-collapse">')
+	html = html.replace(/<th>/g, '<th class="border border-surface-400-500-token py-1 px-2">') // <th> are replaced in two steps to avoid
+	html = html.replace(/<th +(.*?)>/g, '<th class="border border-surface-400-500-token py-1 px-2" $1>') // accidentally matching <thead>
+	html = html.replace(/<td(.*?)>/g, '<td class="border border-surface-400-500-token py-1 px-2" $1>')
+	
 	return html
 }
 
