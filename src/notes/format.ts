@@ -102,7 +102,7 @@ async function formatMd(
 	md = md.replace(/\b\[\^(\d+)\]/g, `<sup><a class="no-target-blank anchor" href="#footnote-$1">[$1]</a></sup>`) // Adds links to footnotes
 	md = replaceFootnotes(md) // Add the actual footnotes at the bottom of the page
 	md = removeComments(md) // Remove Obsidian comments
-	md = md.replace(/^```mermaid\n(.*?)\n```/gms, '<pre class="mermaid">$1</pre>') // Put mermaid graphs in a <pre> to be rendered in the browser
+	md = md.replace(/^```mermaid\n(?:---(.*?)---)?(.*?)\n```/gms, replaceMermaidDiagram) // Put mermaid graphs in a <pre> to be rendered in the browser
 	md = md.replace(/^```(\w*)\n(.*?)\n```/gms, highlightCode) // Highlight code blocks
 	md = md.replace(/\\\\/gs, "\\\\\\\\") // Double double backslashes before markdownIt halves them
 
@@ -375,6 +375,25 @@ function removeComments(text: string) {
 		splits[index] = splits[index].replace(/%%.*?%%/gs, "")
 	}
 	return splits.join("```")
+}
+
+function replaceMermaidDiagram(_match: string, frontmatter: string | undefined, graphDefinition: string): string {
+	if (!frontmatter) frontmatter = ""
+	// Check if a config exists in the frontmatter
+	const configMatch = frontmatter.match(/^config:/gm)
+	if (configMatch) {
+		// If it does, check if a theme is also defined
+		const themeMatch = frontmatter.match(/^\s*theme:/gm)
+		if (!themeMatch) {
+			// If not, add the dark theme
+			frontmatter = frontmatter.replace(/^config:/gm, "config:\n  theme: dark\n")
+		} // else keep the user defined one
+	} else {
+		// If there is no config (or no frontmatter) add it alongside the dark theme
+		frontmatter += "config:\n  theme: dark"
+	}
+
+	return `<pre class="mermaid">---\n${frontmatter}\n---\n${graphDefinition}</pre>`
 }
 
 /**
