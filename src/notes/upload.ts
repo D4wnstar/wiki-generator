@@ -8,9 +8,7 @@ import { DatabaseError, DatabaseNote, FrontPageError, Note } from "./types"
 import { convertWikilinks } from "./wikilinks"
 import { getFilesInStorage } from "src/database/requests"
 
-export async function convertNotesAndUpload(
-	deployHookUrl: string | undefined
-): Promise<void> {
+export async function convertNotesAndUpload(): Promise<void> {
 	const converter = markdownit({ html: true })
 
 	await setupMediaBucket()

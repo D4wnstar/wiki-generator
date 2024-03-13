@@ -26,7 +26,7 @@ export function autopublishNotes(
 				(isInPublishedFolder && !isInSecretFolder)
 			) {
 				view.editor.replaceRange(
-					"---\nwg-publish: true\n---\n",
+					"---\nwiki-publish: true\n---\n",
 					view.editor.getCursor()
 				)
 			}

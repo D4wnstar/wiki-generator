@@ -14,7 +14,6 @@ export interface WikiGeneratorSettings {
 	supabaseApiUrl: string
 	supabaseAnonKey: string
 	supabaseServiceKey: string
-	vercelDeployHook: string
 	githubUsername: string
 	githubRepoName: string
 	githubRepoToken: string
@@ -38,7 +37,6 @@ export const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 	supabaseApiUrl: "",
 	supabaseAnonKey: "",
 	supabaseServiceKey: "",
-	vercelDeployHook: "",
 	githubUsername: "",
 	githubRepoName: "",
 	githubRepoToken: "",
@@ -253,20 +251,6 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings()
 					})
 			)
-
-		new Setting(containerEl)
-			.setName("Vercel Deploy Hook")
-			.setDesc(
-				"The URL used to update your website when you upload notes."
-			)
-			.addText((text) => {
-				text.setPlaceholder("Copy the URL")
-					.setValue(settings.vercelDeployHook)
-					.onChange(async (value) => {
-						settings.vercelDeployHook = value
-						await this.plugin.saveSettings()
-					})
-			})
 
 		new Setting(containerEl).setName("GitHub").setHeading()
 

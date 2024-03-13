@@ -41,7 +41,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 		if (settings.firstUsage && settings.databaseUrl) {
 			new Notice("Setting up the database...")
 			try {
-				initializeDatabase(settings.databaseUrl)
+				await initializeDatabase(settings.databaseUrl)
 				settings.firstUsage = false
 				await this.saveSettings()
 				new Notice("Database fully set up!")

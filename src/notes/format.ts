@@ -92,17 +92,29 @@ async function formatMd(
 	md = md.replace(/^:::hidden\n.*?\n:::/gms, "") // Remove :::hidden::: blocks
 	// TODO: Remove the whole GM paragraph thing
 	md = md.replace(/^#+ GM.*?(?=^#|$(?![\r\n]))/gms, "") // Remove GM paragraphs
-	md = md.replace(
-		/^> +\[!(\w+)\] *(.*)(?:\n(>[^]*?))?(?=\n[^>])/gm, // Replace callouts
+	md = md.replace( // Replace callouts
+		/^> +\[!(\w+)\] *(.*)(?:\n(>[^]*?))?(?=\n[^>])/gm,
 		replaceCallouts
 	)
-	md = md.replace(/==(.*?)==/g, '<span class="bg-tertiary-50-900-token">$1</span>') // Highlight text
+	md = md.replace( // Highlight text
+		/==(.*?)==/g,
+		'<span class="bg-tertiary-50-900-token">$1</span>'
+	)
 	md = md.replace(/^\t*[-*] +\[(.)\](.*)/gm, replaceTaskLists) // Add task lists
-	md = md.replace(/^<li>.*(\n<li>.*)*/gm, (match) => `<ul class="indent-cascade">${match}</ul>`) // Wrap the tasks in a <ul>
-	md = md.replace(/\b\[\^(\d+)\]/g, `<sup><a class="no-target-blank anchor" href="#footnote-$1">[$1]</a></sup>`) // Adds links to footnotes
+	md = md.replace( // Wrap the tasks in a <ul>
+		/^<li>.*(\n<li>.*)*/gm,
+		(match) => `<ul class="indent-cascade">${match}</ul>`
+	)
+	md = md.replace( // Adds links to footnotes
+		/\b\[\^(\d+)\]/g,
+		`<sup><a class="no-target-blank anchor" href="#footnote-$1">[$1]</a></sup>`
+	)
 	md = replaceFootnotes(md) // Add the actual footnotes at the bottom of the page
 	md = removeComments(md) // Remove Obsidian comments
-	md = md.replace(/^```mermaid\n(?:---(.*?)---)?(.*?)\n```/gms, replaceMermaidDiagram) // Put mermaid graphs in a <pre> to be rendered in the browser
+	md = md.replace( // Put mermaid graphs in a <pre> to be rendered in the browser
+		/^```mermaid\n(?:---(.*?)---)?(.*?)\n```/gms,
+		replaceMermaidDiagram
+	)
 	md = md.replace(/^```(\w*)\n(.*?)\n```/gms, highlightCode) // Highlight code blocks
 	md = md.replace(/\\\\/gs, "\\\\\\\\") // Double double backslashes before markdownIt halves them
 
@@ -329,7 +341,11 @@ function highlightCode(_match: string, lang: string, code: string) {
 </div>`
 }
 
-function replaceTaskLists(_match: string, char: string, content: string): string {
+function replaceTaskLists(
+	_match: string,
+	char: string,
+	content: string
+): string {
 	const checked = char !== " " ? "checked" : ""
 	const linethrough = char === "x" ? "line-through" : ""
 	return `<li><input type="checkbox" class="task-checkbox" ${checked} /><span class="${linethrough}">${content}</span></li>`
@@ -347,7 +363,10 @@ function replaceFootnotes(text: string) {
 			const lines = match.split("\n")
 			let out = `<hr /><div>`
 			for (let line of lines) {
-				line = line.replace(/^\[\^(\d+)\]: +(.*)/, `<p id="footnote-$1"><span class="text-slate-500 mr-2">^$1</span>$2</p>\n`)
+				line = line.replace(
+					/^\[\^(\d+)\]: +(.*)/,
+					`<p id="footnote-$1"><span class="text-slate-500 mr-2">^$1</span>$2</p>\n`
+				)
 				out += line
 			}
 			return out
@@ -357,12 +376,14 @@ function replaceFootnotes(text: string) {
 	// And append inline footnotes while adding links
 	text = text.replace(/\b\^\[(.+?)\]/g, (_match, footnote) => {
 		const idx = lastFootnoteIndex + 1
-		inlineFootnotes.push(`<p id="footnote-${idx}"><span class="text-slate-500 mr-2">^${idx}</span>${footnote}</p>\n`)
+		inlineFootnotes.push(
+			`<p id="footnote-${idx}"><span class="text-slate-500 mr-2">^${idx}</span>${footnote}</p>\n`
+		)
 		lastFootnoteIndex += 1
 		return `<sup><a class="no-target-blank anchor" href="#footnote-${idx}">[${idx}]</a></sup>`
 	})
-	inlineFootnotes.forEach((footnote) => text += footnote)
-	
+	inlineFootnotes.forEach((footnote) => (text += footnote))
+
 	if (footnoteMatch) text += "</div>"
 
 	return text
@@ -377,7 +398,11 @@ function removeComments(text: string) {
 	return splits.join("```")
 }
 
-function replaceMermaidDiagram(_match: string, frontmatter: string | undefined, graphDefinition: string): string {
+function replaceMermaidDiagram(
+	_match: string,
+	frontmatter: string | undefined,
+	graphDefinition: string
+): string {
 	if (!frontmatter) frontmatter = ""
 	// Check if a config exists in the frontmatter
 	const configMatch = frontmatter.match(/^config:/gm)
@@ -386,7 +411,10 @@ function replaceMermaidDiagram(_match: string, frontmatter: string | undefined, 
 		const themeMatch = frontmatter.match(/^\s*theme:/gm)
 		if (!themeMatch) {
 			// If not, add the dark theme
-			frontmatter = frontmatter.replace(/^config:/gm, "config:\n  theme: dark\n")
+			frontmatter = frontmatter.replace(
+				/^config:/gm,
+				"config:\n  theme: dark\n"
+			)
 		} // else keep the user defined one
 	} else {
 		// If there is no config (or no frontmatter) add it alongside the dark theme
@@ -469,18 +497,27 @@ function fixHtml(html: string): string {
 	)
 	html = html.replace(/<code>/g, '<code class="code">')
 	html = html.replace(/<table>/g, '<table class="border-collapse">')
-	html = html.replace(/<th>/g, '<th class="border border-surface-400-500-token py-1 px-2">') // <th> are replaced in two steps to avoid
-	html = html.replace(/<th +(.*?)>/g, '<th class="border border-surface-400-500-token py-1 px-2" $1>') // accidentally matching <thead>
-	html = html.replace(/<td(.*?)>/g, '<td class="border border-surface-400-500-token py-1 px-2" $1>')
-	
+	html = html.replace(
+		/<th>/g,
+		'<th class="border border-surface-400-500-token py-1 px-2">'
+	) // <th> are replaced in two steps to avoid accidentally matching <thead>
+	html = html.replace(
+		/<th +(.*?)>/g,
+		'<th class="border border-surface-400-500-token py-1 px-2" $1>'
+	)
+	html = html.replace(
+		/<td(.*?)>/g,
+		'<td class="border border-surface-400-500-token py-1 px-2" $1>'
+	)
+
 	return html
 }
 
 function unwrapWikilinks(
 	text: string,
 	options?: {
-		removeReferences?: boolean,
-		removeTransclusions?: boolean,
+		removeReferences?: boolean
+		removeTransclusions?: boolean
 	}
 ): string {
 	if (options?.removeTransclusions) {

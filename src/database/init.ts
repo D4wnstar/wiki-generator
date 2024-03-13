@@ -11,7 +11,7 @@ import { DatabaseError } from "src/notes/types"
  * @returns A Postgres Sql object
  */
 export function createSqlClient(dbUrl: string) {
-	const match = dbUrl.match(/postgresql:\/\/(.+?):(.+?)@(.+?):(\d+)\/(.+)/)
+	const match = dbUrl.match(/postgres(?:ql)?:\/\/(.+?):(.+?)@(.+?):(\d+)\/(.+)/)
 	if (!match) {
 		new Notice("Invalid database URL")
 		throw new Error("Invalid database URL")

@@ -40,14 +40,10 @@ export async function uploadNotes(settings: WikiGeneratorSettings) {
 		return
 	}
 
-	const deployHookUrl = settings.supabaseUseLocal
-		? undefined
-		: settings.vercelDeployHook
-
 	console.log("Uploading notes...")
 	new Notice("Uploading notes...")
 	try {
-		await convertNotesAndUpload(deployHookUrl)
+		await convertNotesAndUpload()
 	} catch (error) {
 		new Notice(error.message)
 		if (error instanceof FrontPageError || error instanceof DatabaseError) {
