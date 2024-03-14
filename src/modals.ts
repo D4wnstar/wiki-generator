@@ -35,8 +35,8 @@ const BUILTIN_PROPS: Property[] = [
 		description:
 			"A list of users who can see this note. It will be hidden to everyone else.",
 		valueType:
-			"case-insensitive, comma-separated list of usernames (e.g. Jacob123, TheLegend27, bob)",
-		defaultValue: "",
+			"a list of usernames. Press Enter to separate them",
+		defaultValue: "[]",
 	},
 ]
 

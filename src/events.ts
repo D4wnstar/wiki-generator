@@ -17,13 +17,13 @@ export function autopublishNotes(
 				filepath.startsWith(publicPath)
 			)
 
-			const isInSecretFolder = s.secretFolders.some((secretPath) =>
-				filepath.startsWith(secretPath)
+			const isInPrivateFolder = s.privateFolders.some((privatePath) =>
+				filepath.startsWith(privatePath)
 			)
 
 			if (
 				!s.restrictFolders ||
-				(isInPublishedFolder && !isInSecretFolder)
+				(isInPublishedFolder && !isInPrivateFolder)
 			) {
 				view.editor.replaceRange(
 					"---\nwiki-publish: true\n---\n",

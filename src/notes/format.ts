@@ -1,4 +1,4 @@
-import { TFile } from "obsidian"
+import { Notice, TFile } from "obsidian"
 import { uploadImage } from "./wikilinks"
 import * as MarkdownIt from "markdown-it"
 import hljs from "highlight.js"
@@ -20,7 +20,7 @@ export async function vaultToNotes(
 		const slug = slugifyPath(file.path.replace(".md", ""))
 
 		const content = await globalVault.read(file)
-		const formatted = await formatMd(content, media)
+		const formatted = await formatMd(content, file.name, media)
 
 		for (const i in formatted.chunks) {
 			// Replace the markdown with the HTML
@@ -49,6 +49,7 @@ export async function vaultToNotes(
 
 async function formatMd(
 	md: string,
+	filename: string,
 	media: TFile[]
 ): Promise<{
 	chunks: ContentChunk[]
@@ -77,6 +78,10 @@ async function formatMd(
 	let details = new Map<string, string>()
 	if (detailsMatch) {
 		details = parseDetails(detailsMatch[1])
+		if (details.size === 0) {
+			new Notice(`Improperly formatted ::details::: in ${filename}`)
+			console.warn(`Improperly formatted ::details::: in ${filename}`)
+		}
 		md = md.replace(detailsRegex, "") // Remove details from the main page
 	}
 
@@ -142,7 +147,23 @@ function parseProperties(match: string): NoteProperties {
 		alt_title: undefined,
 		allowed_users: [],
 	}
-	const propsLines = match.split("\n")
+	let temp = ""
+	const propsLines: string[] = []
+	match.split(":")
+		.flatMap((line) => line.split("\n"))
+		.filter((line) => line !== "")
+		.forEach((line, index) => {
+			if (index === 0) {
+				temp = `${line.trim()}: `
+			}
+			else if (line.startsWith(" ")) {
+				temp += `${line.trim()}|`
+			} else {
+				propsLines.push(temp.replace(/\|$/, ""))
+				temp = `${line.trim()}: `
+			}
+		})
+	propsLines.push(temp.replace(/\|$/, ""))
 
 	for (const line of propsLines) {
 		const [key, value] = line.split(": ")
@@ -160,7 +181,7 @@ function parseProperties(match: string): NoteProperties {
 				props.alt_title = value
 				break
 			case "wiki-allowed-users":
-				props.allowed_users = value.split(",")
+				props.allowed_users = value.split("|").map((username) => username.replace(/^- /, ""))
 				props.allowed_users.forEach((username) => username.trim())
 				break
 			default:
@@ -176,8 +197,12 @@ function parseDetails(match: string): Map<string, string> {
 	const details = match.split("\n").filter((line) => line !== "")
 
 	for (const detail of details) {
-		const [kConst, v] = detail.split(/:\s*/)
-		let k = kConst // Literally just to make ESLint not complain about using let instead of const
+		const split = detail.split(/:\s*/)
+		if (split.length !== 2) {
+			return new Map()
+		}
+		// eslint-disable-next-line prefer-const
+		let [k, v] = split
 		k = k.replace(/^(_|\*)+/, "").replace(/(_|\*)+$/, "")
 		detailsMap.set(k, v)
 	}
@@ -201,9 +226,9 @@ async function parseImage(
 			filename = wikilink[1]
 			continue
 		}
-		const capMatch = line.match(/\*Caption:\s*(.*)\*/)
+		const capMatch = line.match(/[*_]*Caption:\s*(.*)/)
 		if (capMatch) {
-			caption = capMatch[1]
+			caption = capMatch[1].replace(/[*_]*$/, "")
 		}
 	}
 

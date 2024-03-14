@@ -1,5 +1,5 @@
 import WikiGeneratorPlugin from "main"
-import { PluginSettingTab, App, Setting, Notice } from "obsidian"
+import { PluginSettingTab, App, Setting, Notice, normalizePath } from "obsidian"
 import { resetDatabase } from "./database/init"
 import { checkForTemplateUpdates, updateUserRepository } from "./repository"
 
@@ -9,7 +9,7 @@ export interface WikiGeneratorSettings {
 	autopublishNotes: boolean
 	restrictFolders: boolean
 	publicFolders: string[]
-	secretFolders: string[]
+	privateFolders: string[]
 	databaseUrl: string
 	supabaseApiUrl: string
 	supabaseAnonKey: string
@@ -32,7 +32,7 @@ export const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 	autopublishNotes: true,
 	restrictFolders: false,
 	publicFolders: [],
-	secretFolders: [],
+	privateFolders: [],
 	databaseUrl: "",
 	supabaseApiUrl: "",
 	supabaseAnonKey: "",
@@ -63,10 +63,10 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 
 		containerEl.empty()
 
-		new Setting(containerEl).setName("Vault Settings").setHeading()
+		new Setting(containerEl).setName("Vault").setHeading()
 
 		new Setting(containerEl)
-			.setName("Autopublish New Notes")
+			.setName("Autopublish new notes")
 			.setDesc(
 				"Automatically add the 'wiki-publish' property to new notes. Can be restricted."
 			)
@@ -80,7 +80,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			})
 
 		new Setting(containerEl)
-			.setName("Restrict Folders")
+			.setName("Restrict folders")
 			.setDesc(
 				"Restrict publishing-related commands to work only within these folders. Set the folders below."
 			)
@@ -95,7 +95,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 
 		const folderDesc = document.createDocumentFragment()
 		folderDesc.append(
-			"Set folders to publish notes from. Commands and settings that automatically set publish state, such as the above Autopublish New Notes, will only apply to notes created and present in these folders. Note that the 'wiki-publish' property has the final say on whether the note gets published or not, regardless of what folder it's in.",
+			"Set folders to publish notes from. Commands and settings that automatically set publish state, such as the above 'Autopublish new notes', will only apply to notes created and present in these folders. Note that the 'wiki-publish' property has the final say on whether the note gets published or not, regardless of what folder it's in.",
 			folderDesc.createEl("br"),
 			folderDesc.createEl("br"),
 			"You must provide the full path to the folder, separated by forward slashes. For example:",
@@ -106,7 +106,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			' If you right click on a folder and press "Search in Folder", you can copy and paste the search parameter it gives you after path: (without the quotes!) and use it here.'
 		)
 		new Setting(containerEl)
-			.setName("Public Folders")
+			.setName("Public folders")
 			.setDesc(folderDesc)
 			.addButton((button) => {
 				button
@@ -125,7 +125,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					text.setPlaceholder("Add folder...")
 						.setValue(folder)
 						.onChange(async (newFolder) => {
-							newFolder = newFolder.replace(/\/$/, "")
+							newFolder = normalizePath(newFolder)
 							settings.publicFolders[index] = newFolder
 							await this.plugin.saveSettings()
 						})
@@ -147,29 +147,29 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 		})
 
 		new Setting(containerEl)
-			.setName("Secret Folders")
+			.setName("Private folders")
 			.setDesc(
-				'Set folders to NOT publish notes from. Works exactly as above, but in reverse. Use this as a way to filter out some things from Public Folders, as in "Publish everything in here, except..."'
+				'Set folders to NOT publish notes from. Works exactly as above, but in reverse. Use this as a way to filter out some things from public folders, as in "Publish everything in here, except..."'
 			)
 			.addButton((button) => {
 				button
 					.setButtonText("Add folder")
 					.setCta()
 					.onClick(async () => {
-						settings.secretFolders.push("")
+						settings.privateFolders.push("")
 						await this.plugin.saveSettings()
 						this.display()
 					})
 			})
 
-		settings.secretFolders.forEach((folder, index) => {
+		settings.privateFolders.forEach((folder, index) => {
 			new Setting(containerEl)
 				.addText((text) => {
 					text.setPlaceholder("Add folder...")
 						.setValue(folder)
 						.onChange(async (newFolder) => {
-							newFolder = newFolder.replace(/\/$/, "")
-							settings.secretFolders[index] = newFolder
+							newFolder = normalizePath(newFolder)
+							settings.privateFolders[index] = newFolder
 							await this.plugin.saveSettings()
 						})
 
@@ -182,17 +182,17 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 						.setIcon("x")
 						.setTooltip("Remove folder")
 						.onClick(async () => {
-							settings.secretFolders.splice(index, 1)
+							settings.privateFolders.splice(index, 1)
 							await this.plugin.saveSettings()
 							this.display()
 						})
 				})
 		})
 
-		new Setting(containerEl).setName("Wiki Settings").setHeading()
+		new Setting(containerEl).setName("Wiki").setHeading()
 
 		new Setting(containerEl)
-			.setName("Wiki Title")
+			.setName("Wiki title")
 			.setDesc(
 				"The title of your wiki. Will be updated next time you upload your notes."
 			)
@@ -255,7 +255,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName("GitHub").setHeading()
 
 		new Setting(containerEl)
-			.setName("GitHub Username")
+			.setName("GitHub username")
 			.setDesc("Your GitHub username.")
 			.addText((text) => {
 				text.setPlaceholder("Copy your username")
@@ -267,7 +267,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			})
 
 		new Setting(containerEl)
-			.setName("GitHub Repository Name")
+			.setName("GitHub repository name")
 			.setDesc("The name of your website's repository.")
 			.addText((text) => {
 				text.setPlaceholder("Copy the name")
@@ -279,7 +279,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			})
 
 		new Setting(containerEl)
-			.setName("GitHub Repository Token")
+			.setName("GitHub repository token")
 			.setDesc(
 				"The token required to access your website's GitHub repository."
 			)
@@ -293,7 +293,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			})
 
 		new Setting(containerEl)
-			.setName("Check For Website Updates")
+			.setName("Check for website updates")
 			.setDesc(
 				"Check if your website's template has any updates. By default this check is also done every time you start Obsidian."
 			)
@@ -319,9 +319,9 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			})
 
 		new Setting(containerEl)
-			.setName("Check For Updates On Startup")
+			.setName("Check for updates on startup")
 			.setDesc(
-				"Automatically check for updates on the website template every time you start Obsidian."
+				"Automatically check for website updates every time you start Obsidian."
 			)
 			.addToggle((toggle) => {
 				toggle
@@ -333,9 +333,9 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			})
 
 		new Setting(containerEl)
-			.setName("Update Website Repository")
+			.setName("Update website repository")
 			.setDesc(
-				"Update your website to synchronize with all new template additions. This may take some time. Please don't close Obsidian while updating."
+				"Update your website to synchronize with all new template additions. This may take some time. Please don't close Obsidian while updating. Make sure you also update this plugin whenever you update your website to avoid inconsistencies."
 			)
 			.addButton((button) => {
 				button
@@ -371,7 +371,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 
 		const autoapplyUpdateDesc = document.createDocumentFragment()
 		autoapplyUpdateDesc.append(
-			"If true, will apply updates to your code as soon as you click the Update Website button. ",
+			"If true, will apply updates to your code as soon as you click the 'Update website' button. ",
 			folderDesc.createEl("strong", { text: "THIS IS IRREVERSIBLE." }),
 			" If you never touched your website's code directly, this can stay on.",
 			" If you made any commits to your repository, set this to false or it will overwrite your changes.",
@@ -379,7 +379,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			" It'll then create a pull request to merge into the main branch so you can pick and choose updates and solve merge conflicts."
 		)
 		new Setting(containerEl)
-			.setName("Apply Website Updates Automatically")
+			.setName("Apply website updates automatically")
 			.setDesc(autoapplyUpdateDesc)
 			.addToggle((toggle) => {
 				toggle
@@ -390,10 +390,10 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					})
 			})
 
-		new Setting(containerEl).setName("Developer Options").setHeading()
+		new Setting(containerEl).setName("Developer").setHeading()
 
 		new Setting(containerEl)
-			.setName("Use Local Supabase Docker Container")
+			.setName("Use local Supabase Docker container")
 			.setDesc(
 				"Use a local Supabase container for plugin development. Requires setting the local service key below. Changing requires a restart."
 			)
@@ -452,9 +452,9 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			)
 
 		new Setting(containerEl)
-			.setName("Reset Database")
+			.setName("Reset database")
 			.setDesc(
-				"Reset the database to its initial state. All of your notes will be deleted from Supabase, but media files and user profiles will remain untouched. You can restore your notes by uploading them again."
+				"Reset part of the database to its initial state. All of your notes will be deleted from Supabase, but media files and user profiles will remain untouched. You can restore your notes by uploading them again."
 			)
 			.addButton((button) => {
 				button.setButtonText("Reset database").onClick(async () => {
