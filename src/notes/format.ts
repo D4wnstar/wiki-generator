@@ -20,7 +20,7 @@ export async function vaultToNotes(
 		const slug = slugifyPath(file.path.replace(".md", ""))
 
 		const content = await globalVault.read(file)
-		const formatted = await formatMd(content, file.name, media)
+		const formatted = await formatMd(content, file.name, media, converter)
 
 		for (const i in formatted.chunks) {
 			// Replace the markdown with the HTML
@@ -50,7 +50,8 @@ export async function vaultToNotes(
 async function formatMd(
 	md: string,
 	filename: string,
-	media: TFile[]
+	media: TFile[],
+	converter: MarkdownIt
 ): Promise<{
 	chunks: ContentChunk[]
 	lead: string
@@ -58,6 +59,26 @@ async function formatMd(
 	details: Map<string, string>
 	sidebarImgs: SidebarImage[]
 }> {
+	// Remove codeblocks from the markdown as anything inside of them should be kept as is
+	// Instead, add a generic marker to know where the codeblocks were and add them back later
+	const codeBlockRegex = /^```(\w*)\n(.*?)\n```/gms
+	const codeMatches = md.matchAll(codeBlockRegex)
+	const codeBlocks: string[] = Array.from(codeMatches)
+		.map((match) => {
+			if (match[1] === "mermaid") {
+				return match[0].replace(/^```mermaid\n(?:---(.*?)---)?(.*?)\n```/gms, replaceMermaidDiagram)
+			} else {
+				return highlightCode(match[0], match[1], match[2]) // Also highlight the code
+			}
+		})
+		.filter((block) => block !== "")
+
+	let counter = 0
+	md = md.replace(codeBlockRegex, () => {
+		counter += 1
+		return `<|codeblock_${counter}|>`
+	})
+
 	// Collect all properties
 	const propsRegex = /^---\r?\n(.*?)\r?\n---/s
 	const propsMatch = md.match(propsRegex)
@@ -79,8 +100,8 @@ async function formatMd(
 	if (detailsMatch) {
 		details = parseDetails(detailsMatch[1])
 		if (details.size === 0) {
-			new Notice(`Improperly formatted ::details::: in ${filename}`)
-			console.warn(`Improperly formatted ::details::: in ${filename}`)
+			new Notice(`Improperly formatted :::details::: in ${filename}`)
+			console.warn(`Improperly formatted :::details::: in ${filename}`)
 		}
 		md = md.replace(detailsRegex, "") // Remove details from the main page
 	}
@@ -95,33 +116,48 @@ async function formatMd(
 	}
 
 	md = md.replace(/^:::hidden\n.*?\n:::/gms, "") // Remove :::hidden::: blocks
-	// TODO: Remove the whole GM paragraph thing
-	md = md.replace(/^#+ GM.*?(?=^#|$(?![\r\n]))/gms, "") // Remove GM paragraphs
-	md = md.replace( // Replace callouts
+	md = md.replace(
+		// Replace callouts
 		/^> +\[!(\w+)\] *(.*)(?:\n(>[^]*?))?(?=\n[^>])/gm,
-		replaceCallouts
+		(match, type, title, content) =>
+			replaceCallouts(match, type, title, content, converter)
 	)
-	md = md.replace( // Highlight text
+	md = md.replace(
+		// Highlight text
 		/==(.*?)==/g,
 		'<span class="bg-tertiary-50-900-token">$1</span>'
 	)
 	md = md.replace(/^\t*[-*] +\[(.)\](.*)/gm, replaceTaskLists) // Add task lists
-	md = md.replace( // Wrap the tasks in a <ul>
+	md = md.replace(
+		// Wrap the tasks in a <ul>
 		/^<li>.*(\n<li>.*)*/gm,
 		(match) => `<ul class="indent-cascade">${match}</ul>`
 	)
-	md = md.replace( // Adds links to footnotes
+	md = md.replace(
+		// Adds links to footnotes
 		/\b\[\^(\d+)\]/g,
 		`<sup><a class="no-target-blank anchor" href="#footnote-$1">[$1]</a></sup>`
 	)
 	md = replaceFootnotes(md) // Add the actual footnotes at the bottom of the page
-	md = removeComments(md) // Remove Obsidian comments
-	md = md.replace( // Put mermaid graphs in a <pre> to be rendered in the browser
-		/^```mermaid\n(?:---(.*?)---)?(.*?)\n```/gms,
-		replaceMermaidDiagram
-	)
-	md = md.replace(/^```(\w*)\n(.*?)\n```/gms, highlightCode) // Highlight code blocks
+	md = md.replace(/%%.*?%%/gs, "") // Remove Obsidian comments
+	// md = md.replace(
+	// 	// Put mermaid graphs in a <pre> to be rendered in the browser
+	// 	/^```mermaid\n(?:---(.*?)---)?(.*?)\n```/gms,
+	// 	replaceMermaidDiagram
+	// )
 	md = md.replace(/\\\\/gs, "\\\\\\\\") // Double double backslashes before markdownIt halves them
+
+	// Add the codeblocks back in
+	try {
+		md = md.replace(
+			/<\|codeblock_(\d+)\|>/g,
+			(_match, index) => codeBlocks[index - 1]
+		)
+	} catch (e) {
+		console.error(
+			`There was an error parsing codeblocks in ${filename}. Error: ${e.message}`
+		)
+	}
 
 	// Get everything until the first header as the lead
 	const match = md.match(/\n*#*(.+?)(?=#)/s)
@@ -149,14 +185,14 @@ function parseProperties(match: string): NoteProperties {
 	}
 	let temp = ""
 	const propsLines: string[] = []
-	match.split(":")
+	match
+		.split(":")
 		.flatMap((line) => line.split("\n"))
 		.filter((line) => line !== "")
 		.forEach((line, index) => {
 			if (index === 0) {
 				temp = `${line.trim()}: `
-			}
-			else if (line.startsWith(" ")) {
+			} else if (line.startsWith(" ")) {
 				temp += `${line.trim()}|`
 			} else {
 				propsLines.push(temp.replace(/\|$/, ""))
@@ -181,7 +217,9 @@ function parseProperties(match: string): NoteProperties {
 				props.alt_title = value
 				break
 			case "wiki-allowed-users":
-				props.allowed_users = value.split("|").map((username) => username.replace(/^- /, ""))
+				props.allowed_users = value
+					.split("|")
+					.map((username) => username.replace(/^- /, ""))
 				props.allowed_users.forEach((username) => username.trim())
 				break
 			default:
@@ -263,7 +301,8 @@ function replaceCallouts(
 	_match: string,
 	type: string,
 	title: string,
-	content: string
+	content: string,
+	converter: MarkdownIt
 ) {
 	let color: string
 	let svg: string
@@ -336,25 +375,35 @@ function replaceCallouts(
 			break
 	}
 
+	// Remove all the leading "> " from the callout
 	content = content
 		.split("\n")
 		.map((line) => {
 			line = line.replace(/^> */, "")
-			return `<p>${line}</p>`
+			return `${line}`
 		})
-		.filter((line) => line !== "<p></p>")
+		.filter((line) => line !== "")
 		.join("\n")
+	// Convert the content to HTML here as it will be ignored later
+	content = converter.render(content)
 
 	return `<div class="callout-${color}"><div class="flex"><div class="w-8 stroke-${color}-400">${svg}</div><div class="pb-2"><strong>${title}</strong></div></div><section class="space-y-4">${content}</section></div>`
 }
 
 function highlightCode(_match: string, lang: string, code: string) {
-	let displayCode
+	let displayCode: string
 	const langs = hljs.listLanguages()
 	if (lang && langs.includes(lang)) {
-		displayCode = hljs.highlight(code, { language: lang }).value
+		displayCode = hljs.highlight(code, {
+			language: lang,
+			ignoreIllegals: true,
+		}).value
+		console.log(displayCode)
 	} else {
 		displayCode = code
+			.split("\n")
+			.map((line) => (line !== "" ? `<p>${line}<p>` : "<br />"))
+			.join("")
 	}
 
 	return `
@@ -362,8 +411,10 @@ function highlightCode(_match: string, lang: string, code: string) {
 	<header class="codeblock-header">
 		<span>${lang}</span>
 	</header>
-	<pre class="codeblock-pre">${displayCode}</pre>
-</div>`
+	<pre class="codeblock-pre">
+		${displayCode}
+	</pre>
+</div>\n`
 }
 
 function replaceTaskLists(
@@ -412,15 +463,6 @@ function replaceFootnotes(text: string) {
 	if (footnoteMatch) text += "</div>"
 
 	return text
-}
-
-function removeComments(text: string) {
-	const splits = text.split(/^```/gm) // All odd strings are code blocks
-	for (const index in splits) {
-		if (parseInt(index) % 2 === 1) continue
-		splits[index] = splits[index].replace(/%%.*?%%/gs, "")
-	}
-	return splits.join("```")
 }
 
 function replaceMermaidDiagram(

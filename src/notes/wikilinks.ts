@@ -1,7 +1,7 @@
 import Image from "image-js"
 import { localMedia, supabaseMedia, uploadConfig } from "../config"
 import { joinChunks, slugifyPath } from "../utils"
-import { Backreference, Note, Wikilink } from "./types"
+import { Backreference, ContentChunk, Note, Wikilink } from "./types"
 import { globalVault, supabase } from "main"
 
 function backrefAlreadyExists(
@@ -408,23 +408,54 @@ function matchWikilinks(text: string) {
 	return wikilinks
 }
 
+function removeCode(text: string) {
+	const inlineCodeRegex = /<code.*?>.*?<\/code>/gm
+	const codeBlockRegex = /<pre class="codeblock-pre">.*?<\/pre>/gs
+
+	const inlineCode = Array.from(text.matchAll(inlineCodeRegex)).map(
+		(match) => match[0]
+	)
+	const codeBlocks = Array.from(text.matchAll(codeBlockRegex)).map(
+		(match) => match[0]
+	)
+
+	let counterInline = 0
+	let counterBlock = 0
+	const filteredText = text
+		.replace(inlineCodeRegex, () => {
+			counterInline += 1
+			return `<|inline_code_${counterInline}|>`
+		})
+		.replace(codeBlockRegex, () => {
+			counterBlock += 1
+			return `<|codeblock_${counterBlock}|>`
+		})
+
+	return {
+		inlineCode,
+		codeBlocks,
+		filteredText,
+	}
+}
+
+function addCodeBack(text: string, inlineCode: string[], codeBlocks: string[]): string {
+	return text
+		.replace(/<\|inline_code_(\d+)\|>/g, (_match, index) => inlineCode[index - 1])
+		.replace(/<\|codeblock_(\d+)\|>/g, (_match, index) => codeBlocks[index - 1])
+}
+
 export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 	const convertedNotes: Note[] = []
-	// These prevent replacing links with inline code and code blocks
-	const lookbehinds =
-		'(?<!<code.*?>[^<>]*)(?<!<pre class="codeblock-pre">[^<>]*)'
-	const lookaheads = "(?![^<>]*</code>)(?![^<>]*</pre>)"
 
 	for (const note of notes) {
 		for (const chunk of note.content) {
 			// Remove code blocks to avoid matching links in them
-			const filteredChunk = chunk.text
-				.replace(/<code.*?>.*?<\/code>/gm, "")
-				.replace(/<div class="codeblock-base">.*?<\/div>/gm, "")
+			const out = removeCode(chunk.text)
+			chunk.text = out.filteredText
 
 			// First, handle the references
 			// Find all the references
-			const references = matchWikilinks(filteredChunk).filter(
+			const references = matchWikilinks(chunk.text).filter(
 				(wl) => !wl.isTransclusion
 			)
 
@@ -437,19 +468,14 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 
 			// and finally actually replace them
 			for (const index in references) {
-				const linkNoBrackets = references[index].fullLink
-					.replace(/\[/g, "\\[")
-					.replace(/\]/g, "\\]")
-					.replace(/\|/g, "\\|")
 
 				chunk.text = chunk.text.replace(
-					new RegExp(
-						`${lookbehinds}${linkNoBrackets}${lookaheads}`,
-						"m"
-					),
+					references[index].fullLink,
 					refReplacements[index]
 				)
 			}
+
+			chunk.text = addCodeBack(chunk.text, out.inlineCode, out.codeBlocks)
 		}
 	}
 
@@ -461,11 +487,10 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 			// between pages that transclude each other
 
 			// Remove code blocks to avoid matching links in them
-			const filteredChunk = chunk.text
-				.replace(/<code.*?>.*?<\/code>/gm, "")
-				.replace(/<div class="codeblock-base">.*?<\/div>/gm, "")
+			const out = removeCode(chunk.text)
+			chunk.text = out.filteredText
 
-			const transclusions = matchWikilinks(filteredChunk).filter(
+			const transclusions = matchWikilinks(chunk.text).filter(
 				(wl) => wl.isTransclusion
 			)
 
@@ -476,22 +501,12 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 			)
 
 			for (const index in transclusions) {
-				const linkNoBrackets = transclusions[index].fullLink
-					.replace(/\[/g, "\\[")
-					.replace(/\]/g, "\\]")
-					.replace(/\|/g, "\\|")
-
 				if (transReplacements[index].type === "note") {
 					// TODO: Add transclusion authorization
-					const part = chunk.text.split(
-						new RegExp(
-							`${lookbehinds}${linkNoBrackets}${lookaheads}`,
-							"m"
-						)
-					)
-					if (part.length === 1) continue
+					const parts = chunk.text.split(transclusions[index].fullLink)
+					if (parts.length === 1) continue
 
-					const partObj = part.map((p) => {
+					const partObj = parts.map((p) => {
 						return {
 							text: p,
 							allowed_users: chunk.allowed_users,
@@ -501,26 +516,30 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 						text: transReplacements[index].replacement,
 						allowed_users: transReplacements[index].allowed_users,
 					})
-					const newChunks = partObj.map((obj, i) => {
-						return {
-							chunk_id: chunk.chunk_id + i,
-							...obj,
+
+					for (const i in partObj) {
+						const index = parseInt(i)
+						const newChunk: ContentChunk = {
+							chunk_id: 1,
+							...partObj[index],
 						}
-					})
-					note.content.splice(chunk.chunk_id - 1, 1, ...newChunks)
+						note.content.splice(chunk.chunk_id - 1 + index, 1, newChunk)
+					}
 				} else {
 					chunk.text = chunk.text.replace(
-						new RegExp(
-							`${lookbehinds}${linkNoBrackets}${lookaheads}`,
-							"m"
-						),
+						transclusions[index].fullLink,
 						transReplacements[index].replacement
 					)
 				}
 			}
 
-			// Caption all images in the note
-			chunk.text = captionImages(chunk.text)
+			// Theoretically, iterating over all chunks should cause problems as your are adding code
+			// blocks to chunks that have yet to be formatted. However, this appears to work just fine.
+			// I have absolutely no clue why, but I ain't gonna be the one to question miracles.
+			for (const chunk of note.content) {
+				chunk.text = addCodeBack(chunk.text, out.inlineCode, out.codeBlocks)
+				chunk.text = captionImages(chunk.text)
+			}
 		}
 
 		// Renumber chunks after potentially splicing them, knowing that the array order is correct
