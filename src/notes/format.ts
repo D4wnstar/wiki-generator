@@ -553,7 +553,7 @@ function fixHtml(html: string): string {
 		'<a$1 class="anchor" target="_blank">$2</a>'
 	)
 	// Add tailwind classes to blockquotes, code, lists and tables
-	html = html.replace(/<blockquote>/g, '<blockquote class="blockquote">')
+	html = html.replace(/<blockquote>/g, '<blockquote class="blockquote whitespace-pre-wrap break-all">')
 	html = html.replace(
 		/<ul(.*?)>/g,
 		'<ul$1 class="list-disc list-inside indent-cascade">'
