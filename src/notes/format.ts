@@ -59,6 +59,43 @@ async function formatMd(
 	details: Map<string, string>
 	sidebarImgs: SidebarImage[]
 }> {
+	const { md: filteredMd, codeBlocks } = removeCodeblocks(md)
+	md = filteredMd
+
+	const { md: newMd, props, details, sidebarImages } = await replaceCustomBlocks(md, converter, media, filename)
+	md = newMd
+	md = replaceBlockElements(md, converter)
+	md = replaceInlineElements(md)
+
+	md = addCodeblocksBack(md, codeBlocks, filename)
+
+	// Get everything until the first header as the lead
+	const match = md.match(/\n*#*(.+?)(?=#)/s)
+	let lead = match ? match[1] : md
+
+	// Remove wikilinks from lead
+	lead = unwrapWikilinks(lead, { removeTransclusions: true })
+
+	// Split by :::secret::: blocks
+	const chunks = chunkMd(md, props.allowed_users)
+	return {
+		chunks: chunks,
+		lead: lead,
+		props: props,
+		details: details,
+		sidebarImgs: sidebarImages,
+	}
+}
+
+/**
+ * Replaces codeblocks in the markdown and replaces them with plain text identifiers of the form
+ * <|codeblock_i|> where i is the number of the codeblock from the top of the page starting from 1.
+ * Intended to be coupled with `addCodeblocksBack` to prevent codeblocks from affecting other markdown
+ * transformations.
+ * @param md The markdown to transform
+ * @returns The markdown text with codeblocks replaced by identifiers and the list of codeblocks
+ */
+function removeCodeblocks(md: string) {
 	// Remove codeblocks from the markdown as anything inside of them should be kept as is
 	// Instead, add a generic marker to know where the codeblocks were and add them back later
 	const codeBlockRegex = /^```(\w*)\n(.*?)\n```/gms
@@ -66,7 +103,10 @@ async function formatMd(
 	const codeBlocks: string[] = Array.from(codeMatches)
 		.map((match) => {
 			if (match[1] === "mermaid") {
-				return match[0].replace(/^```mermaid\n(?:---(.*?)---)?(.*?)\n```/gms, replaceMermaidDiagram)
+				return match[0].replace(
+					/^```mermaid\n(?:---(.*?)---)?(.*?)\n```/gms,
+					replaceMermaidDiagram
+				)
 			} else {
 				return highlightCode(match[0], match[1], match[2]) // Also highlight the code
 			}
@@ -78,6 +118,50 @@ async function formatMd(
 		counter += 1
 		return `<|codeblock_${counter}|>`
 	})
+
+	return { md, codeBlocks }
+}
+
+/**
+ * Transforms the markdown to add codeblocks removed by `removeCodeblocks` back in the text. The logic is
+ * simple: the number in each codeblock identifier minus 1 is the index of the correct codeblock in the given array.
+ * Make sure the length of `codeBlocks` is equal to the number of identifiers in the text. This function will not
+ * throw an error if the indexes are mismatched. It will just return the markdown without transforming it.
+ * @param md The markdown to transform
+ * @param codeBlocks A string array of codeblocks
+ * @param filename The filename of the file being processed
+ * @returns The transformed markdown, with all codeblocks put back in place
+ */
+function addCodeblocksBack(md: string, codeBlocks: string[], filename: string): string {
+	// Add the codeblocks back in
+	try {
+		md = md.replace(
+			/<\|codeblock_(\d+)\|>/g,
+			(_match, index) => codeBlocks[index - 1]
+		)
+	} catch (e) {
+		console.error(
+			`There was an error parsing codeblocks in ${filename}. Error: ${e.message}`
+		)
+		new Notice(
+			`There was an error parsing codeblocks in ${filename}. Error: ${e.message}`
+		)
+	}
+
+	return md
+}
+
+/**
+ * Parses the given markdown text, removes all :::blocks::: and returns the related data structures.
+ * This function ignores the :::secret::: blocks. Use the `chunkMd` function to split the page by those.
+ * @param md The markdown text to transform
+ * @param filename The name of the file that's being processed
+ * @param media Global reference to the list of stored media
+ * @returns The modified text, alongside all other additional data from custom blocks
+ */
+async function replaceCustomBlocks(md: string, converter: MarkdownIt, media: TFile[],  filename: string) {
+	// Remove :::hidden::: blocks
+	md = md.replace(/^:::hidden\n.*?\n:::/gms, "")
 
 	// Collect all properties
 	const propsRegex = /^---\r?\n(.*?)\r?\n---/s
@@ -93,39 +177,44 @@ async function formatMd(
 		md = md.replace(propsRegex, "") // Remove obsidian properties
 	}
 
-	// Find the first occurence of :::details:::
+	// Find and parse the first :::details::: block
 	const detailsRegex = /^:::details\n(.*?)\n:::/ms
 	const detailsMatch = md.match(detailsRegex)
 	let details = new Map<string, string>()
 	if (detailsMatch) {
-		details = parseDetails(detailsMatch[1])
+		details = parseDetails(detailsMatch[1], converter, filename)
 		if (details.size === 0) {
 			new Notice(`Improperly formatted :::details::: in ${filename}`)
 			console.warn(`Improperly formatted :::details::: in ${filename}`)
 		}
-		md = md.replace(detailsRegex, "") // Remove details from the main page
+		md = md.replace(detailsRegex, "")
 	}
 
-	// Find all occurences of :::image:::
+	// Find and parse all :::image::: blocks, uploading all new images
 	const imageRegex = /^:::image\n(.*?)\n:::/gms
 	const imageMatch = md.matchAll(imageRegex)
 	const sidebarImages: SidebarImage[] = []
 	for (const match of imageMatch) {
-		sidebarImages.push(await parseImage(match, media))
+		sidebarImages.push(await parseImage(match[1], media, converter, filename))
 		md = md.replace(match[0], "")
 	}
 
-	md = md.replace(/^:::hidden\n.*?\n:::/gms, "") // Remove :::hidden::: blocks
+	return { md, props, details, sidebarImages }
+}
+
+/**
+ * Parses the given markdown text to transform block- or page-level markdown syntax that comes from
+ * non-standard markdown flavors (Obsidian and GitHub) and would therefore not be recognized by MarkdownIt.
+ * @param md The markdown to transform
+ * @param converter A MarkdownIt converter to render the HTML inside of some blocks
+ * @returns The transformec markdown
+ */
+function replaceBlockElements(md: string, converter: MarkdownIt): string {
 	md = md.replace(
 		// Replace callouts
 		/^> +\[!(\w+)\] *(.*)(?:\n(>[^]*?))?(?=\n[^>])/gm,
 		(match, type, title, content) =>
 			replaceCallouts(match, type, title, content, converter)
-	)
-	md = md.replace(
-		// Highlight text
-		/==(.*?)==/g,
-		'<span class="bg-tertiary-50-900-token">$1</span>'
 	)
 	md = md.replace(/^\t*[-*] +\[(.)\](.*)/gm, replaceTaskLists) // Add task lists
 	md = md.replace(
@@ -139,41 +228,26 @@ async function formatMd(
 		`<sup><a class="no-target-blank anchor" href="#footnote-$1">[$1]</a></sup>`
 	)
 	md = replaceFootnotes(md) // Add the actual footnotes at the bottom of the page
+
+	return md
+}
+
+/**
+ * Parses the given markdown text to transform inline markdown syntax that comes from non-standard
+ * markdown flavors (Obsidian and GitHub) and would therefore not be recognized by MarkdownIt. This
+ * does not convert wikilinks.
+ * @param md The markdown to transform
+ * @returns The transformec markdown
+ */
+function replaceInlineElements(md: string): string {
+	md = md.replace( // Highlight text
+		/==(.*?)==/g,
+		'<span class="bg-tertiary-50-900-token">$1</span>'
+	)
 	md = md.replace(/%%.*?%%/gs, "") // Remove Obsidian comments
-	// md = md.replace(
-	// 	// Put mermaid graphs in a <pre> to be rendered in the browser
-	// 	/^```mermaid\n(?:---(.*?)---)?(.*?)\n```/gms,
-	// 	replaceMermaidDiagram
-	// )
 	md = md.replace(/\\\\/gs, "\\\\\\\\") // Double double backslashes before markdownIt halves them
 
-	// Add the codeblocks back in
-	try {
-		md = md.replace(
-			/<\|codeblock_(\d+)\|>/g,
-			(_match, index) => codeBlocks[index - 1]
-		)
-	} catch (e) {
-		console.error(
-			`There was an error parsing codeblocks in ${filename}. Error: ${e.message}`
-		)
-	}
-
-	// Get everything until the first header as the lead
-	const match = md.match(/\n*#*(.+?)(?=#)/s)
-	let lead = match ? match[1] : md
-
-	// Remove wikilinks from lead
-	lead = unwrapWikilinks(lead, { removeTransclusions: true })
-
-	const chunks = chunkMd(md, props.allowed_users) // Split by :::secret::: blocks
-	return {
-		chunks: chunks,
-		lead: lead,
-		props: props,
-		details: details,
-		sidebarImgs: sidebarImages,
-	}
+	return md
 }
 
 function parseProperties(match: string): NoteProperties {
@@ -230,48 +304,81 @@ function parseProperties(match: string): NoteProperties {
 	return props
 }
 
-function parseDetails(match: string): Map<string, string> {
+function parseDetails(match: string, converter: MarkdownIt, filename: string): Map<string, string> {
 	const detailsMap = new Map<string, string>()
 	const details = match.split("\n").filter((line) => line !== "")
 
 	for (const detail of details) {
 		const split = detail.split(/:\s*/)
-		if (split.length !== 2) {
+		if (split.length > 2 || split.length === 0) {
+			new Notice(`Improperly formatted :::details::: in ${filename}`)
+			console.warn(`Improperly formatted :::details::: in ${filename}`)
 			return new Map()
 		}
-		// eslint-disable-next-line prefer-const
-		let [k, v] = split
-		k = k.replace(/^(_|\*)+/, "").replace(/(_|\*)+$/, "")
-		detailsMap.set(k, v)
+		if (split.length === 1) {
+			let k = replaceInlineElements(split[0])
+			k = converter.renderInline(k)
+			detailsMap.set(k, "")
+		} else {
+			let [k, v] = split
+			// k = k.replace(/^(_|\*)+/, "").replace(/(_|\*)+$/, "")
+			k = replaceInlineElements(k)
+			k = converter.renderInline(k)
+
+			v = replaceInlineElements(v)
+			v = converter.renderInline(v)
+			detailsMap.set(k, v)
+		}
 	}
 
 	return detailsMap
 }
 
 async function parseImage(
-	match: RegExpMatchArray,
-	media: TFile[]
+	blockContents: string,
+	media: TFile[],
+	converter: MarkdownIt,
+	currFile: string,
 ): Promise<SidebarImage> {
 	let filename: string | undefined
 	let caption: string | undefined
 
 	// Parse markdown for filename and captions
 	// Unlike wikilinks, there's no need to check for user-defined dimensions
-	const lines = match[0].split("\n").filter((line) => line !== "")
-	for (const line of lines) {
-		const wikilink = line.match(/!\[\[(.*?)(\|.*)?\]\]/)
-		if (wikilink) {
-			filename = wikilink[1]
-			continue
-		}
-		const capMatch = line.match(/[*_]*Caption:\s*(.*)/)
-		if (capMatch) {
-			caption = capMatch[1].replace(/[*_]*$/, "")
+	const lines = blockContents.split("\n").filter((line) => line !== "")
+	if (lines.length === 0) {
+		console.warn(`Error parsing :::image::: block in ${currFile}.`)
+		new Notice(`Error parsing :::image::: block in ${currFile}.`)
+		return {
+			image_name: "Error",
+			url: undefined,
+			caption: undefined,
 		}
 	}
 
-	if (!filename) {
-		throw new Error("Invalid formatting for :::image::: block.")
+	// Grab the filename from the wikilink
+	const wikilink = lines[0].match(/!\[\[(.*?)(\|.*)?\]\]/)
+	if (wikilink) {
+		filename = wikilink[1]
+	} else {
+		console.warn(`Could not read filename in :::image::: block in ${currFile}.`)
+		new Notice(`Could not read filename in :::image::: block in ${currFile}.`)
+		return {
+			image_name: "Error",
+			url: undefined,
+			caption: undefined,
+		}
+	}
+
+	// Then the caption, if present
+	if (lines.length > 1) {
+		caption = lines
+			.splice(1)
+			.join("\n")
+			// .replace(/^[*_]*/, "")
+			// .replace(/[*_]*$/, "")
+		caption = replaceInlineElements(caption)
+		caption = converter.renderInline(caption)
 	}
 
 	// Grab that media file from the vault, if it exists. If it doesn't, it not might be a problem
@@ -398,7 +505,6 @@ function highlightCode(_match: string, lang: string, code: string) {
 			language: lang,
 			ignoreIllegals: true,
 		}).value
-		console.log(displayCode)
 	} else {
 		displayCode = code
 			.split("\n")
@@ -406,15 +512,7 @@ function highlightCode(_match: string, lang: string, code: string) {
 			.join("")
 	}
 
-	return `
-<div class="codeblock-base">
-	<header class="codeblock-header">
-		<span>${lang}</span>
-	</header>
-	<pre class="codeblock-pre">
-		${displayCode}
-	</pre>
-</div>\n`
+	return `<div class="codeblock-base"><header class="codeblock-header"><span>${lang}</span></header><pre class="codeblock-pre">${displayCode}</pre></div>\n`
 }
 
 function replaceTaskLists(
@@ -553,7 +651,10 @@ function fixHtml(html: string): string {
 		'<a$1 class="anchor" target="_blank">$2</a>'
 	)
 	// Add tailwind classes to blockquotes, code, lists and tables
-	html = html.replace(/<blockquote>/g, '<blockquote class="blockquote whitespace-pre-wrap break-all">')
+	html = html.replace(
+		/<blockquote>/g,
+		'<blockquote class="blockquote whitespace-pre-wrap break-all">'
+	)
 	html = html.replace(
 		/<ul(.*?)>/g,
 		'<ul$1 class="list-disc list-inside indent-cascade">'

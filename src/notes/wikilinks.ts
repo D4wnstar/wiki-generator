@@ -535,7 +535,7 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 
 			// Theoretically, iterating over all chunks should cause problems as your are adding code
 			// blocks to chunks that have yet to be formatted. However, this appears to work just fine.
-			// I have absolutely no clue why, but I ain't gonna be the one to question miracles.
+			// I have absolutely no clue why, but I'm not gonna be the one to question miracles.
 			for (const chunk of note.content) {
 				chunk.text = addCodeBack(chunk.text, out.inlineCode, out.codeBlocks)
 				chunk.text = captionImages(chunk.text)
@@ -545,6 +545,7 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 		// Renumber chunks after potentially splicing them, knowing that the array order is correct
 		note.content.forEach((chunk, index) => (chunk.chunk_id = index + 1))
 
+		
 		// Then, replace references in the details. Details should not have transclusion
 		// because they don't fit in the UI
 		for (const [key, value] of note.details.entries()) {
@@ -558,15 +559,14 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 				)
 			)
 
+			let replaced = value
 			for (const index in detailLinks) {
-				note.details.set(
-					key,
-					value.replace(
-						detailLinks[index].fullLink,
+				replaced = replaced.replace(
+					detailLinks[index].fullLink,
 						detailReplacements[index]
-					)
 				)
 			}
+			note.details.set(key, replaced)
 		}
 
 		convertedNotes.push(note)

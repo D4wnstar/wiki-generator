@@ -46,13 +46,7 @@ export async function uploadNotes(settings: WikiGeneratorSettings) {
 		await convertNotesAndUpload()
 	} catch (error) {
 		new Notice(error.message)
-		if (error instanceof FrontPageError || error instanceof DatabaseError) {
-			console.error(error.message)
-			return
-		} else {
-			console.error(`Uncaught error: ${error.message}`)
-			throw error
-		}
+		console.error(`Uncaught error: ${error.message}`)
 	}
 
 	console.log("Successfully uploaded notes!")
