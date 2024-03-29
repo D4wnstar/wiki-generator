@@ -226,7 +226,7 @@ export async function checkForTemplateUpdates(
 	token: string | undefined = undefined,
 ) {
 	if (!octokit) {
-		if (!token) throw new Error("Got not authentication token when creating the octokit client")
+		if (!token) throw new Error("Got no authentication token when creating the octokit client")
 		octokit = new Octokit({
 			auth: token,
 		})
@@ -274,7 +274,7 @@ export async function checkForTemplateUpdates(
 			`Error! Status: ${error.status}. Error message: ${error.response.data.message}`
 		)
 		new Notice(
-			`[Wiki Generator] There was an error while checking for template updates.`
+			`There was an error while checking for template updates.`
 		)
 	}
 }

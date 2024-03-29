@@ -30,6 +30,7 @@ export async function uploadNotes(settings: WikiGeneratorSettings) {
 		.insert({
 			settings: {
 				title: settings.wikiTitle,
+				allowLogins: settings.allowLogins
 			},
 		})
 

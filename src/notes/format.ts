@@ -3,7 +3,13 @@ import { uploadImage } from "./wikilinks"
 import * as MarkdownIt from "markdown-it"
 import hljs from "highlight.js"
 import { calloutIcons, partition, slugifyPath } from "../utils"
-import { NoteProperties, SidebarImage, Note, ContentChunk, Detail } from "./types"
+import {
+	NoteProperties,
+	SidebarImage,
+	Note,
+	ContentChunk,
+	Detail,
+} from "./types"
 import { globalVault } from "main"
 
 export async function vaultToNotes(
@@ -27,7 +33,7 @@ export async function vaultToNotes(
 			const html = converter.render(formatted.chunks[i].text)
 			formatted.chunks[i].text = fixHtml(html)
 		}
- 
+
 		const leadHtml = converter.render(formatted.lead)
 		formatted.lead = fixHtml(leadHtml)
 
@@ -59,6 +65,9 @@ async function formatMd(
 	details: Detail[]
 	sidebarImgs: SidebarImage[]
 }> {
+	// Remove carriage return to avoid issues on Windows
+	md = md.replace(/\r/g, "")
+
 	const { md: filteredMd, codeBlocks } = removeCodeblocks(md)
 
 	md = normalizeWhitespace(filteredMd)
@@ -164,9 +173,12 @@ function normalizeWhitespace(md: string): string {
 	md = md.replace(/^(\s*)(\d\..*?)\n(?=[^0-9\s])/gm, "$1$2\n\n") // Double newlines after ordered lists
 	md = md.replace(/^(\s*)([-*][^-*\n]*?)\n(?=[^-*\s])/gm, "$1$2\n\n") // Double newlines after unordered/task lists
 	md = md.replace(/\n{2,}(?=\[\^\d\]:)/g, "\n\n") // Normalize newlines before footnotes
-	md = md.replace(/\n{4,}(?!\[\^\d\]:)/g, (match) => "\n" + "<br />".repeat(match.length - 1)) // Preserve multiple newlines
+	md = md.replace(
+		/\n{4,}(?!\[\^\d\]:)/g,
+		(match) => "\n" + "<br />".repeat(match.length - 1)
+	) // Preserve multiple newlines
 	md = md.replace(/ {2,}/g, (match) => "&nbsp;".repeat(match.length)) // Preserve multiple spaces
-	return md	
+	return md
 }
 
 /**
@@ -187,7 +199,7 @@ async function replaceCustomBlocks(
 	md = md.replace(/^:::hidden\n.*?\n:::/gms, "")
 
 	// Collect all properties
-	const propsRegex = /^---\r?\n(.*?)\r?\n---/s
+	const propsRegex = /^---\n(.*?)\n---/s
 	const propsMatch = md.match(propsRegex)
 	let props: NoteProperties = {
 		publish: false,
@@ -238,12 +250,13 @@ async function replaceCustomBlocks(
  */
 function replaceBlockElements(md: string, converter: MarkdownIt): string {
 	md = md.replace(
-		// Replace callouts
 		/^> +\[!(\w+)\] *(.*)(?:\n(>[^]*?))?(?=\n[^>])/gm,
 		(match, type, title, content) =>
 			replaceCallouts(match, type, title, content, converter)
 	)
-	md = md.replace(/^\t*[-*] +\[(.)\](.*)/gm, replaceTaskLists) // Add task lists
+	md = md.replace(/^\t*[-*] +\[(.)\](.*)/gm, (match, char, content) =>
+		replaceTaskLists(match, char, content, converter)
+	)
 	md = md.replace(
 		// Wrap the tasks in a <ul>
 		/^<li>.*(\n<li>.*)*/gm,
@@ -254,7 +267,7 @@ function replaceBlockElements(md: string, converter: MarkdownIt): string {
 		/\b\[\^(\d+)\]/g,
 		`<sup><a class="no-target-blank anchor" href="#footnote-$1">[$1]</a></sup>`
 	)
-	md = replaceFootnotes(md) // Add the actual footnotes at the bottom of the page
+	md = replaceFootnotes(md, converter) // Add the actual footnotes at the bottom of the page
 
 	return md
 }
@@ -355,7 +368,7 @@ function parseDetails(
 			detailsList.push({
 				order: index + 1,
 				key: k,
-				value:"",
+				value: "",
 			})
 		} else {
 			let [k, v] = split
@@ -368,7 +381,7 @@ function parseDetails(
 			detailsList.push({
 				order: index + 1,
 				key: k,
-				value: v
+				value: v,
 			})
 		}
 	}
@@ -531,19 +544,16 @@ function replaceCallouts(
 			break
 	}
 
-	// Remove all the leading "> " from the callout
+	// Remove all the leading "> " from the callout and convert to HTML
 	content = content
 		.split("\n")
 		.map((line) => {
 			line = line.replace(/^> */, "")
-			return `${line}`
+			return line ? converter.render(line) : "<br />"
 		})
-		.filter((line) => line !== "")
-		.join("\n")
-	// Convert the content to HTML here as it will be ignored later
-	content = converter.render(content)
+		.join("")
 
-	return `<div class="callout-${color}"><div class="flex"><div class="w-8 stroke-${color}-400">${svg}</div><div class="pb-2"><strong>${title}</strong></div></div><section class="space-y-4">${content}</section></div>`
+	return `<div class="callout-${color}"><div class="flex"><div class="w-8 stroke-${color}-400">${svg}</div><div class="pb-2"><strong>${title}</strong></div></div><section>${content}</section></div>`
 }
 
 function highlightCode(_match: string, lang: string, code: string) {
@@ -567,14 +577,17 @@ function highlightCode(_match: string, lang: string, code: string) {
 function replaceTaskLists(
 	_match: string,
 	char: string,
-	content: string
+	content: string,
+	converter: MarkdownIt
 ): string {
 	const checked = char !== " " ? "checked" : ""
 	const linethrough = char === "x" ? "line-through" : ""
+	content = replaceInlineElements(content)
+	content = converter.renderInline(content)
 	return `<li><input type="checkbox" class="task-checkbox" ${checked} /><span class="${linethrough}">${content}</span></li>`
 }
 
-function replaceFootnotes(text: string) {
+function replaceFootnotes(text: string, converter: MarkdownIt) {
 	// Find the index of the last numerical footnote. Necessary to calculate the index of inline footnotes
 	const footnoteMatch = text.match(/(?<=\n)\[\^(\d+)\].*$/) ?? undefined
 	let lastFootnoteIndex = footnoteMatch ? parseInt(footnoteMatch[1]) : 1
@@ -588,7 +601,11 @@ function replaceFootnotes(text: string) {
 			for (let line of lines) {
 				line = line.replace(
 					/^\[\^(\d+)\]: +(.*)/,
-					`<p id="footnote-$1"><span class="text-slate-500 mr-2">^$1</span>$2</p>\n`
+					(_match, index, footnote) => {
+						footnote = replaceInlineElements(footnote)
+						footnote = converter.renderInline(footnote)
+						return `<p id="footnote-${index}"><span class="text-slate-500 mr-2">^${index}</span>${footnote}</p>\n`
+					}
 				)
 				out += line
 			}
@@ -599,6 +616,8 @@ function replaceFootnotes(text: string) {
 	// And append inline footnotes while adding links
 	text = text.replace(/\b\^\[(.+?)\]/g, (_match, footnote) => {
 		const idx = lastFootnoteIndex + 1
+		footnote = replaceInlineElements(footnote)
+		footnote = converter.renderInline(footnote)
 		inlineFootnotes.push(
 			`<p id="footnote-${idx}"><span class="text-slate-500 mr-2">^${idx}</span>${footnote}</p>\n`
 		)
@@ -700,19 +719,19 @@ function fixHtml(html: string): string {
 		'<a$1 class="anchor" target="_blank">$2</a>'
 	)
 	// Add tailwind classes to blockquotes, code, lists and tables
-	html = html.replace(
-		/<blockquote>/g,
-		'<blockquote class="blockquote whitespace-pre-wrap break-all">'
-	)
-	html = html.replace(
-		/<ul(.*?)>/g,
-		'<ul$1 class="list-disc list-inside indent-cascade">'
-	)
-	html = html.replace(
-		/<ol(.*?)>/g,
-		'<ol$1 class="list-decimal list-inside indent-cascade">'
-	)
-	html = html.replace(/<code>/g, '<code class="code">')
+	// html = html.replace(
+	// 	/<blockquote>/g,
+	// 	'<blockquote class="blockquote whitespace-pre-wrap break-all">'
+	// )
+	// html = html.replace(
+	// 	/<ul(.*?)>/g,
+	// 	'<ul$1 class="list-disc indent-cascade">'
+	// )
+	// html = html.replace(
+	// 	/<ol(.*?)>/g,
+	// 	'<ol$1 class="list-decimal list-inside indent-cascade">'
+	// )
+	// html = html.replace(/<code>/g, '<code class="code">')
 	html = html.replace(/<table>/g, '<table class="border-collapse">')
 	html = html.replace(
 		/<th>/g,

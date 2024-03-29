@@ -1,11 +1,12 @@
 import WikiGeneratorPlugin from "main"
-import { PluginSettingTab, App, Setting, Notice, normalizePath } from "obsidian"
+import { PluginSettingTab, App, Setting, Notice, normalizePath, Menu, TAbstractFile, TFolder } from "obsidian"
 import { resetDatabase } from "./database/init"
 import { checkForTemplateUpdates, updateUserRepository } from "./repository"
 
 export interface WikiGeneratorSettings {
 	firstUsage: boolean
 	wikiTitle: string
+	allowLogins: boolean
 	autopublishNotes: boolean
 	restrictFolders: boolean
 	publicFolders: string[]
@@ -29,6 +30,7 @@ export interface WikiGeneratorSettings {
 export const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 	firstUsage: true,
 	wikiTitle: "Awesome Wiki",
+	allowLogins: true,
 	autopublishNotes: true,
 	restrictFolders: false,
 	publicFolders: [],
@@ -41,7 +43,7 @@ export const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 	githubRepoName: "",
 	githubRepoToken: "",
 	githubAutoapplyUpdates: true,
-	githubCheckUpdatesOnStartup: true,
+	githubCheckUpdatesOnStartup: false,
 	supabaseUseLocal: false,
 	databaseUrlLocal: "postgresql://postgres:postgres@localhost:54322/postgres",
 	supabaseApiUrlLocal: "http://localhost:54321",
@@ -100,10 +102,10 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			folderDesc.createEl("br"),
 			"You must provide the full path to the folder, separated by forward slashes. For example:",
 			folderDesc.createEl("br"),
-			"University/Course Notes/Stellar Evolution",
+			folderDesc.createEl("code", { text: "University/Course Notes/Stellar Evolution" }),
 			folderDesc.createEl("br"),
 			folderDesc.createEl("strong", { text: "Hot Tip:" }),
-			' If you right click on a folder and press "Search in Folder", you can copy and paste the search parameter it gives you after path: (without the quotes!) and use it here.'
+			" If you right click on a folder, you'll see two options to add it here automatically."
 		)
 		new Setting(containerEl)
 			.setName("Public folders")
@@ -201,6 +203,17 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					.setValue(settings.wikiTitle)
 					.onChange(async (value) => {
 						settings.wikiTitle = value
+						await this.plugin.saveSettings()
+					})
+			})
+
+		new Setting(containerEl)
+			.setName("Allow logins?")
+			.setDesc("Whether to allow your users to login or create accounts.")
+			.addToggle((toggle) => {
+				toggle.setValue(settings.allowLogins)
+					.onChange(async (value) => {
+						settings.allowLogins = value
 						await this.plugin.saveSettings()
 					})
 			})
@@ -321,7 +334,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Check for updates on startup")
 			.setDesc(
-				"Automatically check for website updates every time you start Obsidian."
+				"Automatically check for website updates every time you start Obsidian. This will prevent you from opening this vault if you have not internet connection."
 			)
 			.addToggle((toggle) => {
 				toggle
@@ -474,5 +487,31 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					}
 				})
 			})
+	}
+}
+
+export function addFolderContextMenu(settings: WikiGeneratorSettings, plugin: WikiGeneratorPlugin, menu: Menu, folder: TAbstractFile) {
+	if (folder instanceof TFolder) {
+		menu.addSeparator()
+
+		menu.addItem((item) => {
+			item.setTitle("Add to public folders")
+				.setIcon("eye")
+				.onClick(async () => {
+					settings.publicFolders.push(folder.path)
+					await plugin.saveSettings()
+					new Notice(`Added ${folder.path} to public folders`)
+				})
+		})
+
+		menu.addItem((item) => {
+			item.setTitle("Add to private folders")
+				.setIcon("eye-off")
+				.onClick(async () => {
+					settings.privateFolders.push(folder.path)
+					await plugin.saveSettings()
+					new Notice(`Added ${folder.path} to private folders`)
+				})
+		})
 	}
 }

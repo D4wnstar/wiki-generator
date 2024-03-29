@@ -1,5 +1,5 @@
 import { SupabaseClient } from "@supabase/supabase-js"
-import { Notice, Plugin, Vault } from "obsidian"
+import { Notice, Plugin, TFolder, Vault } from "obsidian"
 import { massAddPublish, massSetPublishState, uploadNotes } from "src/commands"
 import { uploadConfig } from "src/config"
 import { Database } from "src/database/database.types"
@@ -10,6 +10,7 @@ import {
 	DEFAULT_SETTINGS,
 	WikiGeneratorSettingTab,
 	WikiGeneratorSettings,
+	addFolderContextMenu,
 } from "src/settings"
 import { createClientWrapper, getProfiles } from "src/database/requests"
 import { PropertyModal, UserListModal } from "src/modals"
@@ -96,6 +97,11 @@ export default class WikiGeneratorPlugin extends Plugin {
 			)
 		})
 
+		// Add context menu settings for public/private folders
+		this.registerEvent(
+			this.app.workspace.on("file-menu", (menu, folder) => addFolderContextMenu(settings, this, menu, folder))
+		)
+
 		this.addRibbonIcon("upload-cloud", "Upload Notes", async () => {
 			await uploadNotes(settings)
 		})
@@ -152,7 +158,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 		this.addSettingTab(new WikiGeneratorSettingTab(this.app, this))
 	}
 
-	onunload() {}
+	onunload() { }
 
 	async loadSettings() {
 		this.settings = Object.assign(
