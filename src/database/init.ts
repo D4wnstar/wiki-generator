@@ -104,6 +104,7 @@ async function setupInitialSchema(sql: Sql) {
 	const details = await sql`
         create table if not exists details (
             note_id int8 not null references notes (id) on delete cascade,
+            "order" integer not null,
             detail_name text not null,
             detail_content text not null,
             primary key (note_id, detail_name)
@@ -114,6 +115,7 @@ async function setupInitialSchema(sql: Sql) {
 	const sidebar_images = await sql`
         create table if not exists sidebar_images (
             note_id int8 not null references notes (id) on delete cascade,
+            "order" integer not null,
             image_name text not null,
             url text,
             caption text,

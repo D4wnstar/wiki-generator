@@ -25,7 +25,7 @@ export type Note = {
 	references: Set<string>
 	backreferences: Backreference[]
 	properties: NoteProperties
-	details: Map<string, string>
+	details: Detail[]
 	sidebarImages: SidebarImage[]
 }
 
@@ -42,7 +42,14 @@ export type NoteProperties = {
 	allowed_users: string[]
 }
 
+export type Detail = {
+	order: number,
+	key: string,
+	value: string,
+}
+
 export type SidebarImage = {
+	order: number,
 	image_name: string
 	url: string | undefined
 	caption: string | undefined

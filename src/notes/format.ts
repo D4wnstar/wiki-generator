@@ -3,7 +3,7 @@ import { uploadImage } from "./wikilinks"
 import * as MarkdownIt from "markdown-it"
 import hljs from "highlight.js"
 import { calloutIcons, partition, slugifyPath } from "../utils"
-import { NoteProperties, SidebarImage, Note, ContentChunk } from "./types"
+import { NoteProperties, SidebarImage, Note, ContentChunk, Detail } from "./types"
 import { globalVault } from "main"
 
 export async function vaultToNotes(
@@ -27,7 +27,7 @@ export async function vaultToNotes(
 			const html = converter.render(formatted.chunks[i].text)
 			formatted.chunks[i].text = fixHtml(html)
 		}
-
+ 
 		const leadHtml = converter.render(formatted.lead)
 		formatted.lead = fixHtml(leadHtml)
 
@@ -56,15 +56,19 @@ async function formatMd(
 	chunks: ContentChunk[]
 	lead: string
 	props: NoteProperties
-	details: Map<string, string>
+	details: Detail[]
 	sidebarImgs: SidebarImage[]
 }> {
 	const { md: filteredMd, codeBlocks } = removeCodeblocks(md)
-	md = filteredMd
 
-	const { md: newMd, props, details, sidebarImages } = await replaceCustomBlocks(md, converter, media, filename)
-	md = newMd
-	md = replaceBlockElements(md, converter)
+	md = normalizeWhitespace(filteredMd)
+	const {
+		md: newMd,
+		props,
+		details,
+		sidebarImages,
+	} = await replaceCustomBlocks(md, converter, media, filename)
+	md = replaceBlockElements(newMd, converter)
 	md = replaceInlineElements(md)
 
 	md = addCodeblocksBack(md, codeBlocks, filename)
@@ -132,7 +136,11 @@ function removeCodeblocks(md: string) {
  * @param filename The filename of the file being processed
  * @returns The transformed markdown, with all codeblocks put back in place
  */
-function addCodeblocksBack(md: string, codeBlocks: string[], filename: string): string {
+function addCodeblocksBack(
+	md: string,
+	codeBlocks: string[],
+	filename: string
+): string {
 	// Add the codeblocks back in
 	try {
 		md = md.replace(
@@ -151,6 +159,16 @@ function addCodeblocksBack(md: string, codeBlocks: string[], filename: string): 
 	return md
 }
 
+function normalizeWhitespace(md: string): string {
+	md = md.replace(/\n^(#+\s)/gm, "\n\n$1") // Double newlines before headers
+	md = md.replace(/^(\s*)(\d\..*?)\n(?=[^0-9\s])/gm, "$1$2\n\n") // Double newlines after ordered lists
+	md = md.replace(/^(\s*)([-*][^-*\n]*?)\n(?=[^-*\s])/gm, "$1$2\n\n") // Double newlines after unordered/task lists
+	md = md.replace(/\n{2,}(?=\[\^\d\]:)/g, "\n\n") // Normalize newlines before footnotes
+	md = md.replace(/\n{4,}(?!\[\^\d\]:)/g, (match) => "\n" + "<br />".repeat(match.length - 1)) // Preserve multiple newlines
+	md = md.replace(/ {2,}/g, (match) => "&nbsp;".repeat(match.length)) // Preserve multiple spaces
+	return md	
+}
+
 /**
  * Parses the given markdown text, removes all :::blocks::: and returns the related data structures.
  * This function ignores the :::secret::: blocks. Use the `chunkMd` function to split the page by those.
@@ -159,7 +177,12 @@ function addCodeblocksBack(md: string, codeBlocks: string[], filename: string): 
  * @param media Global reference to the list of stored media
  * @returns The modified text, alongside all other additional data from custom blocks
  */
-async function replaceCustomBlocks(md: string, converter: MarkdownIt, media: TFile[],  filename: string) {
+async function replaceCustomBlocks(
+	md: string,
+	converter: MarkdownIt,
+	media: TFile[],
+	filename: string
+) {
 	// Remove :::hidden::: blocks
 	md = md.replace(/^:::hidden\n.*?\n:::/gms, "")
 
@@ -180,10 +203,10 @@ async function replaceCustomBlocks(md: string, converter: MarkdownIt, media: TFi
 	// Find and parse the first :::details::: block
 	const detailsRegex = /^:::details\n(.*?)\n:::/ms
 	const detailsMatch = md.match(detailsRegex)
-	let details = new Map<string, string>()
+	let details: Detail[] = []
 	if (detailsMatch) {
 		details = parseDetails(detailsMatch[1], converter, filename)
-		if (details.size === 0) {
+		if (details.length === 0) {
 			new Notice(`Improperly formatted :::details::: in ${filename}`)
 			console.warn(`Improperly formatted :::details::: in ${filename}`)
 		}
@@ -192,10 +215,14 @@ async function replaceCustomBlocks(md: string, converter: MarkdownIt, media: TFi
 
 	// Find and parse all :::image::: blocks, uploading all new images
 	const imageRegex = /^:::image\n(.*?)\n:::/gms
-	const imageMatch = md.matchAll(imageRegex)
+	const imageMatch = Array.from(md.matchAll(imageRegex))
 	const sidebarImages: SidebarImage[] = []
-	for (const match of imageMatch) {
-		sidebarImages.push(await parseImage(match[1], media, converter, filename))
+	for (const i in imageMatch) {
+		const index = parseInt(i)
+		const match = imageMatch[index]
+		sidebarImages.push(
+			await parseImage(match[1], index + 1, media, converter, filename)
+		)
 		md = md.replace(match[0], "")
 	}
 
@@ -240,7 +267,8 @@ function replaceBlockElements(md: string, converter: MarkdownIt): string {
  * @returns The transformec markdown
  */
 function replaceInlineElements(md: string): string {
-	md = md.replace( // Highlight text
+	md = md.replace(
+		// Highlight text
 		/==(.*?)==/g,
 		'<span class="bg-tertiary-50-900-token">$1</span>'
 	)
@@ -304,21 +332,31 @@ function parseProperties(match: string): NoteProperties {
 	return props
 }
 
-function parseDetails(match: string, converter: MarkdownIt, filename: string): Map<string, string> {
-	const detailsMap = new Map<string, string>()
+function parseDetails(
+	match: string,
+	converter: MarkdownIt,
+	filename: string
+): Detail[] {
+	const detailsList: Detail[] = []
 	const details = match.split("\n").filter((line) => line !== "")
 
-	for (const detail of details) {
+	for (const i in details) {
+		const index = parseInt(i)
+		const detail = details[i]
 		const split = detail.split(/:\s*/)
 		if (split.length > 2 || split.length === 0) {
 			new Notice(`Improperly formatted :::details::: in ${filename}`)
 			console.warn(`Improperly formatted :::details::: in ${filename}`)
-			return new Map()
+			return [{ order: 1, key: "", value: "" }]
 		}
 		if (split.length === 1) {
 			let k = replaceInlineElements(split[0])
 			k = converter.renderInline(k)
-			detailsMap.set(k, "")
+			detailsList.push({
+				order: index + 1,
+				key: k,
+				value:"",
+			})
 		} else {
 			let [k, v] = split
 			// k = k.replace(/^(_|\*)+/, "").replace(/(_|\*)+$/, "")
@@ -327,18 +365,23 @@ function parseDetails(match: string, converter: MarkdownIt, filename: string): M
 
 			v = replaceInlineElements(v)
 			v = converter.renderInline(v)
-			detailsMap.set(k, v)
+			detailsList.push({
+				order: index + 1,
+				key: k,
+				value: v
+			})
 		}
 	}
 
-	return detailsMap
+	return detailsList
 }
 
 async function parseImage(
 	blockContents: string,
+	index: number,
 	media: TFile[],
 	converter: MarkdownIt,
-	currFile: string,
+	currFile: string
 ): Promise<SidebarImage> {
 	let filename: string | undefined
 	let caption: string | undefined
@@ -350,6 +393,7 @@ async function parseImage(
 		console.warn(`Error parsing :::image::: block in ${currFile}.`)
 		new Notice(`Error parsing :::image::: block in ${currFile}.`)
 		return {
+			order: index,
 			image_name: "Error",
 			url: undefined,
 			caption: undefined,
@@ -361,9 +405,14 @@ async function parseImage(
 	if (wikilink) {
 		filename = wikilink[1]
 	} else {
-		console.warn(`Could not read filename in :::image::: block in ${currFile}.`)
-		new Notice(`Could not read filename in :::image::: block in ${currFile}.`)
+		console.warn(
+			`Could not read filename in :::image::: block in ${currFile}.`
+		)
+		new Notice(
+			`Could not read filename in :::image::: block in ${currFile}.`
+		)
 		return {
+			order: index,
 			image_name: "Error",
 			url: undefined,
 			caption: undefined,
@@ -372,11 +421,9 @@ async function parseImage(
 
 	// Then the caption, if present
 	if (lines.length > 1) {
-		caption = lines
-			.splice(1)
-			.join("\n")
-			// .replace(/^[*_]*/, "")
-			// .replace(/[*_]*$/, "")
+		caption = lines.splice(1).join("\n")
+		// .replace(/^[*_]*/, "")
+		// .replace(/[*_]*$/, "")
 		caption = replaceInlineElements(caption)
 		caption = converter.renderInline(caption)
 	}
@@ -388,6 +435,7 @@ async function parseImage(
 			`Could not find file "${filename}". If this file doesn't yet exist, this is expected`
 		)
 		return {
+			order: index,
 			image_name: filename,
 			url: undefined,
 			caption: caption,
@@ -398,6 +446,7 @@ async function parseImage(
 	const refFileBinary = await globalVault.readBinary(refFile)
 	const url = await uploadImage(refFileBinary, filename)
 	return {
+		order: index,
 		image_name: filename,
 		url: url,
 		caption: caption,

@@ -148,11 +148,12 @@ async function uploadExtraInfo(notes: Note[], uploadedNotes: DatabaseNote[]) {
 
 	// Make an array with all details
 	const details = notes.flatMap((note, index) => {
-		return [...note.details.entries()].map((pair) => {
+		return [...note.details].map((detail) => {
 			return {
 				note_id: uploadedNotes[index].id,
-				detail_name: pair[0],
-				detail_content: pair[1],
+				order: detail.order,
+				detail_name: detail.key,
+				detail_content: detail.value,
 			}
 		})
 	})
@@ -185,9 +186,7 @@ async function uploadExtraInfo(notes: Note[], uploadedNotes: DatabaseNote[]) {
 		return note.sidebarImages.map((img) => {
 			return {
 				note_id: uploadedNotes[index].id,
-				image_name: img.image_name,
-				url: img.url,
-				caption: img.caption,
+				...img,
 			}
 		})
 	})

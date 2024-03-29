@@ -1,7 +1,7 @@
 import Image from "image-js"
 import { localMedia, supabaseMedia, uploadConfig } from "../config"
 import { joinChunks, slugifyPath } from "../utils"
-import { Backreference, ContentChunk, Note, Wikilink } from "./types"
+import { Backreference, ContentChunk, Detail, Note, Wikilink } from "./types"
 import { globalVault, supabase } from "main"
 
 function backrefAlreadyExists(
@@ -548,8 +548,9 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 		
 		// Then, replace references in the details. Details should not have transclusion
 		// because they don't fit in the UI
-		for (const [key, value] of note.details.entries()) {
-			const detailLinks = matchWikilinks(value).filter(
+		const newDetails: Detail[] = []
+		for (const detail of note.details) {
+			const detailLinks = matchWikilinks(detail.value).filter(
 				(wl) => !wl.isTransclusion
 			)
 
@@ -559,15 +560,16 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 				)
 			)
 
-			let replaced = value
+			let replaced = detail.value
 			for (const index in detailLinks) {
 				replaced = replaced.replace(
 					detailLinks[index].fullLink,
 						detailReplacements[index]
 				)
 			}
-			note.details.set(key, replaced)
+			newDetails.push({ ...detail, value: replaced })
 		}
+		note.details = newDetails
 
 		convertedNotes.push(note)
 	}
