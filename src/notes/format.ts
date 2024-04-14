@@ -356,8 +356,11 @@ function parseDetails(
 	for (const i in details) {
 		const index = parseInt(i)
 		const detail = details[i]
+
+		if (detail === "") continue
+
 		const split = detail.split(/:\s*/)
-		if (split.length > 2 || split.length === 0) {
+		if (split.length === 0) {
 			new Notice(`Improperly formatted :::details::: in ${filename}`)
 			console.warn(`Improperly formatted :::details::: in ${filename}`)
 			return [{ order: 1, key: "", value: "" }]
@@ -371,7 +374,8 @@ function parseDetails(
 				value: "",
 			})
 		} else {
-			let [k, v] = split
+			let k = split[0]
+			let v = split.splice(1).reduce((a, b) => a + ": " + b)
 			// k = k.replace(/^(_|\*)+/, "").replace(/(_|\*)+$/, "")
 			k = replaceInlineElements(k)
 			k = converter.renderInline(k)
