@@ -100,7 +100,8 @@ export function findClosestWidthClass(width: number): string {
 
 export async function uploadImage(
 	fileBuffer: ArrayBuffer,
-	filename: string
+	filename: string,
+	fullres = false
 ): Promise<string | undefined> {
 	// Change the extension to webp before conversion
 	const newFilename = filename.replace(/\..*$/, ".webp")
@@ -127,16 +128,18 @@ export async function uploadImage(
 	// If it doesn't exists, load the image to manipulate it
 	let image = await Image.load(fileBuffer)
 
-	// Compress the image if it's overly large
-	if (image.height > 1600) {
-		image = image.resize({ height: 1600 })
-	}
-	if (image.width > 1600) {
-		image = image.resize({ width: 1600 })
+	if (!fullres) {
+		// Compress the image if it's overly large
+		if (image.height > 1600) {
+			image = image.resize({ height: 1600 })
+		}
+		if (image.width > 1600) {
+			image = image.resize({ width: 1600 })
+		}
 	}
 
 	// Convert to webp and upload
-	const blob = await image.toBlob("image/webp")
+	const blob = await image.toBlob("image/webp", 85)
 	const { data, error } = await supabase.storage
 		.from("images")
 		.upload(newFilename, blob, { upsert: uploadConfig.overwriteFiles })
@@ -286,7 +289,7 @@ async function handleFile(
 
 		// Load the file as a binary ArrayBuffer and upload it
 		const refFileBinary = await globalVault.readBinary(refFile)
-		const url = await uploadImage(refFileBinary, filename)
+		const url = await uploadImage(refFileBinary, filename, true)
 
 		if (transclude) {
 			const wClass = width ? findClosestWidthClass(width) : ""
@@ -438,10 +441,20 @@ function removeCode(text: string) {
 	}
 }
 
-function addCodeBack(text: string, inlineCode: string[], codeBlocks: string[]): string {
+function addCodeBack(
+	text: string,
+	inlineCode: string[],
+	codeBlocks: string[]
+): string {
 	return text
-		.replace(/<\|inline_code_(\d+)\|>/g, (_match, index) => inlineCode[index - 1])
-		.replace(/<\|codeblock_(\d+)\|>/g, (_match, index) => codeBlocks[index - 1])
+		.replace(
+			/<\|inline_code_(\d+)\|>/g,
+			(_match, index) => inlineCode[index - 1]
+		)
+		.replace(
+			/<\|codeblock_(\d+)\|>/g,
+			(_match, index) => codeBlocks[index - 1]
+		)
 }
 
 export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
@@ -468,7 +481,6 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 
 			// and finally actually replace them
 			for (const index in references) {
-
 				chunk.text = chunk.text.replace(
 					references[index].fullLink,
 					refReplacements[index]
@@ -503,7 +515,9 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 			for (const index in transclusions) {
 				if (transReplacements[index].type === "note") {
 					// TODO: Add transclusion authorization
-					const parts = chunk.text.split(transclusions[index].fullLink)
+					const parts = chunk.text.split(
+						transclusions[index].fullLink
+					)
 					if (parts.length === 1) continue
 
 					const partObj = parts.map((p) => {
@@ -523,7 +537,11 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 							chunk_id: 1,
 							...partObj[index],
 						}
-						note.content.splice(chunk.chunk_id - 1 + index, 1, newChunk)
+						note.content.splice(
+							chunk.chunk_id - 1 + index,
+							1,
+							newChunk
+						)
 					}
 				} else {
 					chunk.text = chunk.text.replace(
@@ -537,7 +555,11 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 			// blocks to chunks that have yet to be formatted. However, this appears to work just fine.
 			// I have absolutely no clue why, but I'm not gonna be the one to question miracles.
 			for (const chunk of note.content) {
-				chunk.text = addCodeBack(chunk.text, out.inlineCode, out.codeBlocks)
+				chunk.text = addCodeBack(
+					chunk.text,
+					out.inlineCode,
+					out.codeBlocks
+				)
 				chunk.text = captionImages(chunk.text)
 			}
 		}
@@ -545,7 +567,6 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 		// Renumber chunks after potentially splicing them, knowing that the array order is correct
 		note.content.forEach((chunk, index) => (chunk.chunk_id = index + 1))
 
-		
 		// Then, replace references in the details. Details should not have transclusion
 		// because they don't fit in the UI
 		const newDetails: Detail[] = []
@@ -564,7 +585,7 @@ export async function convertWikilinks(notes: Note[]): Promise<Note[]> {
 			for (const index in detailLinks) {
 				replaced = replaced.replace(
 					detailLinks[index].fullLink,
-						detailReplacements[index]
+					detailReplacements[index]
 				)
 			}
 			newDetails.push({ ...detail, value: replaced })

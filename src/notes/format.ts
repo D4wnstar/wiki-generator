@@ -226,14 +226,21 @@ async function replaceCustomBlocks(
 	}
 
 	// Find and parse all :::image::: blocks, uploading all new images
-	const imageRegex = /^:::image\n(.*?)\n:::/gms
+	const imageRegex = /^:::image(\(fullres\))?\n(.*?)\n:::/gms
 	const imageMatch = Array.from(md.matchAll(imageRegex))
 	const sidebarImages: SidebarImage[] = []
 	for (const i in imageMatch) {
 		const index = parseInt(i)
 		const match = imageMatch[index]
 		sidebarImages.push(
-			await parseImage(match[1], index + 1, media, converter, filename)
+			await parseImage(
+				match[2],
+				match[1],
+				index + 1,
+				media,
+				converter,
+				filename
+			)
 		)
 		md = md.replace(match[0], "")
 	}
@@ -393,6 +400,7 @@ function parseDetails(
 
 async function parseImage(
 	blockContents: string,
+	fullres: string,
 	index: number,
 	media: TFile[],
 	converter: MarkdownIt,
@@ -457,9 +465,10 @@ async function parseImage(
 		}
 	}
 
+	const fullresFlag = fullres ? true : false
 	// If it exists, read it as a binary ArrayBuffer and upload it
 	const refFileBinary = await globalVault.readBinary(refFile)
-	const url = await uploadImage(refFileBinary, filename)
+	const url = await uploadImage(refFileBinary, filename, fullresFlag)
 	return {
 		order: index,
 		image_name: filename,
