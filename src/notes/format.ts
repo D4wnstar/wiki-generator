@@ -468,7 +468,7 @@ async function parseImage(
 	const fullresFlag = fullres ? true : false
 	// If it exists, read it as a binary ArrayBuffer and upload it
 	const refFileBinary = await globalVault.readBinary(refFile)
-	const url = await uploadImage(refFileBinary, filename, fullresFlag)
+	const url = await uploadImage(refFileBinary, filename, true)
 	return {
 		order: index,
 		image_name: filename,

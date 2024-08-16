@@ -99,7 +99,9 @@ export default class WikiGeneratorPlugin extends Plugin {
 
 		// Add context menu settings for public/private folders
 		this.registerEvent(
-			this.app.workspace.on("file-menu", (menu, folder) => addFolderContextMenu(settings, this, menu, folder))
+			this.app.workspace.on("file-menu", (menu, folder) =>
+				addFolderContextMenu(settings, this, menu, folder)
+			)
 		)
 
 		this.addRibbonIcon("upload-cloud", "Upload Notes", async () => {
@@ -110,6 +112,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 			id: "upload-notes",
 			name: "Upload notes",
 			callback: async () => {
+				uploadConfig.overwriteFiles = false
 				await uploadNotes(settings)
 			},
 		})
@@ -158,7 +161,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 		this.addSettingTab(new WikiGeneratorSettingTab(this.app, this))
 	}
 
-	onunload() { }
+	onunload() {}
 
 	async loadSettings() {
 		this.settings = Object.assign(
