@@ -277,7 +277,7 @@ function replaceBlockElements(md: string, converter: MarkdownIt): string {
  * markdown flavors (Obsidian and GitHub) and would therefore not be recognized by MarkdownIt. This
  * does not convert wikilinks.
  * @param md The markdown to transform
- * @returns The transformec markdown
+ * @returns The transformed markdown
  */
 function replaceInlineElements(md: string): string {
 	md = md.replace(
@@ -298,47 +298,45 @@ function parseProperties(match: string): NoteProperties {
 		alt_title: undefined,
 		allowed_users: [],
 	}
-	let temp = ""
-	const propsLines: string[] = []
-	match
-		.split(":")
-		.flatMap((line) => line.split("\n"))
-		.filter((line) => line !== "")
-		.forEach((line, index) => {
-			if (index === 0) {
-				temp = `${line.trim()}: `
-			} else if (line.startsWith(" ")) {
-				temp += `${line.trim()}|`
-			} else {
-				propsLines.push(temp.replace(/\|$/, ""))
-				temp = `${line.trim()}: `
-			}
-		})
-	propsLines.push(temp.replace(/\|$/, ""))
 
-	for (const line of propsLines) {
-		const [key, value] = line.split(": ")
-		switch (key) {
-			case "wiki-publish":
-			case "dg-publish":
-				if (value === "true") props.publish = true
-				break
-			case "wiki-home":
-			case "dg-home":
-				if (value === "true") props.frontpage = true
-				break
-			case "wiki-title":
-			case "dg-title":
-				props.alt_title = value
-				break
-			case "wiki-allowed-users":
-				props.allowed_users = value
-					.split("|")
-					.map((username) => username.replace(/^- /, ""))
-				props.allowed_users.forEach((username) => username.trim())
-				break
-			default:
-				break
+	const pairs = match
+		.split("\n")
+		.flatMap((line) => line.trim())
+		.map((line) => line.split(":"))
+		.map((pair) =>
+			pair
+				.map((val) => val.trim().replace(/&nbsp;/g, ""))
+				.filter((val) => val !== "")
+		)
+
+	let currList: string | undefined = undefined
+	for (const pair of pairs) {
+		if (pair.length === 2) {
+			const [key, value] = pair
+			switch (key) {
+				case "wiki-publish":
+				case "dg-publish":
+					if (value === "true") props.publish = true
+					break
+				case "wiki-home":
+				case "dg-home":
+					if (value === "true") props.frontpage = true
+					break
+				case "wiki-title":
+				case "dg-title":
+					props.alt_title = value
+					break
+			}
+		} else if (pair.length === 1) {
+			const val = pair[0].trim()
+			if (val[0] === "-" && currList) {
+				switch (currList) {
+					case "wiki-allowed-users":
+						props.allowed_users.push(val.replace(/^-/g, "").trim())
+				}
+			} else {
+				currList = val
+			}
 		}
 	}
 
