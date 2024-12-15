@@ -3,6 +3,7 @@ import slugify from "slugify"
 import { WikiGeneratorSettings } from "./settings"
 import { globalVault } from "main"
 import { ContentChunk } from "./notes/types"
+import Image from "image-js"
 
 export const calloutIcons = {
 	info: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-info"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`,
@@ -33,16 +34,101 @@ export function slugifyPath(path: string): string {
  * Splits the text by the splitter string and retains it in the return value, unlike `split`
  * which drops it. Assumes `splitter` exists in `text`.
  * @param text The text to partition
- * @param splitter The string to partition by
+ * @param splitter The string to partition by. May be a RegExp with `g` flag and NO capture groups
+ * @param limit Maximum number of splits done
  * @returns An array containing the partitioned text
  */
-export function partition(text: string, splitter: string): string[] {
-	const split = text.split(splitter)
-	const length = split.length
-	for (let i = 1; i < length; i++) {
-		split.splice(i, 0, splitter)
+export function partition(
+	text: string,
+	splitter: string | RegExp,
+	limit = -1
+): string[] {
+	if (limit === 0) {
+		return [text]
 	}
-	return split
+
+	const split = text.split(splitter)
+
+	if (typeof splitter === "string") {
+		const length = split.length
+		for (let i = 1; i < length; i++) {
+			if (i - 1 === limit) {
+				split.slice(i).reduce((acc, curr, idx) => {
+					if (idx < split.length - 1) {
+						return acc + curr + splitter
+					} else {
+						return acc + curr
+					}
+				}, "")
+			} else {
+				split.splice(i, 0, splitter)
+			}
+		}
+		return split
+	} else {
+		const matches = [...text.matchAll(splitter)]
+		if (!matches || matches.length === 0) {
+			return [text]
+		}
+		const out: string[] = []
+		// Each step we mix a split and a match
+		for (let i = 0; i < split.length; i++) {
+			if (i === 0) {
+				out.push(split[0])
+			} else {
+				// We drain the matches array bit by bit
+				// Since split and matches are created by the same regex, we are guaranteed to
+				// not shift() an empty array
+
+				//@ts-ignore
+				out.push(matches.shift()[0])
+				if (i === limit) {
+					// If we reach the limit, we reduce all of the remaining splits/matches into a string
+					const rest = split.slice(limit).reduce((acc, curr) => {
+						if (matches.length > 0) {
+							//@ts-ignore
+							const m = matches.shift()[0]
+							return acc + curr + m
+						} else {
+							return acc + curr
+						}
+					}, "")
+					out.push(rest)
+					break
+				} else {
+					out.push(split[i])
+				}
+			}
+		}
+
+		return out
+	}
+}
+
+/**
+ * Convert an image from the Vault into webp, possibly downscaling it, and return its
+ * base64 representation.
+ * @param file The image's TFile
+ * @param vault A reference to the Vault
+ * @returns The base64 representation of the image
+ */
+export async function imageToBase64(
+	file: TFile,
+	vault: Vault,
+	downscale: boolean
+): Promise<string> {
+	const buf = await vault.readBinary(file)
+	let image = await Image.load(buf)
+	if (downscale) {
+		// Compress the image if it's overly large
+		if (image.height > 1600) {
+			image = image.resize({ height: 1600 })
+		}
+		if (image.width > 1600) {
+			image = image.resize({ width: 1600 })
+		}
+	}
+	return await image.toBase64("image/webp")
 }
 
 /**

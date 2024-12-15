@@ -1,9 +1,13 @@
 import { SupabaseClient } from "@supabase/supabase-js"
-import { Notice, Plugin, TFolder, Vault } from "obsidian"
-import { massAddPublish, massSetPublishState, uploadNotes } from "src/commands"
+import { Notice, Plugin, Vault } from "obsidian"
+import {
+	massAddPublish,
+	massSetPublishState,
+	uploadNotes,
+	uploadNotesSqlite,
+} from "src/commands"
 import { uploadConfig } from "src/config"
-import { Database } from "src/database/database.types"
-import { initializeDatabase } from "src/database/init"
+import { initializeDatabase, initializeSqliteClient } from "src/database/init"
 import { autopublishNotes } from "src/events"
 import { checkForTemplateUpdates } from "src/repository"
 import {
@@ -14,6 +18,8 @@ import {
 } from "src/settings"
 import { createClientWrapper, getProfiles } from "src/database/requests"
 import { PropertyModal, UserListModal } from "src/modals"
+import { exportDb } from "src/database/filesystem"
+import { Database } from "sql.js"
 
 /**
  * A global reference to the vault to avoid having to pass it down the whole call stack.
@@ -23,7 +29,9 @@ export let globalVault: Vault
 /**
  * A global reference to the Supabase client to avoid having to pass it down the whole call stack.
  */
-export let supabase: SupabaseClient<Database>
+export let supabase: SupabaseClient
+
+export let globalDb: Database
 
 export default class WikiGeneratorPlugin extends Plugin {
 	settings: WikiGeneratorSettings
@@ -106,6 +114,21 @@ export default class WikiGeneratorPlugin extends Plugin {
 
 		this.addRibbonIcon("upload-cloud", "Upload Notes", async () => {
 			await uploadNotes(settings)
+		})
+
+		this.addRibbonIcon("test-tube", "Init SqlJs", async () => {
+			globalDb = await initializeSqliteClient(this.app.vault)
+			console.log("Initialized database")
+		})
+
+		this.addRibbonIcon("test-tube-2", "Save SqlJs", async () => {
+			await exportDb(globalDb, this.app.vault)
+			console.log("Saved database to file")
+		})
+
+		this.addRibbonIcon("test-tube", "Upload Notes", async () => {
+			await uploadNotesSqlite(this.app.vault, settings)
+			console.log("Uploaded notes")
 		})
 
 		this.addCommand({

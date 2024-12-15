@@ -21,7 +21,7 @@ export type Note = {
 	path: string
 	slug: string
 	content: ContentChunk[]
-	lead: string,
+	lead: string
 	references: Set<string>
 	backreferences: Backreference[]
 	properties: NoteProperties
@@ -43,15 +43,15 @@ export type NoteProperties = {
 }
 
 export type Detail = {
-	order: number,
-	key: string,
-	value: string,
+	order: number
+	key: string
+	value: string | undefined
 }
 
 export type SidebarImage = {
-	order: number,
+	order: number
 	image_name: string
-	url: string | undefined
+	base64: string
 	caption: string | undefined
 }
 
@@ -62,11 +62,11 @@ export type ContentChunk = {
 }
 
 export type Wikilink = {
-    isTransclusion: boolean
-    isMedia: boolean
-    isBlockRef: boolean
-    fullLink: string
-    title: string
-    header: string | undefined
-    altName: string | undefined
+	isTransclusion: boolean
+	isMedia: boolean
+	isBlockRef: boolean
+	fullLink: string
+	title: string
+	header: string | undefined
+	altName: string | undefined
 }
