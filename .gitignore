@@ -26,3 +26,4 @@ notes-data.*
 .env.*
 supabase
 obsidian-wiki-generator.code-workspace
+db/*

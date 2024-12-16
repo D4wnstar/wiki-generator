@@ -190,7 +190,7 @@ function handleTextReference(
 	} else {
 		path = titleToPath.get(pageTitleOrPath?.toLowerCase())
 	}
-	const headerLink = header ? slug(header) : ""
+	const headerLink = header ? `#${slug(header)}` : ""
 	const refName = alias?.replace("|", "") ?? pageTitleOrPath
 
 	// If path is not found, that means the note is not published
