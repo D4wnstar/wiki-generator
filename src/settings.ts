@@ -1,7 +1,16 @@
 import WikiGeneratorPlugin from "main"
-import { PluginSettingTab, App, Setting, Notice, normalizePath, Menu, TAbstractFile, TFolder } from "obsidian"
+import {
+	PluginSettingTab,
+	App,
+	Setting,
+	Notice,
+	normalizePath,
+	Menu,
+	TAbstractFile,
+	TFolder,
+} from "obsidian"
 import { resetDatabase } from "./database/init"
-import { checkForTemplateUpdates, updateUserRepository } from "./repository"
+import { checkForTemplateUpdates, pullWebsiteUpdates } from "./repository"
 
 export interface WikiGeneratorSettings {
 	firstUsage: boolean
@@ -25,6 +34,7 @@ export interface WikiGeneratorSettings {
 	supabaseApiUrlLocal: string
 	supabaseAnonKeyLocal: string
 	supabaseServiceKeyLocal: string
+	localExport: boolean
 }
 
 export const DEFAULT_SETTINGS: WikiGeneratorSettings = {
@@ -49,6 +59,7 @@ export const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 	supabaseApiUrlLocal: "http://localhost:54321",
 	supabaseAnonKeyLocal: "",
 	supabaseServiceKeyLocal: "",
+	localExport: false,
 }
 
 export class WikiGeneratorSettingTab extends PluginSettingTab {
@@ -102,7 +113,9 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			folderDesc.createEl("br"),
 			"You must provide the full path to the folder, separated by forward slashes. For example:",
 			folderDesc.createEl("br"),
-			folderDesc.createEl("code", { text: "University/Course Notes/Stellar Evolution" }),
+			folderDesc.createEl("code", {
+				text: "University/Course Notes/Stellar Evolution",
+			}),
 			folderDesc.createEl("br"),
 			folderDesc.createEl("strong", { text: "Hot Tip:" }),
 			" If you right click on a folder, you'll see two options to add it here automatically."
@@ -211,7 +224,8 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			.setName("Allow logins?")
 			.setDesc("Whether to allow your users to login or create accounts.")
 			.addToggle((toggle) => {
-				toggle.setValue(settings.allowLogins)
+				toggle
+					.setValue(settings.allowLogins)
 					.onChange(async (value) => {
 						settings.allowLogins = value
 						await this.plugin.saveSettings()
@@ -361,7 +375,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 							settings.githubRepoName
 						) {
 							new Notice("Updating your website...")
-							const prUrl = await updateUserRepository(
+							const prUrl = await pullWebsiteUpdates(
 								settings.githubRepoToken,
 								settings.githubUsername,
 								settings.githubRepoName,
@@ -487,10 +501,29 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					}
 				})
 			})
+
+		new Setting(containerEl)
+			.setName("Local export")
+			.setDesc(
+				"Export the database to a local SQLite file instead of pushing to GitHub. Useful for testing or if you need to manually use the database."
+			)
+			.addToggle(async (toggle) => {
+				toggle
+					.setValue(settings.localExport)
+					.onChange(async (value) => {
+						settings.localExport = value
+						await this.plugin.saveSettings()
+					})
+			})
 	}
 }
 
-export function addFolderContextMenu(settings: WikiGeneratorSettings, plugin: WikiGeneratorPlugin, menu: Menu, folder: TAbstractFile) {
+export function addFolderContextMenu(
+	settings: WikiGeneratorSettings,
+	plugin: WikiGeneratorPlugin,
+	menu: Menu,
+	folder: TAbstractFile
+) {
 	if (folder instanceof TFolder) {
 		menu.addSeparator()
 

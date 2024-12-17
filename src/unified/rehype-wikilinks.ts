@@ -1,7 +1,7 @@
 import { slug } from "github-slugger"
 import type { Element, ElementContent, Root } from "hast"
 import { h } from "hastscript"
-import { slugPath } from "src/commands"
+import { slugPath } from "src/utils"
 import { partition } from "src/utils"
 import { visit } from "unist-util-visit"
 
@@ -29,15 +29,19 @@ function handleElement(
 	titleToPath: Map<string, string>,
 	imageBase64: Map<string, string>
 ) {
-	if (elem.children.length === 0) {
+	// Ignore code and pre blocks
+	if (
+		elem.children.length === 0 ||
+		elem.tagName === "code" ||
+		elem.tagName === "pre"
+	) {
 		return
 	}
 	let idx = 0
-	// console.log("ELEMENT:", structuredClone(elem))
+	//eslint-disable-next-line
 	while (true) {
 		const currChild = elem.children[idx]
 		// Loop until there are children nodes
-		// console.log("INDEX:", idx, "CHILD:", structuredClone(currChild))
 		if (!currChild || idx > 1000) {
 			break
 		}
@@ -49,7 +53,6 @@ function handleElement(
 
 		const text = currChild.value
 		const parts = partition(text, wikilinkRegexNoGroups, 1)
-		// console.log("PARTITION:", parts)
 		if (parts.length !== 3) {
 			idx += 1
 			continue
@@ -64,7 +67,6 @@ function handleElement(
 		} as ElementContent
 
 		const props = findWikilinkProperties(parts[1], titleToPath, imageBase64)
-		// console.log("PROPS:", props)
 
 		let linkNode: ElementContent
 		if (props instanceof Wikilink) {
@@ -77,7 +79,6 @@ function handleElement(
 						props.linkText,
 				  ])
 		} else {
-			// `<img src="${url}" alt="${refFile.basename}" class="${wClass} mx-auto" />`
 			linkNode = h(
 				"img",
 				{
@@ -92,7 +93,6 @@ function handleElement(
 
 		idx += 1
 	}
-	// console.log("MODIFIED NODE:", structuredClone(node))
 }
 
 class Wikilink {
@@ -130,7 +130,6 @@ function findWikilinkProperties(
 	imageBase64: Map<string, string>
 ): Wikilink | Img {
 	const rmatch = link.match(wikilinkRegex)
-	// console.log("LINK:", link, "MATCH:", rmatch)
 	if (!rmatch) {
 		return {
 			linkText: link,

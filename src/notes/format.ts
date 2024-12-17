@@ -2,7 +2,7 @@ import { Notice, TFile } from "obsidian"
 import { uploadImage } from "./wikilinks"
 import * as MarkdownIt from "markdown-it"
 import hljs from "highlight.js"
-import { calloutIcons, partition, slugifyPath } from "../utils"
+import { calloutIcons, partition, slugPath } from "../utils"
 import {
 	NoteProperties,
 	SidebarImage,
@@ -23,7 +23,7 @@ export async function vaultToNotes(
 	// Then go through the markdown notes
 	files = globalVault.getMarkdownFiles()
 	for (const file of files) {
-		const slug = slugifyPath(file.path.replace(".md", ""))
+		const slug = slugPath(file.path.replace(".md", ""))
 
 		const content = await globalVault.read(file)
 		const formatted = await formatMd(content, file.name, media, converter)
@@ -108,22 +108,13 @@ async function formatMd(
  * @param md The markdown to transform
  * @returns The markdown text with codeblocks replaced by identifiers and the list of codeblocks
  */
-function removeCodeblocks(md: string) {
+export function removeCodeblocks(md: string) {
 	// Remove codeblocks from the markdown as anything inside of them should be kept as is
 	// Instead, add a generic marker to know where the codeblocks were and add them back later
 	const codeBlockRegex = /^```(\w*)\n(.*?)\n```/gms
 	const codeMatches = md.matchAll(codeBlockRegex)
 	const codeBlocks: string[] = Array.from(codeMatches)
-		.map((match) => {
-			if (match[1] === "mermaid") {
-				return match[0].replace(
-					/^```mermaid\n(?:---(.*?)---)?(.*?)\n```/gms,
-					replaceMermaidDiagram
-				)
-			} else {
-				return highlightCode(match[0], match[1], match[2]) // Also highlight the code
-			}
-		})
+		.map((match) => match[0])
 		.filter((block) => block !== "")
 
 	let counter = 0
@@ -142,28 +133,14 @@ function removeCodeblocks(md: string) {
  * throw an error if the indexes are mismatched. It will just return the markdown without transforming it.
  * @param md The markdown to transform
  * @param codeBlocks A string array of codeblocks
- * @param filename The filename of the file being processed
  * @returns The transformed markdown, with all codeblocks put back in place
  */
-function addCodeblocksBack(
-	md: string,
-	codeBlocks: string[],
-	filename: string
-): string {
+export function addCodeblocksBack(md: string, codeBlocks: string[]): string {
 	// Add the codeblocks back in
-	try {
-		md = md.replace(
-			/<\|codeblock_(\d+)\|>/g,
-			(_match, index) => codeBlocks[index - 1]
-		)
-	} catch (e) {
-		console.error(
-			`There was an error parsing codeblocks in ${filename}. Error: ${e.message}`
-		)
-		new Notice(
-			`There was an error parsing codeblocks in ${filename}. Error: ${e.message}`
-		)
-	}
+	md = md.replace(
+		/<\|codeblock_(\d+)\|>/g,
+		(_match, index) => codeBlocks[index - 1]
+	)
 
 	return md
 }
@@ -720,7 +697,7 @@ function fixHtml(html: string): string {
 	html = html.replace(
 		/<h(\d)(.*?)>(.*?)<\/h\1>/g,
 		(_substring, num, props, content) => {
-			const id = slugifyPath(content)
+			const id = slugPath(content)
 			return `<h${num}${props} class="h${num}" id="${id}">${content}</h${num}>`
 		}
 	)

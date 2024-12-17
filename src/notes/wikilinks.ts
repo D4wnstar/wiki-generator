@@ -1,6 +1,6 @@
 import Image from "image-js"
 import { localMedia, supabaseMedia, uploadConfig } from "../config"
-import { joinChunks, slugifyPath } from "../utils"
+import { joinChunks, slugPath } from "../utils"
 import { Backreference, ContentChunk, Detail, Note, Wikilink } from "./types"
 import { globalVault, supabase } from "main"
 
@@ -23,7 +23,7 @@ function findReferencedNote(noteName: string, notes: Note[]): Note | undefined {
 	// or implicit (like [[Auriga]]). If it's implicit, the note name is unique.
 	let refNote: Note | undefined
 	if (noteName.split("/").filter((elem) => elem !== "").length > 1) {
-		refNote = notes.find((note) => note.slug === slugifyPath(noteName))
+		refNote = notes.find((note) => note.slug === slugPath(noteName))
 	} else {
 		refNote = notes.find(
 			(note) => note.title.toLowerCase() === noteName.toLowerCase()
@@ -180,7 +180,7 @@ function handleNoteTransclusion(wl: Wikilink, notes: Note[]) {
 	if (wl.header && !wl.isBlockRef) {
 		// If the transclusion is only for a single section, grab it in the correct chunk
 		for (const chunk of refNote.content) {
-			const headerSlug = slugifyPath(wl.header)
+			const headerSlug = slugPath(wl.header)
 			// This matches only if there is another header after the section, which means the last section is ignored
 			const match = chunk.text.match(
 				new RegExp(
@@ -255,7 +255,7 @@ function handleNoteReference(wl: Wikilink, note: Note, notes: Note[]): string {
 
 	// TODO: Add handling of block references
 	const headerLink =
-		wl.header && !wl.isBlockRef ? `#${slugifyPath(wl.header)}` : ""
+		wl.header && !wl.isBlockRef ? `#${slugPath(wl.header)}` : ""
 	return `<a href="/${refNote.slug}${headerLink}" class="anchor popup">${refName}</a>`
 }
 

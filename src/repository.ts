@@ -1,3 +1,73 @@
+import { Notice } from "obsidian"
+import { Octokit } from "octokit"
+import { Database } from "sql.js"
+
+const templateOwner = "D4wnstar"
+const templateRepo = "wiki-generator-template"
+
+export async function pushDatabaseToWebsite(
+	db: Database,
+	token: string,
+	username: string,
+	repo: string
+) {
+	const octokit = new Octokit({
+		auth: token,
+	})
+
+	const dbPath = "static/data.db"
+
+	let sha
+	try {
+		const getRes = await octokit.request(
+			"GET /repos/{owner}/{repo}/contents/{path}",
+			{
+				owner: username,
+				repo,
+				path: dbPath,
+				headers: {
+					"X-GitHub-Api-Version": "2022-11-28",
+				},
+			}
+		)
+		if (getRes.status >= 400) {
+			throw new Error()
+		}
+
+		//@ts-ignore
+		sha = getRes.data.sha
+	} catch (error) {
+		console.error(
+			"Failed to get existing database information. Canceling upload."
+		)
+		new Notice(
+			"Failed to get existing database information. Canceling upload."
+		)
+	}
+
+	// Convert the database into base64 since that's what GitHub requires
+	const content = Buffer.from(db.export()).toString("base64")
+
+	try {
+		await octokit.request("PUT /repos/{owner}/{repo}/contents/{path}", {
+			owner: username,
+			repo,
+			path: dbPath,
+			message: `Database update`,
+			content,
+			sha,
+			headers: {
+				"X-GitHub-Api-Version": "2022-11-28",
+			},
+		})
+	} catch (error) {
+		console.error(
+			"Failed to push database to repository. Canceling upload."
+		)
+		new Notice("Failed to push database to repository. Canceling upload.")
+	}
+}
+
 /**
  * User repo update flow chart
  * 1. Get date of last commit in user repo
@@ -13,14 +83,7 @@
  *   8. Create a pull request to merge new branch into main
  *   9. Tell the user to merge the pull request manually
  */
-
-import { Notice } from "obsidian"
-import { Octokit } from "octokit"
-
-const templateOwner = "D4wnstar"
-const templateRepo = "wiki-generator-template"
-
-export async function updateUserRepository(
+export async function pullWebsiteUpdates(
 	token: string,
 	username: string,
 	repo: string,
@@ -189,7 +252,7 @@ async function handleBranchSplit(
 ) {
 	// Create a new branch
 	new Notice("Creating a new branch...")
-	const shortSha = latestTemplateCommitSha.substring(0,7)
+	const shortSha = latestTemplateCommitSha.substring(0, 7)
 	const branchName = `sync-from-template-${shortSha}`
 	await octokit.request("POST /repos/{owner}/{repo}/git/refs", {
 		owner: username,
@@ -223,10 +286,13 @@ export async function checkForTemplateUpdates(
 	username: string,
 	repo: string,
 	octokit: Octokit | undefined = undefined,
-	token: string | undefined = undefined,
+	token: string | undefined = undefined
 ) {
 	if (!octokit) {
-		if (!token) throw new Error("Got no authentication token when creating the octokit client")
+		if (!token)
+			throw new Error(
+				"Got no authentication token when creating the octokit client"
+			)
 		octokit = new Octokit({
 			auth: token,
 		})
@@ -273,8 +339,6 @@ export async function checkForTemplateUpdates(
 		console.error(
 			`Error! Status: ${error.status}. Error message: ${error.response.data.message}`
 		)
-		new Notice(
-			`There was an error while checking for template updates.`
-		)
+		new Notice(`There was an error while checking for template updates.`)
 	}
 }

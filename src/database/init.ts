@@ -72,6 +72,14 @@ function runMigrations(db: Database) {
         );
     `)
 
+	db.run(`
+        CREATE TABLE IF NOT EXISTS users (
+            id integer primary key,
+            username text not null unique,
+            password text not null
+        );
+    `)
+
 	// db.run(`
 	//     create table if not exists images (
 	//         id integer primary key,
