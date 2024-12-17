@@ -1,14 +1,6 @@
-import { SupabaseClient } from "@supabase/supabase-js"
-import { Notice, Plugin, Vault } from "obsidian"
-import {
-	massAddPublish,
-	massSetPublishState,
-	uploadNotes,
-	uploadNotesSqlite,
-} from "src/commands"
-import { uploadConfig } from "src/config"
-import { initializeDatabase } from "src/database/init"
-import { autopublishNotes } from "src/events"
+import { Notice, Plugin, TFile, TFolder } from "obsidian"
+import { massAddPublish, massSetPublishState, uploadNotes } from "src/commands"
+import { addWikiPublishToNewFile } from "src/events"
 import { checkForTemplateUpdates } from "src/repository"
 import {
 	DEFAULT_SETTINGS,
@@ -16,18 +8,8 @@ import {
 	WikiGeneratorSettings,
 	addFolderContextMenu,
 } from "src/settings"
-import { createClientWrapper, getProfiles } from "src/database/requests"
+import { getUsers } from "src/database/requests"
 import { PropertyModal, UserListModal } from "src/modals"
-
-/**
- * A global reference to the vault to avoid having to pass it down the whole call stack.
- */
-export let globalVault: Vault
-
-/**
- * A global reference to the Supabase client to avoid having to pass it down the whole call stack.
- */
-export let supabase: SupabaseClient
 
 export default class WikiGeneratorPlugin extends Plugin {
 	settings: WikiGeneratorSettings
@@ -39,40 +21,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 		const settings = this.settings
 		const workspace = this.app.workspace
 
-		globalVault = this.app.vault
-
-		// Automatically initialize the database the first time the user
-		// sets the database connection URL
-		if (settings.firstUsage && settings.databaseUrl) {
-			new Notice("Setting up the database...")
-			try {
-				await initializeDatabase(settings.databaseUrl)
-				settings.firstUsage = false
-				await this.saveSettings()
-				new Notice("Database fully set up!")
-			} catch (e) {
-				new Notice(
-					"The following error occured when initializing the database:",
-					e.message
-				)
-				console.error(
-					"The following error occured when initializing the database:",
-					e.message
-				)
-			}
-		}
-
-		// Create the Supabase client on startup
-		// Client is created on startup as there's no exposed API to remove them
-		// so creating one on each uploadNotes call creates warnings about having
-		// multiple GoTrueClients active at the same time, which is undefined behaviour
-		try {
-			supabase = createClientWrapper(settings)
-		} catch (e) {
-			new Notice(`Supabase Error: ${e.message}`)
-		}
-
-		// Check for website updates
+		// Check for website updates on startup
 		if (
 			settings.githubUsername &&
 			settings.githubRepoName &&
@@ -95,9 +44,13 @@ export default class WikiGeneratorPlugin extends Plugin {
 		// if the user allows it in the settings
 		workspace.onLayoutReady(() => {
 			this.registerEvent(
-				this.app.vault.on("create", () =>
-					autopublishNotes(settings, workspace)
-				)
+				this.app.vault.on("create", (file) => {
+					// Ignore folders being created or if this feature is disabled
+					if (file instanceof TFolder || !settings.autopublishNotes) {
+						return
+					}
+					addWikiPublishToNewFile(file as TFile, settings, workspace)
+				})
 			)
 		})
 
@@ -108,49 +61,56 @@ export default class WikiGeneratorPlugin extends Plugin {
 			)
 		)
 
-		this.addRibbonIcon("upload-cloud", "Upload Notes", async () => {
-			await uploadNotes(settings)
+		// Add a ribbon icon to upload notes
+		this.addRibbonIcon("cloud-upload", "Upload notes", async () => {
+			try {
+				await uploadNotes(this.app.vault, settings)
+			} catch (error) {
+				console.error("An error occured while uploading notes.", error)
+				new Notice(
+					`An error occured while uploading notes. ${error}`,
+					0
+				)
+			}
 		})
 
-		this.addRibbonIcon("test-tube", "Upload Notes", async () => {
-			await uploadNotesSqlite(this.app.vault, settings)
-			console.log("Uploaded notes")
-		})
-
+		// And a command for the same thing
 		this.addCommand({
 			id: "upload-notes",
 			name: "Upload notes",
 			callback: async () => {
-				uploadConfig.overwriteFiles = false
-				await uploadNotes(settings)
+				// uploadConfig.overwriteFiles = false
+				await uploadNotes(this.app.vault, settings)
 			},
 		})
 
-		this.addCommand({
-			id: "upload-notes-overwrite",
-			name: "Upload notes and overwrite media files",
-			callback: async () => {
-				uploadConfig.overwriteFiles = true
-				await uploadNotes(settings)
-			},
-		})
+		// this.addCommand({
+		// 	id: "upload-notes-overwrite",
+		// 	name: "Upload notes and overwrite media files",
+		// 	callback: async () => {
+		// 		uploadConfig.overwriteFiles = true
+		// 		await uploadNotes(settings)
+		// 	},
+		// })
 
+		// Commands to make setting properties easier
 		this.addCommand({
 			id: "mass-add-publish",
 			name: "Add publish property to publishable notes",
-			callback: () => massAddPublish(settings),
+			callback: () => massAddPublish(true, settings, this.app.vault),
 		})
 
 		this.addCommand({
 			id: "mass-set-publish-true",
 			name: "Set publish property to true on publishable notes",
-			callback: () => massSetPublishState(settings, true),
+			callback: () => massSetPublishState(true, settings, this.app.vault),
 		})
 
 		this.addCommand({
 			id: "mass-set-publish-false",
 			name: "Set publish property to false on publishable notes",
-			callback: () => massSetPublishState(settings, false),
+			callback: () =>
+				massSetPublishState(false, settings, this.app.vault),
 		})
 
 		this.addCommand({
@@ -160,11 +120,15 @@ export default class WikiGeneratorPlugin extends Plugin {
 				new PropertyModal(this.app, editor).open(),
 		})
 
+		// Get a list of registered users
 		this.addCommand({
 			id: "get-user-list",
 			name: "Get list of registered users",
-			callback: async () =>
-				new UserListModal(this.app, await getProfiles()).open(),
+			callback: async () => {
+				const users = await getUsers(settings)
+				console.log(users)
+				new UserListModal(this.app, users).open()
+			},
 		})
 
 		this.addSettingTab(new WikiGeneratorSettingTab(this.app, this))

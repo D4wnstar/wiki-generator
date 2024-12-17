@@ -1,6 +1,13 @@
-import { SuggestModal, Editor, App, Notice, FuzzySuggestModal, MarkdownView } from "obsidian"
+import {
+	SuggestModal,
+	Editor,
+	App,
+	Notice,
+	FuzzySuggestModal,
+	MarkdownView,
+} from "obsidian"
 import { getPropertiesFromEditor, replacePropertiesFromEditor } from "./utils"
-import { UserProfile } from "./database/shorthand.types"
+import { User } from "./database/types"
 
 type Property = {
 	name: string
@@ -12,14 +19,14 @@ type Property = {
 const BUILTIN_PROPS: Property[] = [
 	{
 		name: "wiki-publish",
-		description: "Choose whether this note is published or not.",
+		description: "Choose whether this page is published or not.",
 		valueType: "true/false",
 		defaultValue: "true",
 	},
 	{
 		name: "wiki-home",
 		description:
-			"Set this note as the front page. Can only be set to one note.",
+			"Set this note as the front page. Can only be set to true on one note.",
 		valueType: "true/false",
 		defaultValue: "true",
 	},
@@ -33,9 +40,8 @@ const BUILTIN_PROPS: Property[] = [
 	{
 		name: "wiki-allowed-users",
 		description:
-			"A list of users who can see this note. It will be hidden to everyone else.",
-		valueType:
-			"a list of usernames. Press Enter to separate them",
+			"A list of users who can see this page. It will be hidden to everyone else.",
+		valueType: "a list of usernames. Press Enter to separate them",
 		defaultValue: "[]",
 	},
 ]
@@ -79,29 +85,26 @@ export class PropertyModal extends SuggestModal<Property> {
 	}
 }
 
-export class UserListModal extends FuzzySuggestModal<UserProfile> {
-    profiles: UserProfile[]
+export class UserListModal extends FuzzySuggestModal<User> {
+	profiles: User[]
 
-    constructor(app: App, profiles: UserProfile[]) {
-        super(app)
-        this.profiles = profiles
-    }
+	constructor(app: App, profiles: User[]) {
+		super(app)
+		this.profiles = profiles
+	}
 
-    getItems(): UserProfile[] {
-        return this.profiles
-    }
+	getItems(): User[] {
+		return this.profiles
+	}
 
-    getItemText(profile: UserProfile): string {
-        return `${profile.username} (${profile.email})`
-    }
+	getItemText(profile: User): string {
+		return profile.username
+	}
 
-    onChooseItem(profile: UserProfile, _evt: MouseEvent | KeyboardEvent): void {
-        const view = this.app.workspace.getActiveViewOfType(MarkdownView)
-        if (view) {
-            view.editor.replaceRange(
-                profile.username,
-                view.editor.getCursor()
-            )
-        }
-    }
+	onChooseItem(profile: User, _evt: MouseEvent | KeyboardEvent): void {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView)
+		if (view) {
+			view.editor.replaceRange(profile.username, view.editor.getCursor())
+		}
+	}
 }

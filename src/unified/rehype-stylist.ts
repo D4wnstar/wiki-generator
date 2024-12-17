@@ -15,10 +15,14 @@ export default function rehypeStylist() {
 				// case "p":
 				// 	node.properties.class = setClass("break-words")
 				// 	break
-				case "a":
+				case "a": {
 					node.properties.className = setClass("anchor")
-					// node.properties.target = '_blank'
+					const href = node.properties.href as string | undefined
+					if (href && href.startsWith("http")) {
+						node.properties.target = "_blank"
+					}
 					break
+				}
 				case "h1":
 					node.properties.className = setClass("h1")
 					break

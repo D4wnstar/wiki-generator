@@ -9,57 +9,40 @@ import {
 	TAbstractFile,
 	TFolder,
 } from "obsidian"
-import { resetDatabase } from "./database/init"
 import { checkForTemplateUpdates, pullWebsiteUpdates } from "./repository"
 
 export interface WikiGeneratorSettings {
-	firstUsage: boolean
 	wikiTitle: string
 	allowLogins: boolean
 	autopublishNotes: boolean
 	restrictFolders: boolean
 	publicFolders: string[]
 	privateFolders: string[]
-	databaseUrl: string
-	supabaseApiUrl: string
-	supabaseAnonKey: string
-	supabaseServiceKey: string
+	localExport: boolean
+	websiteUrl: string
+	adminApiKey: string
 	githubUsername: string
 	githubRepoName: string
 	githubRepoToken: string
 	githubAutoapplyUpdates: boolean
 	githubCheckUpdatesOnStartup: boolean
-	supabaseUseLocal: boolean
-	databaseUrlLocal: string
-	supabaseApiUrlLocal: string
-	supabaseAnonKeyLocal: string
-	supabaseServiceKeyLocal: string
-	localExport: boolean
 }
 
 export const DEFAULT_SETTINGS: WikiGeneratorSettings = {
-	firstUsage: true,
 	wikiTitle: "Awesome Wiki",
 	allowLogins: true,
 	autopublishNotes: true,
 	restrictFolders: false,
 	publicFolders: [],
 	privateFolders: [],
-	databaseUrl: "",
-	supabaseApiUrl: "",
-	supabaseAnonKey: "",
-	supabaseServiceKey: "",
+	localExport: false,
+	websiteUrl: "",
+	adminApiKey: "",
 	githubUsername: "",
 	githubRepoName: "",
 	githubRepoToken: "",
 	githubAutoapplyUpdates: true,
 	githubCheckUpdatesOnStartup: false,
-	supabaseUseLocal: false,
-	databaseUrlLocal: "postgresql://postgres:postgres@localhost:54322/postgres",
-	supabaseApiUrlLocal: "http://localhost:54321",
-	supabaseAnonKeyLocal: "",
-	supabaseServiceKeyLocal: "",
-	localExport: false,
 }
 
 export class WikiGeneratorSettingTab extends PluginSettingTab {
@@ -204,12 +187,17 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 				})
 		})
 
-		new Setting(containerEl).setName("Wiki").setHeading()
+		new Setting(containerEl)
+			.setName("Wiki")
+			.setHeading()
+			.setDesc(
+				"These settings will be sent to the website when you upload your notes."
+			)
 
 		new Setting(containerEl)
 			.setName("Wiki title")
 			.setDesc(
-				"The title of your wiki. Will be updated next time you upload your notes."
+				"The title of your wiki. Will appear at the top of the page."
 			)
 			.addText((text) => {
 				text.setPlaceholder("Title goes here...")
@@ -232,92 +220,39 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					})
 			})
 
-		new Setting(containerEl).setName("Tokens").setHeading()
+		new Setting(containerEl).setName("Website").setHeading()
 
 		new Setting(containerEl)
-			.setName("Database URL")
+			.setName("Website URL")
+			.setDesc("The URL of your website (including the leading https).")
+			.addText((text) =>
+				text
+					.setPlaceholder("https://www.your-website-here.com")
+					.setValue(settings.websiteUrl)
+					.onChange(async (value) => {
+						// Remove trailing slashes
+						settings.websiteUrl = value.replace(/\/$/, "")
+						await this.plugin.saveSettings()
+					})
+			)
+
+		new Setting(containerEl)
+			.setName("Admin API key")
 			.setDesc(
-				"The URL for the Database connection. Changing requires a restart."
+				"An API key that gives access to website user accounts from Obsidian. Do not share this."
 			)
 			.addText((text) =>
 				text
-					.setPlaceholder("Copy the URL")
-					.setValue(settings.databaseUrl)
+					.setPlaceholder(
+						settings.adminApiKey === ""
+							? "Copy your key"
+							: "Key saved!"
+					)
 					.onChange(async (value) => {
-						settings.databaseUrl = value
+						settings.adminApiKey = value
 						await this.plugin.saveSettings()
 					})
 			)
-
-		new Setting(containerEl)
-			.setName("Supabase API URL")
-			.setDesc(
-				"The URL for the Supabase API. Changing requires a restart."
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder("Copy the URL")
-					.setValue(settings.supabaseApiUrl)
-					.onChange(async (value) => {
-						settings.supabaseApiUrl = value
-						await this.plugin.saveSettings()
-					})
-			)
-
-		new Setting(containerEl)
-			.setName("Supabase Service Key")
-			.setDesc(
-				"The service key for Supabase. Changing requires a restart."
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder("Copy your key")
-					.setValue(settings.supabaseServiceKey)
-					.onChange(async (value) => {
-						settings.supabaseServiceKey = value
-						await this.plugin.saveSettings()
-					})
-			)
-
-		new Setting(containerEl).setName("GitHub").setHeading()
-
-		new Setting(containerEl)
-			.setName("GitHub username")
-			.setDesc("Your GitHub username.")
-			.addText((text) => {
-				text.setPlaceholder("Copy your username")
-					.setValue(settings.githubUsername)
-					.onChange(async (value) => {
-						settings.githubUsername = value
-						await this.plugin.saveSettings()
-					})
-			})
-
-		new Setting(containerEl)
-			.setName("GitHub repository name")
-			.setDesc("The name of your website's repository.")
-			.addText((text) => {
-				text.setPlaceholder("Copy the name")
-					.setValue(settings.githubRepoName)
-					.onChange(async (value) => {
-						settings.githubRepoName = value
-						await this.plugin.saveSettings()
-					})
-			})
-
-		new Setting(containerEl)
-			.setName("GitHub repository token")
-			.setDesc(
-				"The token required to access your website's GitHub repository."
-			)
-			.addText((text) => {
-				text.setPlaceholder("Copy the token")
-					.setValue(settings.githubRepoToken)
-					.onChange(async (value) => {
-						settings.githubRepoToken = value
-						await this.plugin.saveSettings()
-					})
-			})
 
 		new Setting(containerEl)
 			.setName("Check for website updates")
@@ -348,7 +283,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Check for updates on startup")
 			.setDesc(
-				"Automatically check for website updates every time you start Obsidian. This will prevent you from opening this vault if you have not internet connection."
+				"Automatically check for website updates every time you start Obsidian. This will prevent you from opening this vault if you have no internet connection."
 			)
 			.addToggle((toggle) => {
 				toggle
@@ -417,95 +352,54 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					})
 			})
 
-		new Setting(containerEl).setName("Developer").setHeading()
+		new Setting(containerEl).setName("GitHub").setHeading()
 
 		new Setting(containerEl)
-			.setName("Use local Supabase Docker container")
-			.setDesc(
-				"Use a local Supabase container for plugin development. Requires setting the local service key below. Changing requires a restart."
-			)
-			.addToggle(async (toggle) => {
-				toggle
-					.setValue(settings.supabaseUseLocal)
+			.setName("GitHub username")
+			.setDesc("Your GitHub username.")
+			.addText((text) => {
+				text.setPlaceholder("Copy your username")
+					.setValue(settings.githubUsername)
 					.onChange(async (value) => {
-						settings.supabaseUseLocal = value
+						settings.githubUsername = value
 						await this.plugin.saveSettings()
 					})
 			})
 
 		new Setting(containerEl)
-			.setName("Database URL (Local)")
-			.setDesc(
-				"The URL for the Database connection of a local Supabase instance. You probably don't need to change this. Changing requires a restart."
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder("Copy the URL")
-					.setValue(settings.databaseUrlLocal)
+			.setName("GitHub repository name")
+			.setDesc("The name of your website's repository.")
+			.addText((text) => {
+				text.setPlaceholder("Copy the name")
+					.setValue(settings.githubRepoName)
 					.onChange(async (value) => {
-						settings.databaseUrlLocal = value
+						settings.githubRepoName = value
 						await this.plugin.saveSettings()
 					})
-			)
+			})
 
 		new Setting(containerEl)
-			.setName("Supabase API URL (Local)")
+			.setName("GitHub repository token")
 			.setDesc(
-				"The URL for the API of a local Supabase instance. You probably don't need to change this. Changing requires a restart."
+				"The token required to access your website's GitHub repository."
 			)
-			.addText((text) =>
-				text
-					.setPlaceholder("Copy the URL")
-					.setValue(settings.supabaseApiUrlLocal)
-					.onChange(async (value) => {
-						settings.supabaseApiUrlLocal = value
-						await this.plugin.saveSettings()
-					})
-			)
-
-		new Setting(containerEl)
-			.setName("Supabase Service Key (Local)")
-			.setDesc(
-				"The service key for a local Supabase instance. Changing requires a restart."
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder("Copy your key")
-					.setValue(settings.supabaseServiceKeyLocal)
-					.onChange(async (value) => {
-						settings.supabaseServiceKeyLocal = value
-						await this.plugin.saveSettings()
-					})
-			)
-
-		new Setting(containerEl)
-			.setName("Reset database")
-			.setDesc(
-				"Reset part of the database to its initial state. All of your notes will be deleted from Supabase, but media files and user profiles will remain untouched. You can restore your notes by uploading them again."
-			)
-			.addButton((button) => {
-				button.setButtonText("Reset database").onClick(async () => {
-					new Notice("Resetting database...")
-					try {
-						await resetDatabase(
-							settings.supabaseUseLocal
-								? settings.databaseUrlLocal
-								: settings.databaseUrl
-						)
-						new Notice("Database successfully reset")
-					} catch (e) {
-						new Notice(
-							`There was an error when resetting: ${e.message}`
-						)
-						console.error(e.message)
-					}
+			.addText((text) => {
+				text.setPlaceholder(
+					settings.githubRepoToken === ""
+						? "Copy your token"
+						: "Key saved!"
+				).onChange(async (value) => {
+					settings.githubRepoToken = value
+					await this.plugin.saveSettings()
 				})
 			})
+
+		new Setting(containerEl).setName("Developer").setHeading()
 
 		new Setting(containerEl)
 			.setName("Local export")
 			.setDesc(
-				"Export the database to a local SQLite file instead of pushing to GitHub. Useful for testing or if you need to manually use the database."
+				"Export the database to a local SQLite file instead of pushing it to GitHub. Useful for testing or if you need to manually interact with the database."
 			)
 			.addToggle(async (toggle) => {
 				toggle

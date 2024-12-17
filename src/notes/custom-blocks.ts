@@ -2,7 +2,7 @@ import { Notice } from "obsidian"
 import { Root } from "hast"
 import { partition } from "src/utils"
 import { Processor } from "unified"
-import { Detail, SidebarImage, ContentChunk } from "./types"
+import { Detail, SidebarImage, ContentChunk } from "../database/types"
 
 /**
  * Parse Markdown text, removing all\* special :::blocks::: and
