@@ -46,12 +46,12 @@ export default function rehypeStylist() {
 					break
 				case "ul":
 					node.properties.className = setClass(
-						"list-inside list-disc indent-cascade"
+						"list-outside list-disc indent-cascade"
 					)
 					break
 				case "ol":
 					node.properties.className = setClass(
-						"list-inside list-decimal indent-cascade"
+						"list-outside list-decimal indent-cascade"
 					)
 					break
 				case "code":

@@ -187,8 +187,7 @@ async function parseImageBlock(
 /**
  * Split Markdown text into chunks with different user permission.
  * The text is currently split by :::secret::: blocks and each is given
- * the permission determined by the argument of the block. Each block's permissions
- * are merged with the global permissions of the page.
+ * the permission determined by the argument of the block.
  * @param text The text to split
  * @param allowedUsers A list of allowed users for the current page
  * @returns An array ContentChunks
@@ -200,7 +199,7 @@ export function chunkMd(text: string, allowedUsers: string[]): ContentChunk[] {
 
 	// If there are no :::secret::: blocks, returns the page as-is
 	if (secretChunks.length === 0) {
-		return [{ chunk_id: 1, text, allowed_users: allowedUsers }]
+		return [{ chunk_id: 1, text, allowed_users: [] }]
 	}
 
 	// Replace each block with its content
@@ -214,9 +213,9 @@ export function chunkMd(text: string, allowedUsers: string[]): ContentChunk[] {
 		const users = match[1].split(",").map((s) => s.trim())
 
 		// Merge chunk users with global users whilst avoiding duplication
-		allowedUsers.forEach((user) => {
-			if (!users.includes(user)) users.push(user)
-		})
+		// allowedUsers.forEach((user) => {
+		// 	if (!users.includes(user)) users.push(user)
+		// })
 
 		if (chunks.length > 0) {
 			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
@@ -231,7 +230,7 @@ export function chunkMd(text: string, allowedUsers: string[]): ContentChunk[] {
 			chunks.push({
 				chunk_id: currChunkId,
 				text: parts[i],
-				allowed_users: parseInt(i) % 2 !== 0 ? users : allowedUsers,
+				allowed_users: parseInt(i) % 2 !== 0 ? users : [],
 				// The way `partition` works puts all secret chunks on odd indexes
 			})
 			currChunkId += 1
