@@ -19,6 +19,7 @@ import {
 	insertUsers,
 	pushPagesToLocal,
 	pushPagesToRemote,
+	resetRemoteMedia,
 	runRemoteMigrations,
 } from "./database/operations"
 
@@ -72,6 +73,9 @@ export async function uploadNotes(
 	const imageExtensions = ["png", "webp", "jpg", "jpeg", "gif", "bmp", "svg"]
 	const imageNameToId: Map<string, number> = new Map()
 
+	if (!settings.localExport) {
+		resetRemoteMedia(db as Client)
+	}
 	for (const file of mediaFiles) {
 		if (imageExtensions.includes(file.extension)) {
 			const buf = await imageToArrayBuffer(file, vault, true)

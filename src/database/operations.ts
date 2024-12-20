@@ -76,7 +76,6 @@ const deleteWikiSettings = `DROP TABLE IF EXISTS wiki_settings;`
 
 export async function runRemoteMigrations(client: Client) {
 	await client.execute(createNotes)
-	await client.execute(createImages)
 	await client.execute(createNoteContents)
 	await client.execute(createDetails)
 	await client.execute(createSidebarImages)
@@ -86,11 +85,15 @@ export async function runRemoteMigrations(client: Client) {
 
 export async function clearRemoteDatabase(client: Client) {
 	await client.execute(deleteNotes)
-	await client.execute(deleteImages)
 	await client.execute(deleteNoteContents)
 	await client.execute(deleteDetails)
 	await client.execute(deleteSidebarImages)
 	await client.execute(deleteWikiSettings)
+}
+
+export async function resetRemoteMedia(client: Client) {
+	await client.execute(deleteImages)
+	await client.execute(createImages)
 }
 
 export function runLocalMigrations(db: Database) {
