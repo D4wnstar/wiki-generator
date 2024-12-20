@@ -63,15 +63,15 @@ export default class WikiGeneratorPlugin extends Plugin {
 
 		// Add a ribbon icon to upload notes
 		this.addRibbonIcon("cloud-upload", "Upload notes", async () => {
-			// try {
-			await uploadNotes(this.app.vault, settings)
-			// } catch (error) {
-			// 	console.error("An error occured while uploading notes.", error)
-			// 	new Notice(
-			// 		`An error occured while uploading notes. ${error}`,
-			// 		0
-			// 	)
-			// }
+			try {
+				await uploadNotes(this.app.vault, settings)
+			} catch (error) {
+				console.error("An error occured while uploading notes.", error)
+				new Notice(
+					`An error occured while uploading notes. ${error}`,
+					0
+				)
+			}
 		})
 
 		// And a command for the same thing
