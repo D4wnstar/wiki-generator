@@ -3,14 +3,20 @@ import { Root } from "remark-parse/lib"
 import { slugPath } from "src/utils"
 import { Processor } from "unified"
 import { replaceCustomBlocks, chunkMd } from "./custom-blocks"
-import { Frontmatter, Pages } from "../database/types"
+import {
+	ContentChunk,
+	Detail,
+	Frontmatter,
+	Pages,
+	SidebarImage,
+} from "../database/types"
 
 /**
  * Convert Markdown files into rich data structures encoding their contents.
  * @param files A list of Markdown files
  * @param processor A unified processor to convert Markdown into HTML
  * @param frontmatterProcessor A unified process to extract markdown frontmatter
- * @param imageBase64 A Map linking image filenames with their base64 representation
+ * @param imageNameToId A Map linking image filenames with their base64 representation
  * @param vault A reference to the vault
  * @returns A Pages object containing all converted data and a Map linking lowercase
  * page titles with their full filepath slugs.
@@ -19,7 +25,7 @@ export async function makePagesFromFiles(
 	files: TFile[],
 	processor: Processor<Root, Root, Root, Root, string>,
 	frontmatterProcessor: Processor<Root, undefined, undefined, Root, string>,
-	imageBase64: Map<string, string>,
+	imageNameToId: Map<string, number>,
 	vault: Vault
 ): Promise<{ pages: Pages; titleToPath: Map<string, string> }> {
 	const pages: Pages = new Map()
@@ -42,7 +48,11 @@ export async function makePagesFromFiles(
 
 		// Parse and replace custom :::blocks::: and delete Obsidian comments
 		// Codeblocks are removed and added back later to keep them unmodified
-		const { md: strippedMd, codeBlocks } = removeCodeblocks(content)
+		const {
+			md: strippedMd,
+			inlineCode,
+			codeBlocks,
+		} = removeCodeblocks(content)
 		const strippedMd2 = strippedMd.replace(/%%.*?%%/gs, "")
 		const {
 			md: strippedMd3,
@@ -53,14 +63,16 @@ export async function makePagesFromFiles(
 			file.name,
 			//@ts-ignore
 			processor,
-			imageBase64
+			imageNameToId
 		)
-		const md = addCodeblocksBack(strippedMd3, codeBlocks)
+		const strippedMd4 = strippedMd3
 			.replace(/^\$\$/gm, "$$$$\n") // remarkMath needs newlines to consider a math block as display
 			.replace(/\$\$$/gm, "\n$$$$") // The quadruple $ is because $ is the backreference character in regexes and is escaped as $$, so $$$$ -> $$
 
 		// Split the page into chunks based on permissions
-		const chunks = chunkMd(md, frontmatter["wiki-allowed-users"] ?? [])
+		const tempChunks = chunkMd(strippedMd4, imageNameToId)
+
+		const chunks = addCodeblocksBack(tempChunks, inlineCode, codeBlocks)
 
 		// Convert the markdown of each chunk separately
 		chunks.forEach(async (chunk) => {
@@ -94,43 +106,66 @@ export async function makePagesFromFiles(
 }
 
 /**
- * Replace codeblocks with plain text identifiers like <|codeblock_i|> where i
- * is the order of appearance of the codeblock (starting from 1). Intended to be
- * coupled with `addCodeblocksBack`, mostly to prevent codeblocks from being formatted.
+ * Replace inline code adn codeblocks with plain text identifiers (<|inlinecode_i|> and
+ * <|codeblock_i|> where i is the order of appearance of the codeblock (starting from 1).
+ * Intended to be * coupled with `addCodeblocksBack`, mostly to prevent codeblocks from
+ * being formatted.
  * @param text The Markdown text to transform
  * @returns The modified text and a list of Markdown codeblocks
  */
-export function removeCodeblocks(text: string) {
+export function removeCodeblocks(text: string): {
+	md: string
+	inlineCode: Map<number, string>
+	codeBlocks: Map<number, string>
+} {
 	// Remove codeblocks from the markdown as anything inside of them should be kept as is
 	// Instead, add a generic marker to know where the codeblocks were and add them back later
 	const codeBlockRegex = /^```(\w*)\n(.*?)\n```/gms
+	const inlineCodeRegex = /(?<=[^`])`([^`\n]+?)`(?!`)/g
 
-	const codeBlocks: string[] = []
+	const codeBlocks: Map<number, string> = new Map()
+	const inlineCode: Map<number, string> = new Map()
+
 	let counter = 0
 	text = text.replace(codeBlockRegex, (block) => {
 		counter += 1
-		codeBlocks.push(block)
+		codeBlocks.set(counter, block)
 		return `<|codeblock_${counter}|>`
 	})
 
-	return { md: text, codeBlocks }
+	counter = 0
+	text = text.replace(inlineCodeRegex, (block) => {
+		counter += 1
+		inlineCode.set(counter, block)
+		return `<|inlinecode_${counter}|>`
+	})
+
+	return { md: text, inlineCode, codeBlocks }
 }
 
 /**
- * Add codeblocks removed by `removeCodeblocks` back in the text.
- * Make sure the length of `codeBlocks` is equal to the number of matches in the text.
- * If you got `codeBlocks` from `removeCodeblocks`, this should be guaranteed.
+ * Add codeblocks and inline code removed by `removeCodeblocks`.
  * @param text The markdown to transform
  * @param codeBlocks A string array of codeblocks
  * @returns The transformed markdown, with all codeblocks put back in place
  */
-export function addCodeblocksBack(text: string, codeBlocks: string[]): string {
-	text = text.replace(
-		/<\|codeblock_(\d+)\|>/g,
-		(_match, index) => codeBlocks[index - 1]
-	)
-
-	return text
+export function addCodeblocksBack(
+	chunks: ContentChunk[],
+	inlineCode: Map<number, string>,
+	codeBlocks: Map<number, string>
+): ContentChunk[] {
+	return chunks.map((chunk) => {
+		const text = chunk.text
+			.replace(
+				/<\|inlinecode_(\d+)\|>/g,
+				(_match, blockId) => inlineCode.get(parseInt(blockId)) ?? ""
+			)
+			.replace(
+				/<\|codeblock_(\d+)\|>/g,
+				(_match, blockId) => codeBlocks.get(parseInt(blockId)) ?? ""
+			)
+		return { ...chunk, text }
+	})
 }
 
 /**
@@ -165,4 +200,66 @@ export function unwrapWikilinks(
 	})
 
 	return text
+}
+
+export async function convertWikilinks(
+	pages: Pages,
+	processor: Processor<Root, undefined, undefined, Root, string>
+) {
+	const newPages: Pages = new Map()
+
+	// Create a new version of each page where all text has been run
+	// through wikilink conversion
+	for (const [id, page] of pages.entries()) {
+		// Note objects have no text
+
+		// Process each ContentChunk
+		const newChunks: ContentChunk[] = []
+		for (const chunk of page.chunks) {
+			const newText = await processor
+				.process(chunk.text)
+				.then((vfile) => String(vfile))
+
+			newChunks.push({ ...chunk, text: newText })
+		}
+
+		// Process all Details. Only values need to converted
+		const newDetails: Detail[] = []
+		for (const detail of page.details) {
+			let newValue: string | null
+			if (detail.value) {
+				newValue = await processor
+					.process(detail.value)
+					.then((vfile) => String(vfile))
+			} else {
+				newValue = null
+			}
+
+			newDetails.push({ ...detail, value: newValue })
+		}
+
+		// Process all sidebar image captions
+		const newSidebarImages: SidebarImage[] = []
+		for (const img of page.sidebarImages) {
+			let newCaption: string | null
+			if (img.caption) {
+				newCaption = await processor
+					.process(img.caption)
+					.then((vfile) => String(vfile))
+			} else {
+				newCaption = null
+			}
+
+			newSidebarImages.push({ ...img, caption: newCaption })
+		}
+
+		newPages.set(id, {
+			note: page.note,
+			chunks: newChunks,
+			details: newDetails,
+			sidebarImages: newSidebarImages,
+		})
+	}
+
+	return newPages
 }

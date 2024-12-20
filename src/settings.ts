@@ -12,6 +12,7 @@ import {
 import { checkForTemplateUpdates, pullWebsiteUpdates } from "./repository"
 
 export interface WikiGeneratorSettings {
+	firstUpload: boolean
 	wikiTitle: string
 	allowLogins: boolean
 	autopublishNotes: boolean
@@ -19,30 +20,33 @@ export interface WikiGeneratorSettings {
 	publicFolders: string[]
 	privateFolders: string[]
 	localExport: boolean
-	websiteUrl: string
-	adminApiKey: string
+	ignoreUsers: boolean
 	githubUsername: string
 	githubRepoName: string
 	githubRepoToken: string
 	githubAutoapplyUpdates: boolean
 	githubCheckUpdatesOnStartup: boolean
+	dbUrl: string
+	dbToken: string
 }
 
 export const DEFAULT_SETTINGS: WikiGeneratorSettings = {
+	firstUpload: true,
 	wikiTitle: "Awesome Wiki",
-	allowLogins: true,
+	allowLogins: false,
 	autopublishNotes: true,
 	restrictFolders: false,
 	publicFolders: [],
 	privateFolders: [],
 	localExport: false,
-	websiteUrl: "",
-	adminApiKey: "",
+	ignoreUsers: false,
 	githubUsername: "",
 	githubRepoName: "",
 	githubRepoToken: "",
 	githubAutoapplyUpdates: true,
 	githubCheckUpdatesOnStartup: false,
+	dbUrl: "",
+	dbToken: "",
 }
 
 export class WikiGeneratorSettingTab extends PluginSettingTab {
@@ -223,38 +227,6 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName("Website").setHeading()
 
 		new Setting(containerEl)
-			.setName("Website URL")
-			.setDesc("The URL of your website (including the leading https).")
-			.addText((text) =>
-				text
-					.setPlaceholder("https://www.your-website-here.com")
-					.setValue(settings.websiteUrl)
-					.onChange(async (value) => {
-						// Remove trailing slashes
-						settings.websiteUrl = value.replace(/\/$/, "")
-						await this.plugin.saveSettings()
-					})
-			)
-
-		new Setting(containerEl)
-			.setName("Admin API key")
-			.setDesc(
-				"An API key that gives access to website user accounts from Obsidian. Do not share this."
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder(
-						settings.adminApiKey === ""
-							? "Copy your key"
-							: "Key saved!"
-					)
-					.onChange(async (value) => {
-						settings.adminApiKey = value
-						await this.plugin.saveSettings()
-					})
-			)
-
-		new Setting(containerEl)
 			.setName("Check for website updates")
 			.setDesc(
 				"Check if your website's template has any updates. By default this check is also done every time you start Obsidian."
@@ -352,7 +324,41 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					})
 			})
 
-		new Setting(containerEl).setName("GitHub").setHeading()
+		new Setting(containerEl)
+			.setName("Database")
+			.setHeading()
+			.setDesc(
+				"This is where your notes, images and users will be stored."
+			)
+
+		new Setting(containerEl)
+			.setName("Database URL")
+			.setDesc("Your Turso database URL.")
+			.addText((text) => {
+				text.setPlaceholder("Copy your URL")
+					.setValue(settings.dbUrl)
+					.onChange(async (value) => {
+						settings.dbUrl = value
+						await this.plugin.saveSettings()
+					})
+			})
+
+		new Setting(containerEl)
+			.setName("Database Token")
+			.setDesc("Your Turso database token. Do not share this.")
+			.addText((text) => {
+				text.setPlaceholder(
+					settings.dbToken === "" ? "Copy your token" : "Token saved!"
+				).onChange(async (value) => {
+					settings.dbToken = value
+					await this.plugin.saveSettings()
+				})
+			})
+
+		new Setting(containerEl)
+			.setName("GitHub")
+			.setHeading()
+			.setDesc("This is where your website's code will be stored.")
 
 		new Setting(containerEl)
 			.setName("GitHub username")
@@ -387,7 +393,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 				text.setPlaceholder(
 					settings.githubRepoToken === ""
 						? "Copy your token"
-						: "Key saved!"
+						: "Token saved!"
 				).onChange(async (value) => {
 					settings.githubRepoToken = value
 					await this.plugin.saveSettings()
@@ -399,13 +405,27 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Local export")
 			.setDesc(
-				"Export the database to a local SQLite file instead of pushing it to GitHub. Useful for testing or if you need to manually interact with the database."
+				"Export your notes to a local SQLite file instead of pushing to Turso. Useful for testing or if you need to manually interact with the database. The database will be exported to this plugin's folder in the vault, under .obsidian."
 			)
 			.addToggle(async (toggle) => {
 				toggle
 					.setValue(settings.localExport)
 					.onChange(async (value) => {
 						settings.localExport = value
+						await this.plugin.saveSettings()
+					})
+			})
+
+		new Setting(containerEl)
+			.setName("Ignore existing users")
+			.setDesc(
+				"Run the uploading procedure without fetching existing user profiles. Will delete all profiles. Useful for debugging or for fully local usage."
+			)
+			.addToggle(async (toggle) => {
+				toggle
+					.setValue(settings.ignoreUsers)
+					.onChange(async (value) => {
+						settings.ignoreUsers = value
 						await this.plugin.saveSettings()
 					})
 			})

@@ -28,9 +28,11 @@ export function slugPath(path: string): string {
 export function partition(
 	text: string,
 	splitter: string | RegExp,
-	limit = -1
+	options: {
+		limit?: number
+	} = { limit: -1 }
 ): string[] {
-	if (limit === 0) {
+	if (options.limit === 0) {
 		return [text]
 	}
 
@@ -39,7 +41,7 @@ export function partition(
 	if (typeof splitter === "string") {
 		const length = split.length
 		for (let i = 1; i < length; i++) {
-			if (i - 1 === limit) {
+			if (i - 1 === options.limit) {
 				split.slice(i).reduce((acc, curr, idx) => {
 					if (idx < split.length - 1) {
 						return acc + curr + splitter
@@ -69,17 +71,19 @@ export function partition(
 
 				//@ts-ignore
 				out.push(matches.shift()[0])
-				if (i === limit) {
+				if (i === options.limit) {
 					// If we reach the limit, we reduce all of the remaining splits/matches into a string
-					const rest = split.slice(limit).reduce((acc, curr) => {
-						if (matches.length > 0) {
-							//@ts-ignore
-							const m = matches.shift()[0]
-							return acc + curr + m
-						} else {
-							return acc + curr
-						}
-					}, "")
+					const rest = split
+						.slice(options.limit)
+						.reduce((acc, curr) => {
+							if (matches.length > 0) {
+								//@ts-ignore
+								const m = matches.shift()[0]
+								return acc + curr + m
+							} else {
+								return acc + curr
+							}
+						}, "")
 					out.push(rest)
 					break
 				} else {
@@ -94,16 +98,16 @@ export function partition(
 
 /**
  * Convert an image from the Vault into webp, possibly downscaling it, and return its
- * base64 representation.
+ * Blob representation.
  * @param file The image's TFile
  * @param vault A reference to the Vault
- * @returns The base64 representation of the image
+ * @returns A Blob containing the image
  */
-export async function imageToBase64(
+export async function imageToArrayBuffer(
 	file: TFile,
 	vault: Vault,
 	downscale: boolean
-): Promise<string> {
+): Promise<ArrayBuffer> {
 	const buf = await vault.readBinary(file)
 	let image = await Image.load(buf)
 	if (downscale) {
@@ -115,7 +119,9 @@ export async function imageToBase64(
 			image = image.resize({ width: 1600 })
 		}
 	}
-	return await image.toBase64("image/webp")
+
+	const blob = await image.toBlob("image/webp", 85)
+	return blob.arrayBuffer()
 }
 
 export function resolveTFolder(folderPath: string, vault: Vault) {

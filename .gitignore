@@ -27,3 +27,4 @@ notes-data.*
 supabase
 obsidian-wiki-generator.code-workspace
 db/*
+*.db

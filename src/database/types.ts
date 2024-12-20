@@ -18,20 +18,21 @@ export type Frontmatter = {
 export type Detail = {
 	order: number
 	key: string
-	value: string | undefined
+	value: string | null
 }
 
 export type SidebarImage = {
 	order: number
 	image_name: string
-	base64: string
-	caption: string | undefined
+	image_id: number
+	caption: string | null
 }
 
 export type ContentChunk = {
 	chunk_id: number
 	text: string
-	allowed_users: string[]
+	allowed_users: string | null
+	image_id: number | null
 }
 
 export type Pages = Map<

@@ -3,6 +3,12 @@ import { Root } from "hast"
 import { partition } from "src/utils"
 import { Processor } from "unified"
 import { Detail, SidebarImage, ContentChunk } from "../database/types"
+import {
+	secretBlockRegex,
+	secretBlockRegexNoGroups,
+	transclusionRegex,
+	transclusionRegexNoGroups,
+} from "./regexes"
 
 /**
  * Parse Markdown text, removing all\* special :::blocks::: and
@@ -15,14 +21,14 @@ import { Detail, SidebarImage, ContentChunk } from "../database/types"
  * @param md The markdown text to transform
  * @param filename The name of the file that's being processed
  * @param processor A unified processor to convert Markdown into HTML
- * @param imageBase64 A map that links image filenames to their base64 representation
+ * @param imageNameToId A map that links image filenames to their base64 representation
  * @returns The modified text, alongside all other additional data from custom blocks
  */
 export async function replaceCustomBlocks(
 	md: string,
 	filename: string,
 	processor: Processor<Root, Root, Root, Root, string>,
-	imageBase64: Map<string, string>
+	imageNameToId: Map<string, number>
 ) {
 	// Remove :::hidden::: blocks
 	md = md.replace(/^:::hidden\n.*?\n:::/gms, "")
@@ -55,7 +61,7 @@ export async function replaceCustomBlocks(
 			match[2],
 			index + 1,
 			processor,
-			imageBase64,
+			imageNameToId,
 			filename
 		)
 		if (img) sidebarImages.push(img)
@@ -101,7 +107,7 @@ async function parseDetailsBlock(
 			detailsList.push({
 				order: index + 1,
 				key,
-				value: undefined,
+				value: null,
 			})
 		} else {
 			// Both key and value. Make sure to handle excess splits due to additional
@@ -125,16 +131,16 @@ async function parseDetailsBlock(
  * @param contents The contents of an :::image::: block
  * @param order The ordering of the block in the page, compared to other :::image::: blocks
  * @param processor A unified processor to convert the caption into HTML
- * @param imageBase64 A Map linking image filenames into their base64 representation
+ * @param imageNameToId A Map linking image filenames into their id in the database
  * @param filename The filename of the file the block comes from, for user-friendly warnings
  * @returns A SidebarImage object encoding the block's contents.
- * May be undefined if the formatting is wrong or the base64 representation was not found
+ * May be undefined if the formatting is wrong.
  */
 async function parseImageBlock(
 	contents: string,
 	order: number,
 	processor: Processor<Root, Root, Root, Root, string>,
-	imageBase64: Map<string, string>,
+	imageNameToId: Map<string, number>,
 	filename: string
 ): Promise<SidebarImage | undefined> {
 	// An :::image::: block should be made up of 1 or 2 lines
@@ -164,22 +170,24 @@ async function parseImageBlock(
 	const imageFile = wikilink[1]
 
 	// Then the caption, if present
-	let caption: string | undefined
+	let caption: string | null
 	if (lines.length > 1) {
 		caption = lines.splice(1).join("\n")
 		caption = (await processor.process(caption)).toString()
+	} else {
+		caption = null
 	}
 
 	// Grab the base64 representation for the current image and skip the block if it isn't found
-	const base64 = imageBase64.get(imageFile)
-	if (!base64) {
+	const image_id = imageNameToId.get(imageFile)
+	if (!image_id) {
 		return undefined
 	}
 
 	return {
 		order,
 		image_name: imageFile,
-		base64,
+		image_id,
 		caption,
 	}
 }
@@ -189,53 +197,79 @@ async function parseImageBlock(
  * The text is currently split by :::secret::: blocks and each is given
  * the permission determined by the argument of the block.
  * @param text The text to split
- * @param allowedUsers A list of allowed users for the current page
+ * @param imageNameToId A mapping between image filenames and their database row id
  * @returns An array ContentChunks
  */
-export function chunkMd(text: string, allowedUsers: string[]): ContentChunk[] {
-	const secretChunks = [
-		...text.matchAll(/^:::secret\s*\((.*?)\)\n(.*?)\n:::/gms),
-	]
+export function chunkMd(
+	text: string,
+	imageNameToId: Map<string, number>
+): ContentChunk[] {
+	// First, partition by secrets while replacing each block with its contents
+	const splits = partition(text, secretBlockRegexNoGroups)
 
-	// If there are no :::secret::: blocks, returns the page as-is
-	if (secretChunks.length === 0) {
-		return [{ chunk_id: 1, text, allowed_users: [] }]
-	}
+	// Get a list of the users mentioned in the blocks
+	const secretUsers = [...text.matchAll(secretBlockRegex)].map(
+		(match) => match[1]
+	)
 
-	// Replace each block with its content
-	text = text.replace(/^:::secret\s*\((.*?)\)\n(.*?)\n:::/gms, "$2")
-
-	let currChunkId = 1
-	const chunks: ContentChunk[] = []
-
-	for (const match of secretChunks) {
-		let currText: string
-		const users = match[1].split(",").map((s) => s.trim())
-
-		// Merge chunk users with global users whilst avoiding duplication
-		// allowedUsers.forEach((user) => {
-		// 	if (!users.includes(user)) users.push(user)
-		// })
-
-		if (chunks.length > 0) {
-			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-			currText = chunks.pop()!.text
-			currChunkId -= 1
+	const tempChunks: ContentChunk[] = []
+	for (const [idx, split] of splits.entries()) {
+		// Only odd splits are secret: "pub sec pub" -> ["pub ", "sec", " pub"]
+		// This still applies if there is a secret block at the start or end
+		// (pub would be an empty string)
+		let allowed_users: string | null
+		let text: string
+		if (idx % 2 === 1) {
+			const usersIdx = Math.floor(idx / 2)
+			// Guarantee that users are split by semicolon and that there is no extra whitespace
+			allowed_users = secretUsers[usersIdx]
+				.split(",")
+				.map((s) => s.trim())
+				.join(";")
+			// Also replace each block with its own contents
+			text = split.replace(secretBlockRegex, "$2")
 		} else {
-			currText = text
+			allowed_users = null
+			text = split
 		}
 
-		const parts = partition(currText, match[2])
-		for (const i in parts) {
-			chunks.push({
-				chunk_id: currChunkId,
-				text: parts[i],
-				allowed_users: parseInt(i) % 2 !== 0 ? users : [],
-				// The way `partition` works puts all secret chunks on odd indexes
+		tempChunks.push({
+			chunk_id: idx + 1,
+			text,
+			allowed_users,
+			image_id: null,
+		})
+	}
+
+	// Do the same for every transclusion, in every chunk
+	const tempChunks2: ContentChunk[] = []
+	for (const chunk of tempChunks) {
+		const linkNames = [...chunk.text.matchAll(transclusionRegex)].map(
+			(match) => match[1]
+		)
+		const splits = partition(chunk.text, transclusionRegexNoGroups)
+
+		const currOffset = tempChunks2.length
+		for (const [idx, split] of splits.entries()) {
+			let image_id: number | null
+			if (idx % 2 === 1) {
+				const imageNameIdx = Math.floor(idx / 2)
+				const linkName = linkNames[imageNameIdx]
+				// This nullish coalescing also takes care of non-image file formats and text transclusions
+				image_id = imageNameToId.get(linkName) ?? null
+			} else {
+				image_id = null
+			}
+
+			tempChunks2.push({
+				chunk_id: idx + currOffset,
+				text: split,
+				// Inherit allowed users from the current chunk
+				allowed_users: chunk.allowed_users,
+				image_id,
 			})
-			currChunkId += 1
 		}
 	}
 
-	return chunks
+	return tempChunks2
 }

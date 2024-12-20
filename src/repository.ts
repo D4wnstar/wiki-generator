@@ -5,6 +5,57 @@ import { Database } from "sql.js"
 const templateOwner = "D4wnstar"
 const templateRepo = "wiki-generator-template"
 
+/**
+ * Insert the database into a repository if it doesn't exist.
+ * Used to initialize the database for the first time.
+ * @param db The database to insert
+ * @param token The API token to the repository
+ * @param username The GitHub username of the owner of the repo
+ * @param repo The name of the repository to insert into
+ */
+export async function insertDatabaseIntoRepo(
+	db: Database,
+	token: string,
+	username: string,
+	repo: string
+) {
+	const octokit = new Octokit({
+		auth: token,
+	})
+
+	const dbPath = "static/data.db"
+	// Convert the database into base64 since that's what GitHub requires
+	const content = Buffer.from(db.export()).toString("base64")
+
+	try {
+		await octokit.request("PUT /repos/{owner}/{repo}/contents/{path}", {
+			owner: username,
+			repo,
+			path: dbPath,
+			message: `Added database for the first time`,
+			content,
+			headers: {
+				"X-GitHub-Api-Version": "2022-11-28",
+			},
+		})
+	} catch (error) {
+		console.error(
+			"Failed to insert database into repository. Canceling upload."
+		)
+		new Notice(
+			"Failed to insert database into repository. Canceling upload."
+		)
+	}
+}
+
+/**
+ * Update an existing database in a repository, assuming it exists. If the
+ * database doesn't yet exist, use `insertDatabaseIntoRepo`.
+ * @param db The database to insert
+ * @param token The API token to the repository
+ * @param username The GitHub username of the owner of the repo
+ * @param repo The name of the repository to insert into
+ */
 export async function pushDatabaseToWebsite(
 	db: Database,
 	token: string,

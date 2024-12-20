@@ -14,20 +14,18 @@ const wikilinkRegex = /(!)?\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/
 //  3. Alias
 
 export default function rehypeWikilinks(
-	titleToPath: Map<string, string>,
-	imageBase64: Map<string, string>
+	titleToPath: Map<string, string>
+	// imageBlobs: Map<string, Blob>
 ) {
 	return function (tree: Root) {
-		visit(tree, "element", (e) =>
-			handleElement(e, titleToPath, imageBase64)
-		)
+		visit(tree, "element", (e) => handleElement(e, titleToPath))
 	}
 }
 
 function handleElement(
 	elem: Element,
-	titleToPath: Map<string, string>,
-	imageBase64: Map<string, string>
+	titleToPath: Map<string, string>
+	// imageBlobs: Map<string, Blob>
 ) {
 	// Ignore code and pre blocks
 	if (
@@ -52,7 +50,7 @@ function handleElement(
 		}
 
 		const text = currChild.value
-		const parts = partition(text, wikilinkRegexNoGroups, 1)
+		const parts = partition(text, wikilinkRegexNoGroups, { limit: 1 })
 		if (parts.length !== 3) {
 			idx += 1
 			continue
@@ -66,7 +64,7 @@ function handleElement(
 			value: parts[2],
 		} as ElementContent
 
-		const props = findWikilinkProperties(parts[1], titleToPath, imageBase64)
+		const props = findWikilinkProperties(parts[1], titleToPath)
 
 		let linkNode: ElementContent
 		if (props instanceof Wikilink) {
@@ -126,8 +124,8 @@ class Img {
 
 function findWikilinkProperties(
 	link: string,
-	titleToPath: Map<string, string>,
-	imageBase64: Map<string, string>
+	titleToPath: Map<string, string>
+	// imageBlobs: Map<string, Blob>
 ): Wikilink | Img {
 	const rmatch = link.match(wikilinkRegex)
 	if (!rmatch) {
@@ -155,24 +153,15 @@ function findWikilinkProperties(
 			)
 		} else {
 			// TODO: Handle a file reference
-			return {
-				linkText: "[img here lol]",
-				href: "",
-				class: "",
-				remove: true,
-			}
+			return new Wikilink(pageTitleOrPath, "", "", true)
 		}
 	} else {
 		if (!hasFileExtension) {
 			// TODO: Handle a text transclusion
-			return {
-				linkText: "[text here lol]",
-				href: "",
-				class: "",
-				remove: true,
-			}
+			return new Wikilink(pageTitleOrPath, "", "", true)
 		} else {
-			return handleFileTransclusion(pageTitleOrPath, alias, imageBase64)
+			return new Wikilink(pageTitleOrPath, "", "", true)
+			// return handleFileTransclusion(pageTitleOrPath, alias, imageBlobs)
 		}
 	}
 }
@@ -205,10 +194,10 @@ function handleTextReference(
 function handleFileTransclusion(
 	imageTitleOrPath: string,
 	dimensions: string | undefined,
-	imageBase64: Map<string, string>
+	imageBlobs: Map<string, Blob>
 ): Img {
 	// TODO: Add support for full path
-	const base64 = imageBase64.get(imageTitleOrPath) ?? ""
+	const blob = imageBlobs.get(imageTitleOrPath) ?? ""
 
-	return new Img(`data:image/png;base64,${base64}`, imageTitleOrPath)
+	return new Img(`data:image/png;base64,${blob}`, imageTitleOrPath)
 }

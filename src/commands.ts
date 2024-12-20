@@ -1,13 +1,26 @@
 import { Notice, Vault } from "obsidian"
 import { WikiGeneratorSettings } from "./settings"
-import { getPublishableFiles, imageToBase64 } from "./utils"
+import { getPublishableFiles, imageToArrayBuffer } from "./utils"
 import { unified } from "unified"
-import { initializeSqliteClient } from "./database/init"
-import { pushDatabaseToWebsite } from "./repository"
+import {
+	initializeLocalDatabase,
+	initializeRemoteDatabase,
+} from "./database/init"
 import { exportDb } from "./database/filesystem"
-import { makePagesFromFiles } from "./notes/text-transformations"
+import {
+	convertWikilinks,
+	makePagesFromFiles,
+} from "./notes/text-transformations"
 import { getUsers } from "./database/requests"
-import { convertWikilinksAndInsert, insertUsers } from "./database/operations"
+import {
+	clearRemoteDatabase,
+	insertImageLocal,
+	insertImageRemote,
+	insertUsers,
+	pushPagesToLocal,
+	pushPagesToRemote,
+	runRemoteMigrations,
+} from "./database/operations"
 
 import remarkParse from "remark-parse"
 import remarkGfm from "remark-gfm"
@@ -25,6 +38,9 @@ import rehypeKatex from "rehype-katex"
 import rehypeMermaid from "rehype-mermaid"
 import rehypeSlug from "rehype-slug"
 import rehypeStringify from "rehype-stringify"
+import { Database } from "sql.js"
+import { Client } from "@libsql/client"
+import { propsRegex } from "./notes/regexes"
 
 /**
  * The main function of the plugin. Convert every publishable Markdown note in the vault
@@ -39,22 +55,31 @@ export async function uploadNotes(
 ) {
 	console.log("Uploading notes...")
 	new Notice("Uploading notes. This might take a while...")
-	const db = await initializeSqliteClient(vault)
+
+	let db: Database | Client
+	if (settings.localExport) {
+		db = await initializeLocalDatabase(vault)
+	} else {
+		db = await initializeRemoteDatabase(settings.dbUrl, settings.dbToken)
+	}
 
 	// First handle the non-markdown files (currently only images)
-	console.log("Uploading media files...")
+	console.log("Processing media files...")
 	const mediaFiles = vault
 		.getFiles()
 		.filter((file) => file.extension !== "md")
 
 	const imageExtensions = ["png", "webp", "jpg", "jpeg", "gif", "bmp", "svg"]
-	const imageBase64: Map<string, string> = new Map()
+	const imageNameToId: Map<string, number> = new Map()
 
 	for (const file of mediaFiles) {
 		if (imageExtensions.includes(file.extension)) {
-			// Images are converted to base64 and stored to later be embedded in the HTML
-			const base64 = await imageToBase64(file, vault, true)
-			imageBase64.set(file.name, base64)
+			const buf = await imageToArrayBuffer(file, vault, true)
+			const imageId = settings.localExport
+				? insertImageLocal(file.name, buf, db as Database)
+				: await insertImageRemote(file.name, buf, db as Client)
+
+			imageNameToId.set(file.name, imageId)
 		} else {
 			// Unimplemented file type
 		}
@@ -90,42 +115,47 @@ export async function uploadNotes(
 		//@ts-ignore
 		processor,
 		frontmatterProcessor,
-		imageBase64,
+		imageNameToId,
 		vault
 	)
 
 	// Initialize one last processor to handle wikilink conversion
 	const postprocessor = unified()
 		.use(rehypeParse, { fragment: true })
-		.use(rehypeWikilinks, titleToPath, imageBase64)
+		.use(rehypeWikilinks, titleToPath)
 		.use(rehypeStringify, { allowDangerousHtml: true })
 
-	console.log("Converting wikilinks and inserting into database...")
+	console.log("Converting wikilinks...")
 	//@ts-ignore
-	await convertWikilinksAndInsert(db, pages, settings, postprocessor)
+	const pagesWithLinks = await convertWikilinks(pages, postprocessor)
 
 	// Fetch user accounts from the website and insert them into the database
 	// to avoid deleting user accounts every time
-	console.log("Getting user accounts from website...")
-	const users = await getUsers(settings)
-	insertUsers(users, db)
-
-	// Finally save the database either locally or in the website repository
-	console.log("Exporting database...")
-	if (settings.localExport) {
-		await exportDb(db, vault)
-		new Notice("Database exported to plugin folder!")
-	} else {
-		await pushDatabaseToWebsite(
-			db,
-			settings.githubRepoToken,
-			settings.githubUsername,
-			settings.githubRepoName
-		)
-		new Notice("Database pushed to GitHub repository!")
+	if (settings.localExport && !settings.ignoreUsers) {
+		console.log("Cloning user accounts from Turso...")
+		const users = await getUsers(settings)
+		//@ts-ignore
+		insertUsers(users, db as Database)
 	}
 
-	// Close the database to avoid leaking memory
+	// Finally either save the database locally or insert into Turso
+	if (settings.localExport) {
+		console.log("Exporting database...")
+		pushPagesToLocal(db as Database, pagesWithLinks, settings)
+		await exportDb(db as Database, vault)
+		new Notice("Database exported to plugin folder!")
+	} else {
+		// If we are working with Turso, clear existing content before uploading
+		console.log("Clearing existing notes...")
+		await clearRemoteDatabase(db as Client)
+		console.log("Setting up tables...")
+		await runRemoteMigrations(db as Client)
+		console.log("Inserting notes...")
+		await pushPagesToRemote(db as Client, pagesWithLinks, settings)
+		new Notice("Notes pushed to database!")
+	}
+
+	// Close the database or Turso connection to avoid leaking memory
 	console.log("Closing database...")
 	db.close()
 
@@ -146,13 +176,12 @@ export function massAddPublish(
 	const notes = getPublishableFiles(settings, vault)
 	for (const note of notes) {
 		vault.process(note, (noteText) => {
-			const propsRegex = /^---\n+(.*?)\n+---/s
 			// Isolate properties
 			const props = noteText.match(propsRegex)
 			if (props) {
 				// Check if a publish property is already there
 				const publish = props[1].match(
-					/(wiki)|(dg)-publish: (true)|(false)/
+					/(wiki|dg)-publish: (true|false)/
 				)
 				// If it is, leave it as is
 				if (publish) return noteText
@@ -184,10 +213,16 @@ export function massSetPublishState(
 	vault: Vault
 ) {
 	const notes = getPublishableFiles(settings, vault)
-	const regex = RegExp(`^---\n(.*?)wiki-publish: ${value}(.*?)\n---\n`, "s")
+	const regex = RegExp(
+		`^---\\n(.*?)wiki-publish: ${!value}(.*?)\\n---\\n`,
+		"s"
+	)
 	for (const note of notes) {
 		vault.process(note, (noteText) => {
-			return noteText.replace(regex, `---\n$1$2-publish: ${value}$3\n---`)
+			return noteText.replace(
+				regex,
+				`---\n$1wiki-publish: ${value}$2\n---\n`
+			)
 		})
 	}
 }

@@ -23,7 +23,7 @@ export function findFileInPlugin(
 export async function exportDb(db: Database, vault: Vault) {
 	const buf = db.export()
 	await vault.adapter.writeBinary(
-		findFileInPlugin(vault, "db/data.db", false),
+		findFileInPlugin(vault, "data.db", false),
 		buf
 	)
 }
