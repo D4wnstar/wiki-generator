@@ -194,14 +194,15 @@ async function parseImageBlock(
 
 /**
  * Split Markdown text into chunks with different user permission.
- * The text is currently split by :::secret::: blocks and each is given
- * the permission determined by the argument of the block.
+ * The text is split by :::secret::: and ![[transclusions]] blocks and
+ * each is given the permission determined by the argument of the block.
  * @param text The text to split
  * @param imageNameToId A mapping between image filenames and their database row id
  * @returns An array ContentChunks
  */
 export function chunkMd(
 	text: string,
+	noteNameToId: Map<string, number>,
 	imageNameToId: Map<string, number>
 ): ContentChunk[] {
 	// First, partition by secrets while replacing each block with its contents
@@ -238,6 +239,7 @@ export function chunkMd(
 			text,
 			allowed_users,
 			image_id: null,
+			note_transclusion_id: null,
 		})
 	}
 
@@ -251,13 +253,23 @@ export function chunkMd(
 
 		const currOffset = tempChunks2.length
 		for (const [idx, split] of splits.entries()) {
+			let note_transclusion_id: number | null
 			let image_id: number | null
 			if (idx % 2 === 1) {
-				const imageNameIdx = Math.floor(idx / 2)
-				const linkName = linkNames[imageNameIdx]
-				// This nullish coalescing also takes care of non-image file formats and text transclusions
-				image_id = imageNameToId.get(linkName) ?? null
+				const refNameIdx = Math.floor(idx / 2)
+				const linkName = linkNames[refNameIdx]
+
+				const hasFileExtension = linkName.match(/\..*$/)
+				if (hasFileExtension) {
+					// The nullish coalescing also takes care of non-image file formats
+					note_transclusion_id = null
+					image_id = imageNameToId.get(linkName) ?? null
+				} else {
+					note_transclusion_id = noteNameToId.get(linkName) ?? null
+					image_id = null
+				}
 			} else {
+				note_transclusion_id = null
 				image_id = null
 			}
 
@@ -267,6 +279,7 @@ export function chunkMd(
 				// Inherit allowed users from the current chunk
 				allowed_users: chunk.allowed_users,
 				image_id,
+				note_transclusion_id,
 			})
 		}
 	}

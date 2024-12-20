@@ -33,6 +33,7 @@ export type ContentChunk = {
 	text: string
 	allowed_users: string | null
 	image_id: number | null
+	note_transclusion_id: number | null
 }
 
 export type Pages = Map<

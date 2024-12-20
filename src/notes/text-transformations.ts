@@ -30,10 +30,17 @@ export async function makePagesFromFiles(
 ): Promise<{ pages: Pages; titleToPath: Map<string, string> }> {
 	const pages: Pages = new Map()
 	const titleToPath: Map<string, string> = new Map()
+	const noteNameToId: Map<string, number> = files.reduce(
+		(map, file, index) => {
+			map.set(file.basename, index)
+			return map
+		},
+		new Map()
+	)
 
 	for (const [noteId, file] of files.entries()) {
 		const _slug = slugPath(file.path)
-		const title = file.name.replace(".md", "")
+		const title = file.basename
 		const path = file.path.replace(".md", "")
 		const content = await vault.read(file)
 
@@ -70,7 +77,7 @@ export async function makePagesFromFiles(
 			.replace(/\$\$$/gm, "\n$$$$") // The quadruple $ is because $ is the backreference character in regexes and is escaped as $$, so $$$$ -> $$
 
 		// Split the page into chunks based on permissions
-		const tempChunks = chunkMd(strippedMd4, imageNameToId)
+		const tempChunks = chunkMd(strippedMd4, noteNameToId, imageNameToId)
 
 		const chunks = addCodeblocksBack(tempChunks, inlineCode, codeBlocks)
 
@@ -99,7 +106,7 @@ export async function makePagesFromFiles(
 			allowed_users:
 				frontmatter["wiki-allowed-users"]?.join("; ") ?? null,
 		}
-		pages.set(noteId + 1, { note, chunks, details, sidebarImages })
+		pages.set(noteId, { note, chunks, details, sidebarImages })
 	}
 
 	return { pages, titleToPath }

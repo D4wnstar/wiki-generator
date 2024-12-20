@@ -122,7 +122,7 @@ export async function uploadNotes(
 	// Initialize one last processor to handle wikilink conversion
 	const postprocessor = unified()
 		.use(rehypeParse, { fragment: true })
-		.use(rehypeWikilinks, titleToPath)
+		.use(rehypeWikilinks, titleToPath, imageNameToId)
 		.use(rehypeStringify, { allowDangerousHtml: true })
 
 	console.log("Converting wikilinks...")

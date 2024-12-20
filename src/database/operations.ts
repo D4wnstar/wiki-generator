@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS note_contents (
 	"text" TEXT NOT NULL,
 	allowed_users TEXT,
 	image_id INTEGER REFERENCES images (id) ON DELETE CASCADE,
+	note_transclusion_id INTEGER REFERENCES images (id) ON DELETE CASCADE,
 	PRIMARY KEY (note_id, chunk_id)
 );`
 
@@ -156,8 +157,9 @@ INSERT INTO note_contents (
 	chunk_id,
 	"text",
 	allowed_users,
-	image_id
-) VALUES (?, ?, ?, ?, ?);`
+	image_id,
+	note_transclusion_id
+) VALUES (?, ?, ?, ?, ?, ?);`
 
 const insertDetails = `
 INSERT INTO details (
@@ -216,6 +218,7 @@ export async function pushPagesToRemote(
 					chunk.text,
 					chunk.allowed_users,
 					chunk.image_id,
+					chunk.note_transclusion_id,
 				],
 			})
 		}
@@ -275,6 +278,7 @@ export function pushPagesToLocal(
 				chunk.text,
 				chunk.allowed_users,
 				chunk.image_id,
+				chunk.note_transclusion_id,
 			])
 		}
 

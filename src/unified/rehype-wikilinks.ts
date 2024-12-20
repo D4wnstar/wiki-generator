@@ -14,18 +14,20 @@ const wikilinkRegex = /(!)?\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/
 //  3. Alias
 
 export default function rehypeWikilinks(
-	titleToPath: Map<string, string>
-	// imageBlobs: Map<string, Blob>
+	titleToPath: Map<string, string>,
+	imageNameToId: Map<string, number>
 ) {
 	return function (tree: Root) {
-		visit(tree, "element", (e) => handleElement(e, titleToPath))
+		visit(tree, "element", (e) =>
+			handleElement(e, titleToPath, imageNameToId)
+		)
 	}
 }
 
 function handleElement(
 	elem: Element,
-	titleToPath: Map<string, string>
-	// imageBlobs: Map<string, Blob>
+	titleToPath: Map<string, string>,
+	imageNameToId: Map<string, number>
 ) {
 	// Ignore code and pre blocks
 	if (
@@ -64,69 +66,37 @@ function handleElement(
 			value: parts[2],
 		} as ElementContent
 
-		const props = findWikilinkProperties(parts[1], titleToPath)
+		const props = findWikilinkProperties(
+			parts[1],
+			titleToPath,
+			imageNameToId
+		)
 
-		let linkNode: ElementContent
-		if (props instanceof Wikilink) {
-			linkNode = props.remove
-				? ({
-						type: "text",
-						value: props.linkText,
-				  } as ElementContent)
-				: h("a", { class: props.class, href: props.href }, [
-						props.linkText,
-				  ])
-		} else {
-			linkNode = h(
-				"img",
-				{
-					class: "mx-auto",
-					src: props.base64,
-					alt: props.alt,
-				},
-				[]
-			)
-		}
+		const linkNode = props.remove
+			? ({
+					type: "text",
+					value: props.linkText,
+			  } as ElementContent)
+			: h("a", { class: props.class, href: props.href }, [props.linkText])
+
 		elem.children.splice(idx, 1, ...[preNode, linkNode, postNode])
 
 		idx += 1
 	}
 }
 
-class Wikilink {
+type Wikilink = {
 	linkText: string
 	href: string
 	class: string
 	remove: boolean
-
-	constructor(
-		linkText: string,
-		href: string,
-		class_: string,
-		remove: boolean
-	) {
-		this.linkText = linkText
-		this.href = href
-		this.class = class_
-		this.remove = remove
-	}
-}
-
-class Img {
-	base64: string
-	alt: string
-
-	constructor(base64: string, alt: string) {
-		this.base64 = base64
-		this.alt = alt
-	}
 }
 
 function findWikilinkProperties(
 	link: string,
-	titleToPath: Map<string, string>
-	// imageBlobs: Map<string, Blob>
-): Wikilink | Img {
+	titleToPath: Map<string, string>,
+	imageNameToId: Map<string, number>
+): Wikilink {
 	const rmatch = link.match(wikilinkRegex)
 	if (!rmatch) {
 		return {
@@ -138,31 +108,20 @@ function findWikilinkProperties(
 	}
 
 	const isTransclusion = rmatch[1] === "!"
-	const pageTitleOrPath = rmatch[2]
+	const titleOrPath = rmatch[2]
 	const header = rmatch[3]
 	const alias = rmatch[4]
 
-	const hasFileExtension = pageTitleOrPath.match(/\..*$/)
+	const hasFileExtension = titleOrPath.match(/\..*$/)
 	if (!isTransclusion) {
 		if (!hasFileExtension) {
-			return handleTextReference(
-				pageTitleOrPath,
-				header,
-				alias,
-				titleToPath
-			)
+			return handleTextReference(titleOrPath, header, alias, titleToPath)
 		} else {
-			// TODO: Handle a file reference
-			return new Wikilink(pageTitleOrPath, "", "", true)
+			return handleImageReference(titleOrPath, imageNameToId)
 		}
 	} else {
-		if (!hasFileExtension) {
-			// TODO: Handle a text transclusion
-			return new Wikilink(pageTitleOrPath, "", "", true)
-		} else {
-			return new Wikilink(pageTitleOrPath, "", "", true)
-			// return handleFileTransclusion(pageTitleOrPath, alias, imageBlobs)
-		}
+		// Transclusions are handled separately in the page chunking process
+		return { linkText: titleOrPath, href: "", class: "", remove: true }
 	}
 }
 
@@ -172,32 +131,36 @@ function handleTextReference(
 	alias: string | undefined,
 	titleToPath: Map<string, string>
 ): Wikilink {
-	let path
-	if (pageTitleOrPath?.includes("/")) {
-		path = slugPath(pageTitleOrPath)
-	} else {
-		path = titleToPath.get(pageTitleOrPath?.toLowerCase())
-	}
+	const path = pageTitleOrPath.includes("/")
+		? slugPath(pageTitleOrPath)
+		: titleToPath.get(pageTitleOrPath.toLowerCase())
+
 	const headerLink = header ? `#${slug(header)}` : ""
 	const refName = alias?.replace("|", "") ?? pageTitleOrPath
 
 	// If path is not found, that means the note is not published
 	// and the link should be remove
-	return new Wikilink(
-		refName,
-		`/${path}${headerLink}`,
-		"anchor popup",
-		path === undefined
-	)
+	return {
+		linkText: refName,
+		href: `/${path}${headerLink}`,
+		class: "anchor",
+		remove: path === undefined,
+	}
 }
 
-function handleFileTransclusion(
+function handleImageReference(
 	imageTitleOrPath: string,
-	dimensions: string | undefined,
-	imageBlobs: Map<string, Blob>
-): Img {
-	// TODO: Add support for full path
-	const blob = imageBlobs.get(imageTitleOrPath) ?? ""
+	imageNameToId: Map<string, number>
+): Wikilink {
+	const imageName = imageTitleOrPath?.includes("/")
+		? imageTitleOrPath.split("/").last() ?? ""
+		: imageTitleOrPath
 
-	return new Img(`data:image/png;base64,${blob}`, imageTitleOrPath)
+	const imageId = imageNameToId.get(imageName)
+	return {
+		linkText: imageTitleOrPath,
+		href: `/api/v1/image?image_id=${imageId}`,
+		class: "anchor",
+		remove: false,
+	}
 }
