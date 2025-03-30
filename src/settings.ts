@@ -26,6 +26,7 @@ export interface WikiGeneratorSettings {
 	githubRepoToken: string
 	githubAutoapplyUpdates: boolean
 	githubCheckUpdatesOnStartup: boolean
+	deployHook: string
 	dbUrl: string
 	dbToken: string
 }
@@ -47,6 +48,7 @@ export const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 	githubCheckUpdatesOnStartup: false,
 	dbUrl: "",
 	dbToken: "",
+	deployHook: "",
 }
 
 export class WikiGeneratorSettingTab extends PluginSettingTab {
@@ -398,6 +400,25 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					settings.githubRepoToken = value
 					await this.plugin.saveSettings()
 				})
+			})
+
+		new Setting(containerEl)
+			.setName("Website")
+			.setHeading()
+			.setDesc("Option regarding the website.")
+
+		new Setting(containerEl)
+			.setName("Deploy hook")
+			.setDesc(
+				"The link to use to tell the website to update. Create one in your Vercel settings."
+			)
+			.addText((text) => {
+				text.setPlaceholder("Copy the URL")
+					.setValue(settings.deployHook)
+					.onChange(async (value) => {
+						settings.deployHook = value
+						await this.plugin.saveSettings()
+					})
 			})
 
 		new Setting(containerEl).setName("Developer").setHeading()

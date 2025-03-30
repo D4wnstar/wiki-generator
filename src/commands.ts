@@ -1,4 +1,4 @@
-import { Notice, Vault } from "obsidian"
+import { Notice, request, Vault } from "obsidian"
 import { WikiGeneratorSettings } from "./settings"
 import { getPublishableFiles, imageToArrayBuffer } from "./utils"
 import { unified } from "unified"
@@ -54,6 +54,12 @@ export async function uploadNotes(
 	vault: Vault,
 	settings: WikiGeneratorSettings
 ) {
+	if (settings.deployHook.length === 0) {
+		throw new Error(
+			"Deploy hook is not set. Please create one before uploading."
+		)
+	}
+
 	console.log("Uploading notes...")
 	new Notice("Uploading notes. This might take a while...")
 
@@ -162,6 +168,12 @@ export async function uploadNotes(
 	// Close the database or Turso connection to avoid leaking memory
 	console.log("Closing database...")
 	db.close()
+
+	console.log("Sending POST request to deploy hook")
+	request({
+		url: settings.deployHook,
+		method: "POST",
+	})
 
 	console.log("Successfully uploaded notes")
 }
