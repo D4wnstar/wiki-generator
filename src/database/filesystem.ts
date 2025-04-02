@@ -1,6 +1,5 @@
 import { FileSystemAdapter, Vault } from "obsidian"
 import { id } from "../../manifest.json"
-import { Database } from "sql.js"
 
 /**
  * Get the full path to a file in the plugin folder.
@@ -18,12 +17,4 @@ export function findFileInPlugin(
 	if (absolute)
 		path.unshift((vault.adapter as FileSystemAdapter).getBasePath())
 	return path.join("/")
-}
-
-export async function exportDb(db: Database, vault: Vault) {
-	const buf = db.export()
-	await vault.adapter.writeBinary(
-		findFileInPlugin(vault, "data.db", false),
-		buf
-	)
 }

@@ -15,11 +15,11 @@ const wikilinkRegex = /(!)?\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/
 
 export default function rehypeWikilinks(
 	titleToPath: Map<string, string>,
-	imageNameToId: Map<string, number>
+	imageNameToPath: Map<string, string>
 ) {
 	return function (tree: Root) {
 		visit(tree, "element", (e) =>
-			handleElement(e, titleToPath, imageNameToId)
+			handleElement(e, titleToPath, imageNameToPath)
 		)
 	}
 }
@@ -27,7 +27,7 @@ export default function rehypeWikilinks(
 function handleElement(
 	elem: Element,
 	titleToPath: Map<string, string>,
-	imageNameToId: Map<string, number>
+	imageNameToPath: Map<string, string>
 ) {
 	// Ignore code and pre blocks
 	if (
@@ -69,7 +69,7 @@ function handleElement(
 		const props = findWikilinkProperties(
 			parts[1],
 			titleToPath,
-			imageNameToId
+			imageNameToPath
 		)
 
 		const linkNode = props.remove
@@ -95,7 +95,7 @@ type Wikilink = {
 function findWikilinkProperties(
 	link: string,
 	titleToPath: Map<string, string>,
-	imageNameToId: Map<string, number>
+	imageNameToPath: Map<string, string>
 ): Wikilink {
 	const rmatch = link.match(wikilinkRegex)
 	if (!rmatch) {
@@ -117,7 +117,7 @@ function findWikilinkProperties(
 		if (!hasFileExtension) {
 			return handleTextReference(titleOrPath, header, alias, titleToPath)
 		} else {
-			return handleImageReference(titleOrPath, imageNameToId)
+			return handleImageReference(titleOrPath, imageNameToPath)
 		}
 	} else {
 		// Transclusions are handled separately in the page chunking process
@@ -150,13 +150,13 @@ function handleTextReference(
 
 function handleImageReference(
 	imageTitleOrPath: string,
-	imageNameToId: Map<string, number>
+	imageNameToPath: Map<string, string>
 ): Wikilink {
 	const imageName = imageTitleOrPath?.includes("/")
 		? imageTitleOrPath.split("/").last() ?? ""
 		: imageTitleOrPath
 
-	const imageId = imageNameToId.get(imageName)
+	const imageId = imageNameToPath.get(imageName)
 	return {
 		linkText: imageTitleOrPath,
 		href: `/api/v1/image?image_id=${imageId}`,

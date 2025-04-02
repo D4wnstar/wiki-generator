@@ -21,14 +21,14 @@ import {
  * @param md The markdown text to transform
  * @param filename The name of the file that's being processed
  * @param processor A unified processor to convert Markdown into HTML
- * @param imageNameToId A map that links image filenames to their base64 representation
+ * @param imageNameToPath A map that links image filenames to their base64 representation
  * @returns The modified text, alongside all other additional data from custom blocks
  */
 export async function replaceCustomBlocks(
 	md: string,
 	filename: string,
 	processor: Processor<Root, Root, Root, Root, string>,
-	imageNameToId: Map<string, number>
+	imageNameToPath: Map<string, string>
 ) {
 	// Remove :::hidden::: blocks
 	md = md.replace(/^:::hidden\n.*?\n:::/gms, "")
@@ -61,7 +61,7 @@ export async function replaceCustomBlocks(
 			match[2],
 			index + 1,
 			processor,
-			imageNameToId,
+			imageNameToPath,
 			filename
 		)
 		if (img) sidebarImages.push(img)
@@ -131,7 +131,7 @@ async function parseDetailsBlock(
  * @param contents The contents of an :::image::: block
  * @param order The ordering of the block in the page, compared to other :::image::: blocks
  * @param processor A unified processor to convert the caption into HTML
- * @param imageNameToId A Map linking image filenames into their id in the database
+ * @param imageNameToPath A Map linking image filenames into their path in the database
  * @param filename The filename of the file the block comes from, for user-friendly warnings
  * @returns A SidebarImage object encoding the block's contents.
  * May be undefined if the formatting is wrong.
@@ -140,7 +140,7 @@ async function parseImageBlock(
 	contents: string,
 	order: number,
 	processor: Processor<Root, Root, Root, Root, string>,
-	imageNameToId: Map<string, number>,
+	imageNameToPath: Map<string, string>,
 	filename: string
 ): Promise<SidebarImage | undefined> {
 	// An :::image::: block should be made up of 1 or 2 lines
@@ -179,15 +179,15 @@ async function parseImageBlock(
 	}
 
 	// Grab the base64 representation for the current image and skip the block if it isn't found
-	const image_id = imageNameToId.get(imageFile)
-	if (!image_id) {
+	const image_path = imageNameToPath.get(imageFile)
+	if (!image_path) {
 		return undefined
 	}
 
 	return {
 		order,
 		image_name: imageFile,
-		image_id,
+		image_path,
 		caption,
 	}
 }
@@ -197,13 +197,13 @@ async function parseImageBlock(
  * The text is split by :::secret::: and ![[transclusions]] blocks and
  * each is given the permission determined by the argument of the block.
  * @param text The text to split
- * @param imageNameToId A mapping between image filenames and their database row id
+ * @param imageNameToPath A mapping between image filenames and their path
  * @returns An array ContentChunks
  */
 export function chunkMd(
 	text: string,
-	noteNameToId: Map<string, number>,
-	imageNameToId: Map<string, number>
+	noteNameToPath: Map<string, string>,
+	imageNameToPath: Map<string, string>
 ): ContentChunk[] {
 	// First, partition by secrets while replacing each block with its contents
 	const splits = partition(text, secretBlockRegexNoGroups)
@@ -238,8 +238,8 @@ export function chunkMd(
 			chunk_id: idx + 1,
 			text,
 			allowed_users,
-			image_id: null,
-			note_transclusion_id: null,
+			image_path: null,
+			note_transclusion_path: null,
 		})
 	}
 
@@ -253,8 +253,8 @@ export function chunkMd(
 
 		const currOffset = tempChunks2.length
 		for (const [idx, split] of splits.entries()) {
-			let note_transclusion_id: number | null
-			let image_id: number | null
+			let note_transclusion_path: string | null
+			let image_path: string | null
 			if (idx % 2 === 1) {
 				const refNameIdx = Math.floor(idx / 2)
 				const linkName = linkNames[refNameIdx]
@@ -262,15 +262,16 @@ export function chunkMd(
 				const hasFileExtension = linkName.match(/\..*$/)
 				if (hasFileExtension) {
 					// The nullish coalescing also takes care of non-image file formats
-					note_transclusion_id = null
-					image_id = imageNameToId.get(linkName) ?? null
+					note_transclusion_path = null
+					image_path = imageNameToPath.get(linkName) ?? null
 				} else {
-					note_transclusion_id = noteNameToId.get(linkName) ?? null
-					image_id = null
+					note_transclusion_path =
+						noteNameToPath.get(linkName) ?? null
+					image_path = null
 				}
 			} else {
-				note_transclusion_id = null
-				image_id = null
+				note_transclusion_path = null
+				image_path = null
 			}
 
 			tempChunks2.push({
@@ -278,8 +279,8 @@ export function chunkMd(
 				text: split,
 				// Inherit allowed users from the current chunk
 				allowed_users: chunk.allowed_users,
-				image_id,
-				note_transclusion_id,
+				image_path,
+				note_transclusion_path,
 			})
 		}
 	}

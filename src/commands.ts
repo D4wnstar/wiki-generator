@@ -1,27 +1,18 @@
-import { Notice, request, Vault } from "obsidian"
+import { Notice, request, TFile, Vault } from "obsidian"
 import { WikiGeneratorSettings } from "./settings"
 import { getPublishableFiles, imageToArrayBuffer } from "./utils"
 import { unified } from "unified"
+import { createLocalDatabase } from "./database/init"
 import {
-	initializeLocalDatabase,
-	initializeRemoteDatabase,
-} from "./database/init"
-import { exportDb } from "./database/filesystem"
+	getUsersFromRemote,
+	LocalDatabaseAdapter,
+	RemoteDatabaseAdapter,
+} from "./database/operations"
 import {
 	convertWikilinks,
 	makePagesFromFiles,
 } from "./notes/text-transformations"
-import { getUsers } from "./database/requests"
-import {
-	clearRemoteDatabase,
-	insertImageLocal,
-	insertImageRemote,
-	insertUsers,
-	pushPagesToLocal,
-	pushPagesToRemote,
-	resetRemoteMedia,
-	runRemoteMigrations,
-} from "./database/operations"
+import { DatabaseAdapter } from "./database/types"
 
 import remarkParse from "remark-parse"
 import remarkGfm from "remark-gfm"
@@ -39,9 +30,9 @@ import rehypeKatex from "rehype-katex"
 import rehypeMermaid from "rehype-mermaid"
 import rehypeSlug from "rehype-slug"
 import rehypeStringify from "rehype-stringify"
-import { Database } from "sql.js"
-import { Client } from "@libsql/client"
 import { propsRegex } from "./notes/regexes"
+import * as crypto from "crypto"
+import { createClient } from "@libsql/client"
 
 /**
  * The main function of the plugin. Convert every publishable Markdown note in the vault
@@ -54,7 +45,8 @@ export async function uploadNotes(
 	vault: Vault,
 	settings: WikiGeneratorSettings
 ) {
-	if (settings.deployHook.length === 0) {
+	// Make sure we got everything we need
+	if (!settings.localExport && settings.deployHook.length === 0) {
 		throw new Error(
 			"Deploy hook is not set. Please create one before uploading."
 		)
@@ -63,37 +55,85 @@ export async function uploadNotes(
 	console.log("Uploading notes...")
 	new Notice("Uploading notes. This might take a while...")
 
-	let db: Database | Client
+	// Initialize common database interface
+	let adapter: DatabaseAdapter
 	if (settings.localExport) {
-		db = await initializeLocalDatabase(vault)
+		adapter = new LocalDatabaseAdapter(await createLocalDatabase(vault))
 	} else {
-		db = await initializeRemoteDatabase(settings.dbUrl, settings.dbToken)
+		adapter = new RemoteDatabaseAdapter(
+			createClient({
+				url: settings.dbUrl,
+				authToken: settings.dbToken,
+			})
+		)
 	}
 
-	// First handle the non-markdown files (currently only images)
+	console.log("Running migrations...")
+	await adapter.runMigrations()
+
+	// Process media files
 	console.log("Processing media files...")
-	const mediaFiles = vault
-		.getFiles()
-		.filter((file) => file.extension !== "md")
 
-	const imageExtensions = ["png", "webp", "jpg", "jpeg", "gif", "bmp", "svg"]
-	const imageNameToId: Map<string, number> = new Map()
-
-	if (!settings.localExport) {
-		resetRemoteMedia(db as Client)
+	let images: { file: TFile; hash: string }[] = []
+	const imageExtensions = ["png", "webp", "jpg", "jpeg", "gif", "bmp"]
+	const existingImageHashes = new Map<string, string>()
+	for (const image of await adapter.getImages()) {
+		existingImageHashes.set(image.path, image.hash)
 	}
-	for (const file of mediaFiles) {
-		if (imageExtensions.includes(file.extension)) {
-			const buf = await imageToArrayBuffer(file, vault, true)
-			const imageId = settings.localExport
-				? insertImageLocal(file.name, buf, db as Database)
-				: await insertImageRemote(file.name, buf, db as Client)
 
-			imageNameToId.set(file.name, imageId)
+	// Divide media by file type
+	for (const file of vault.getFiles()) {
+		if (file.extension === "md") continue
+
+		// Images
+		if (imageExtensions.includes(file.extension)) {
+			const buf = await vault.readBinary(file)
+			const hash = crypto
+				.createHash("sha256")
+				.update(new Uint8Array(buf))
+				.digest("hex")
+			images.push({ file, hash })
 		} else {
-			// Unimplemented file type
+			// Not an image - currently unsupported
 		}
 	}
+
+	// Filter out media that's unchanged since the last upload
+	images = images.filter(({ file, hash }) => {
+		const maybeExistingHash = existingImageHashes.get(file.path)
+		if (!maybeExistingHash || hash !== maybeExistingHash) {
+			// If the file doesn't exist or it's stale, insert/overwrite it
+			return true
+		} else {
+			// If it exists and it's fresh, leave it alone
+			existingImageHashes.delete(file.path)
+			return false
+		}
+	})
+	// What's left is what needs to be deleted
+	const imageHashesToDelete: string[] = [...existingImageHashes.values()]
+
+	const imageNameToPath: Map<string, string> = new Map()
+	for (const image of images) {
+		imageNameToPath.set(image.file.name, image.file.path)
+	}
+
+	// Push the media to the database
+	console.log(`Deleting ${imageHashesToDelete.length} outdated images...`)
+	await adapter.deleteImagesByHashes(imageHashesToDelete)
+	const imagesToInsert = await Promise.all(
+		images.map(async ({ file, hash }) => {
+			return {
+				path: file.path.replace(/\.md$/, ""),
+				alt: file.name,
+				hash,
+				buf: await imageToArrayBuffer(file, vault, true),
+			}
+		})
+	)
+	const uploadedImages = imagesToInsert.length
+	console.log(`Inserting ${uploadedImages} images...`)
+	await adapter.insertImages(imagesToInsert)
 
 	// Initialize two unified processors to handle syntax conversion and frontmatter export
 	const processor = unified()
@@ -116,23 +156,53 @@ export async function uploadNotes(
 		.use(rehypeParse)
 		.use(rehypeStringify)
 
-	// Take all markdown files and convert them into rich data structures
+	// Fetch all markdown files and filter out ones that are unchanged since the last upload
 	console.log("Converting Markdown to HTML...")
-	const files = vault.getMarkdownFiles()
+	const existingHashes = new Map<string, string>()
+	const remoteNotes = await adapter.getNotes()
+	for (const note of remoteNotes) {
+		existingHashes.set(note.path, note.hash)
+	}
 
+	let files = await Promise.all(
+		vault.getMarkdownFiles().map(async (file) => {
+			const buf = await vault.readBinary(file)
+			const hash = crypto
+				.createHash("sha256")
+				.update(new Uint8Array(buf))
+				.digest("hex")
+			return { file, hash }
+		})
+	)
+	files = files.filter(({ file, hash }) => {
+		const maybeExistingHash = existingHashes.get(file.path)
+		if (!maybeExistingHash || hash !== maybeExistingHash) {
+			// If the note doesn't exist or it's stale, insert/overwrite it
+			return true
+		} else {
+			// If it exists and it's fresh, leave it alone
+			existingHashes.delete(file.path)
+			return false
+		}
+	})
+	// What's left is what needs to be deleted
+	const hashesToDelete: string[] = [...existingHashes.values()]
+
+	// Convert them into rich data structures
 	const { pages, titleToPath } = await makePagesFromFiles(
 		files,
 		//@ts-ignore
 		processor,
 		frontmatterProcessor,
-		imageNameToId,
+		imageNameToPath,
 		vault
 	)
+	const uploadedNotes = pages.size
 
 	// Initialize one last processor to handle wikilink conversion
 	const postprocessor = unified()
 		.use(rehypeParse, { fragment: true })
-		.use(rehypeWikilinks, titleToPath, imageNameToId)
+		.use(rehypeWikilinks, titleToPath, imageNameToPath)
 		.use(rehypeStringify, { allowDangerousHtml: true })
 
 	console.log("Converting wikilinks...")
@@ -143,39 +213,38 @@ export async function uploadNotes(
 	// to avoid deleting user accounts every time
 	if (settings.localExport && !settings.ignoreUsers) {
 		console.log("Cloning user accounts from Turso...")
-		const users = await getUsers(settings)
-		//@ts-ignore
-		insertUsers(users, db as Database)
+		const users = await getUsersFromRemote(settings.dbUrl, settings.dbToken)
+		adapter.insertUsers(users)
 	}
 
-	// Finally either save the database locally or insert into Turso
+	// Finally push the notes and media to the database
+	console.log(`Deleting ${hashesToDelete.length} outdated notes`)
+	await adapter.deleteNotesByHashes(hashesToDelete)
+	console.log(`Inserting ${uploadedNotes} notes...`)
+	await adapter.pushPages(pagesWithLinks, settings)
+
 	if (settings.localExport) {
 		console.log("Exporting database...")
-		pushPagesToLocal(db as Database, pagesWithLinks, settings)
-		await exportDb(db as Database, vault)
-		new Notice("Database exported to plugin folder!")
+		await adapter.export(vault)
+		new Notice(
+			`Database exported to plugin folder! Pushed ${uploadedNotes} notes and ${uploadedImages} images.`
+		)
 	} else {
-		// If we are working with Turso, clear existing content before uploading
-		console.log("Clearing existing notes...")
-		await clearRemoteDatabase(db as Client)
-		console.log("Setting up tables...")
-		await runRemoteMigrations(db as Client)
-		console.log("Inserting notes...")
-		await pushPagesToRemote(db as Client, pagesWithLinks, settings)
-		new Notice("Notes pushed to database!")
+		new Notice(
+			`Uploaded ${uploadedNotes} notes and ${uploadedImages} images.`
+		)
 	}
 
-	// Close the database or Turso connection to avoid leaking memory
-	console.log("Closing database...")
-	db.close()
+	// Cleanup
+	await adapter.close()
 
-	console.log("Sending POST request to deploy hook")
-	request({
-		url: settings.deployHook,
-		method: "POST",
-	})
+	// Ping Vercel so it rebuilds the site
+	if (!settings.localExport) {
+		console.log("Sending POST request to deploy hook")
+		request({ url: settings.deployHook, method: "POST" })
+	}
 
-	console.log("Successfully uploaded notes")
+	console.log(`Successfully uploaded ${uploadedNotes} notes`)
 }
 
 /**

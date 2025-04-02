@@ -18,6 +18,31 @@ export function slugPath(path: string): string {
 }
 
 /**
+ * Ensure a slug is unique by appending incrementing numbers when collisions occur.
+ * @param slug The base slug to check
+ * @param existingSlugs Set of existing slugs to check against
+ * @returns A unique version of the slug
+ * @example ensureUniqueSlug("hello", new Set(["hello"])) -> "hello-1"
+ * @example ensureUniqueSlug("hello", new Set(["hello", "hello-1"])) -> "hello-2"
+ */
+export function ensureUniqueSlug(
+	slug: string,
+	existingSlugs: Set<string>
+): string {
+	if (!existingSlugs.has(slug)) {
+		return slug
+	}
+
+	let counter = 1
+	let newSlug = `${slug}-${counter}`
+	while (existingSlugs.has(newSlug)) {
+		counter++
+		newSlug = `${slug}-${counter}`
+	}
+	return newSlug
+}
+
+/**
  * Splits the text by the splitter string and retains it in the return value, unlike `split`
  * which drops it. Assumes `splitter` exists in `text`.
  * @param text The text to partition

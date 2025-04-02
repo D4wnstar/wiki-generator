@@ -1,12 +1,13 @@
 import { TFile, Vault } from "obsidian"
 import { Root } from "remark-parse/lib"
-import { slugPath } from "src/utils"
+import { ensureUniqueSlug, slugPath } from "src/utils"
 import { Processor } from "unified"
 import { replaceCustomBlocks, chunkMd } from "./custom-blocks"
 import {
 	ContentChunk,
 	Detail,
 	Frontmatter,
+	Note,
 	Pages,
 	SidebarImage,
 } from "../database/types"
@@ -16,32 +17,38 @@ import {
  * @param files A list of Markdown files
  * @param processor A unified processor to convert Markdown into HTML
  * @param frontmatterProcessor A unified process to extract markdown frontmatter
- * @param imageNameToId A Map linking image filenames with their base64 representation
+ * @param imageNameToPath A Map linking image filenames with their base64 representation
  * @param vault A reference to the vault
  * @returns A Pages object containing all converted data and a Map linking lowercase
  * page titles with their full filepath slugs.
  */
 export async function makePagesFromFiles(
-	files: TFile[],
+	files: { file: TFile; hash: string }[],
 	processor: Processor<Root, Root, Root, Root, string>,
 	frontmatterProcessor: Processor<Root, undefined, undefined, Root, string>,
-	imageNameToId: Map<string, number>,
+	imageNameToPath: Map<string, string>,
 	vault: Vault
 ): Promise<{ pages: Pages; titleToPath: Map<string, string> }> {
 	const pages: Pages = new Map()
 	const titleToPath: Map<string, string> = new Map()
-	const noteNameToId: Map<string, number> = files.reduce(
-		(map, file, index) => {
-			map.set(file.basename, index)
-			return map
-		},
+	const noteNameToPath: Map<string, string> = files.reduce(
+		(map, { file }) => map.set(file.basename, file.path),
 		new Map()
 	)
+	const lastUpdated = Math.floor(Date.now() / 1000)
 
-	for (const [noteId, file] of files.entries()) {
-		const _slug = slugPath(file.path)
+	// Keep track of previous slugs to avoid collisions
+	// This is done manually despite using github-slugger because slugger turns
+	// '/' into '-' and breaks paths, so it is instead ran on each path element
+	// and the full path is reconstructed and tracked manually
+	const previousSlugs: Set<string> = new Set()
+
+	for (const { file, hash } of files) {
 		const title = file.basename
-		const path = file.path.replace(".md", "")
+		const path = file.path
+		const slug = ensureUniqueSlug(slugPath(file.path), previousSlugs)
+		previousSlugs.add(slug)
+
 		const content = await vault.read(file)
 
 		// Grab the frontmatter first because we need some properties
@@ -70,14 +77,14 @@ export async function makePagesFromFiles(
 			file.name,
 			//@ts-ignore
 			processor,
-			imageNameToId
+			imageNameToPath
 		)
 		const strippedMd4 = strippedMd3
 			.replace(/^\$\$/gm, "$$$$\n") // remarkMath needs newlines to consider a math block as display
 			.replace(/\$\$$/gm, "\n$$$$") // The quadruple $ is because $ is the backreference character in regexes and is escaped as $$, so $$$$ -> $$
 
 		// Split the page into chunks based on permissions
-		const tempChunks = chunkMd(strippedMd4, noteNameToId, imageNameToId)
+		const tempChunks = chunkMd(strippedMd4, noteNameToPath, imageNameToPath)
 
 		const chunks = addCodeblocksBack(tempChunks, inlineCode, codeBlocks)
 
@@ -94,19 +101,21 @@ export async function makePagesFromFiles(
 			: chunks[0].text
 
 		// Save the current title/slug pair for later use
-		titleToPath.set(title.toLowerCase(), _slug)
+		titleToPath.set(title.toLowerCase(), slug)
 
-		const note = {
+		const note: Note = {
 			title,
 			alt_title: frontmatter["wiki-title"] ?? null,
 			path,
-			slug: _slug,
+			slug: slug,
 			frontpage: frontmatter["wiki-home"] ?? 0,
 			lead,
 			allowed_users:
 				frontmatter["wiki-allowed-users"]?.join("; ") ?? null,
+			hash,
+			last_updated: lastUpdated,
 		}
-		pages.set(noteId, { note, chunks, details, sidebarImages })
+		pages.set(path, { note, chunks, details, sidebarImages })
 	}
 
 	return { pages, titleToPath }

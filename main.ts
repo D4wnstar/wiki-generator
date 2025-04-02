@@ -8,8 +8,8 @@ import {
 	WikiGeneratorSettings,
 	addFolderContextMenu,
 } from "src/settings"
-import { getUsers } from "src/database/requests"
 import { PropertyModal, UserListModal } from "src/modals"
+import { getUsersFromRemote } from "src/database/operations"
 
 export default class WikiGeneratorPlugin extends Plugin {
 	settings: WikiGeneratorSettings
@@ -136,8 +136,10 @@ export default class WikiGeneratorPlugin extends Plugin {
 			id: "get-user-list",
 			name: "Get list of registered users",
 			callback: async () => {
-				const users = await getUsers(settings)
-				//@ts-expect-error TS can't know the contents of a database row
+				const users = await getUsersFromRemote(
+					settings.dbUrl,
+					settings.dbToken
+				)
 				new UserListModal(this.app, users).open()
 			},
 		})

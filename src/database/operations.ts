@@ -1,55 +1,61 @@
-import { Client } from "@libsql/client"
+import { Client, createClient } from "@libsql/client"
 import { Database } from "sql.js"
-import { Pages, User } from "src/database/types"
+import { Pages, User, DatabaseAdapter, Note, Image } from "src/database/types"
 import { WikiGeneratorSettings } from "src/settings"
+import { Vault } from "obsidian"
+import { findFileInPlugin } from "./filesystem"
 
 const createNotes = `
 CREATE TABLE IF NOT EXISTS notes (
-	id INTEGER PRIMARY KEY,
+	path TEXT PRIMARY KEY,
 	title TEXT NOT NULL,
 	alt_title TEXT,
-	path TEXT UNIQUE NOT NULL,
 	slug TEXT UNIQUE NOT NULL,
 	frontpage BOOLEAN DEFAULT FALSE,
 	lead TEXT NOT NULL,
-	allowed_users TEXT
+	allowed_users TEXT,
+	hash TEXT NOT NULL, -- hash is calculated BEFORE preprocessing anything!
+	last_updated INTEGER NOT NULL
 );`
 
 const createImages = `
 CREATE TABLE IF NOT EXISTS images (
-	id INTEGER PRIMARY KEY,
+	path TEXT PRIMARY KEY,
 	blob BLOB NOT NULL,
-	alt TEXT
+	alt TEXT,
+	hash TEXT NOT NULL,
+	last_updated INTEGER NOT NULL,
+	compressed BOOLEAN NOT NULL
 );`
 
 const createNoteContents = `
 CREATE TABLE IF NOT EXISTS note_contents (
-	note_id INTEGER NOT NULL REFERENCES notes (id) ON DELETE CASCADE,
+	note_path TEXT NOT NULL REFERENCES notes (path) ON DELETE CASCADE,
 	chunk_id INTEGER NOT NULL,
 	"text" TEXT NOT NULL,
 	allowed_users TEXT,
-	image_id INTEGER REFERENCES images (id) ON DELETE CASCADE,
-	note_transclusion_id INTEGER REFERENCES images (id) ON DELETE CASCADE,
-	PRIMARY KEY (note_id, chunk_id)
+	image_path TEXT REFERENCES images (path) ON DELETE CASCADE,
+	note_transclusion_path TEXT REFERENCES notes (path) ON DELETE CASCADE,
+	PRIMARY KEY (note_path, chunk_id)
 );`
 
 const createDetails = `
 CREATE TABLE IF NOT EXISTS details (
-	note_id INTEGER NOT NULL REFERENCES notes (id) ON DELETE CASCADE,
+	note_path TEXT NOT NULL REFERENCES notes (path) ON DELETE CASCADE,
 	"order" INTEGER NOT NULL,
 	detail_name TEXT NOT NULL,
 	detail_content TEXT,
-	PRIMARY KEY (note_id, detail_name)
+	PRIMARY KEY (note_path, detail_name)
 );`
 
 const createSidebarImages = `
 CREATE TABLE IF NOT EXISTS sidebar_images (
-	note_id INTEGER NOT NULL REFERENCES notes (id) ON DELETE CASCADE,
+	note_path TEXT NOT NULL REFERENCES notes (path) ON DELETE CASCADE,
 	"order" INTEGER NOT NULL,
 	image_name TEXT NOT NULL,
-	image_id INTEGER NOT NULL REFERENCES images (id) ON DELETE CASCADE,
+	image_path TEXT NOT NULL REFERENCES images (path) ON DELETE CASCADE,
 	caption TEXT,
-	PRIMARY KEY (note_id, image_name)
+	PRIMARY KEY (note_path, image_name)
 );`
 
 const createWikiSettings = `
@@ -66,107 +72,40 @@ CREATE TABLE IF NOT EXISTS users (
 	password TEXT NOT NULL
 );`
 
-const deleteNotes = `DROP TABLE IF EXISTS notes;`
-const deleteImages = `DROP TABLE IF EXISTS images;`
-const deleteNoteContents = `DROP TABLE IF EXISTS note_contents;`
-const deleteDetails = `DROP TABLE IF EXISTS details;`
-const deleteSidebarImages = `DROP TABLE IF EXISTS sidebar_images;`
-const deleteWikiSettings = `DROP TABLE IF EXISTS wiki_settings;`
+// const deleteNotes = `DROP TABLE IF EXISTS notes;`
+// const deleteImages = `DROP TABLE IF EXISTS images;`
+// const deleteNoteContents = `DROP TABLE IF EXISTS note_contents;`
+// const deleteDetails = `DROP TABLE IF EXISTS details;`
+// const deleteSidebarImages = `DROP TABLE IF EXISTS sidebar_images;`
+// const deleteWikiSettings = `DROP TABLE IF EXISTS wiki_settings;`
 // const deleteUsers = `DROP TABLE IF EXISTS users;`
-
-export async function runRemoteMigrations(client: Client) {
-	await client.execute(createNotes)
-	await client.execute(createNoteContents)
-	await client.execute(createDetails)
-	await client.execute(createSidebarImages)
-	await client.execute(createWikiSettings)
-	await client.execute(createUsers)
-}
-
-export async function clearRemoteDatabase(client: Client) {
-	await client.execute(deleteNotes)
-	await client.execute(deleteNoteContents)
-	await client.execute(deleteDetails)
-	await client.execute(deleteSidebarImages)
-	await client.execute(deleteWikiSettings)
-}
-
-export async function resetRemoteMedia(client: Client) {
-	await client.execute(deleteImages)
-	await client.execute(createImages)
-}
-
-export function runLocalMigrations(db: Database) {
-	db.run(createNotes)
-	db.run(createImages)
-	db.run(createNoteContents)
-	db.run(createDetails)
-	db.run(createSidebarImages)
-	db.run(createWikiSettings)
-	db.run(createUsers)
-}
-
-export function insertUsers(users: User[], db: Database) {
-	for (const user of users) {
-		db.run(
-			`
-			INSERT OR REPLACE INTO users (id, username, password)
-			VALUES (?, ?, ?);
-		`,
-			[user.id, user.username, user.password]
-		)
-	}
-}
-
-const insertImage = `INSERT INTO images (blob, alt) VALUES (?, ?) RETURNING id;`
-
-export function insertImageLocal(
-	imageName: string,
-	buf: ArrayBuffer,
-	db: Database
-) {
-	const U8Arr = new Uint8Array(buf)
-	const rows = db.exec(insertImage, [U8Arr, imageName])
-	return rows[0].values[0][0] as number // image id
-}
-
-export async function insertImageRemote(
-	imageName: string,
-	buf: ArrayBuffer,
-	client: Client
-) {
-	const res = await client.execute({
-		sql: insertImage,
-		args: [buf, imageName],
-	})
-	return res.rows[0].id as number
-}
 
 const insertNotes = `
 INSERT INTO notes (
-	id,
+	path,
 	title,
 	alt_title,
-	path,
 	slug,
 	frontpage,
 	lead,
-	allowed_users
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`
+	allowed_users,
+	hash,
+	last_updated
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`
 
 const insertNoteContents = `
 INSERT INTO note_contents (
-	note_id,
+	note_path,
 	chunk_id,
 	"text",
 	allowed_users,
-	image_id,
-	note_transclusion_id
+	image_path,
+	note_transclusion_path
 ) VALUES (?, ?, ?, ?, ?, ?);`
 
 const insertDetails = `
 INSERT INTO details (
-	note_id,
+	note_path,
 	"order",
 	detail_name,
 	detail_content
@@ -174,10 +113,10 @@ INSERT INTO details (
 
 const insertSidebarImages = `
 INSERT INTO sidebar_images (
-	note_id,
+	note_path,
 	"order",
 	image_name,
-	image_id,
+	image_path,
 	caption
 ) VALUES (?, ?, ?, ?, ?);`
 
@@ -187,126 +126,486 @@ INSERT INTO wiki_settings (
 	allow_logins
 ) VALUES (?, ?);`
 
-export async function pushPagesToRemote(
-	client: Client,
-	pages: Pages,
-	settings: WikiGeneratorSettings
-) {
-	const noteQueries = []
-	const noteContentsQueries = []
-	const detailsQueries = []
-	const sidebarImagesQueries = []
+const insertImage = `
+INSERT INTO images (
+	path,
+	blob,
+	alt,
+	hash,
+	last_updated,
+	compressed
+) VALUES (?, ?, ?, ?, ?, ?) RETURNING path;`
 
-	for (const [noteId, page] of pages.entries()) {
-		noteQueries.push({
-			sql: insertNotes,
-			args: [
-				noteId,
+const insertUser = `
+INSERT OR REPLACE INTO users (
+	id,
+	username,
+	password
+) VALUES (?, ?, ?);`
+
+/**
+ * Get the schema for a table using `PRAGMA table_info`
+ */
+async function getTableSchema(
+	db: Database | Client,
+	tableName: string,
+	remote: boolean
+): Promise<any[]> {
+	if (remote) {
+		const client = db as Client
+		const res = await client.execute(`PRAGMA table_info(${tableName})`)
+		return res.rows
+	} else {
+		const localDb = db as Database
+		const res = localDb.exec(`PRAGMA table_info(${tableName})`)
+		return (
+			res[0]?.values.map((row) => ({
+				cid: row[0],
+				name: row[1],
+				type: row[2],
+				notnull: row[3],
+				dflt_value: row[4],
+				pk: row[5],
+			})) || []
+		)
+	}
+}
+
+function schemaChanged(current: any[], desired: string): boolean {
+	// Parse desired schema to extract column definitions
+	const desiredCols = desired
+		.split("\n")
+		.filter(
+			(line) =>
+				!line.trim().startsWith(")") &&
+				!line.trim().endsWith("(") &&
+				!line.trim().endsWith(";") &&
+				!line.trim().startsWith("PRIMARY") &&
+				line.trim().length > 0
+		)
+		.map((line) => {
+			const parts = line.trim().replace(/,$/, "").split(/\s+/)
+			return {
+				name: parts[0].replace(/"/g, ""),
+				type: parts[1].toUpperCase(),
+				constraints: parts.slice(2).join(" ").toUpperCase(),
+			}
+		})
+
+	// If the number of columns is different, that's obviously a different schema
+	if (current.length !== desiredCols.length) return true
+
+	// Check each individual column name and type
+	for (let i = 0; i < current.length; i++) {
+		const currCol = current[i]
+		const desCol = desiredCols[i]
+
+		if (currCol.name !== desCol.name) return true
+		if (currCol.type !== desCol.type) return true
+		// Skip constraints check for simplicity
+	}
+
+	return false
+}
+
+export class LocalDatabaseAdapter implements DatabaseAdapter {
+	remote: boolean
+	constructor(private db: Database) {
+		this.remote = false
+	}
+
+	async runMigrations(): Promise<void> {
+		const tables = [
+			{ name: "notes", schema: createNotes },
+			{ name: "images", schema: createImages },
+			{ name: "note_contents", schema: createNoteContents },
+			{ name: "details", schema: createDetails },
+			{ name: "sidebar_images", schema: createSidebarImages },
+			{ name: "wiki_settings", schema: createWikiSettings },
+			{ name: "users", schema: createUsers },
+		]
+
+		for (const table of tables) {
+			try {
+				const currentSchema = await getTableSchema(
+					this.db,
+					table.name,
+					this.remote
+				)
+				if (
+					currentSchema.length > 0 &&
+					schemaChanged(currentSchema, table.schema)
+				) {
+					console.log(
+						`Schema changed on ${table.name}. Recreating table...`
+					)
+					this.db.run(`DROP TABLE ${table.name}`)
+				}
+			} catch (e) {
+				console.log("ERROR", e)
+				// Table likely doesn't exist
+			}
+			this.db.run(table.schema)
+		}
+	}
+
+	insertUsers(users: User[]) {
+		for (const user of users) {
+			this.db.run(insertUser, [user.id, user.username, user.password])
+		}
+	}
+
+	async insertImages(
+		images: {
+			path: string
+			alt: string
+			hash: string
+			buf: ArrayBuffer
+		}[]
+	): Promise<void> {
+		for (const { path, alt, hash, buf } of images) {
+			const U8Arr = new Uint8Array(buf)
+			this.db.exec(insertImage, [
+				path,
+				U8Arr,
+				alt,
+				hash,
+				Math.floor(Date.now() / 1000),
+				1,
+			])
+		}
+	}
+
+	async deleteImagesByHashes(hashes: string[]): Promise<void> {
+		if (hashes.length === 0) return
+		const placeholders = hashes.map(() => "?").join(",")
+		this.db.run(
+			`DELETE FROM images WHERE hash IN (${placeholders})`,
+			hashes
+		)
+	}
+
+	async getImages(): Promise<Image[]> {
+		const res = this.db.exec(`SELECT * FROM images`)
+		if (!res[0]) return []
+		return res[0].values.map((val) => {
+			return {
+				path: val[0] as string,
+				blob: val[1] as Uint8Array,
+				alt: val[2] as string | null,
+				hash: val[3] as string,
+				last_updated: val[4] as number,
+				compressed: val[5] as number,
+			}
+		})
+	}
+
+	async getExistingMediaId(filename: string): Promise<number | null> {
+		const rows = this.db.exec(
+			`SELECT id FROM images WHERE alt = ? LIMIT 1`,
+			[filename]
+		)
+		return (rows[0]?.values[0]?.[0] as number) ?? null
+	}
+
+	async getNotes(): Promise<Note[]> {
+		const res = this.db.exec("SELECT * FROM notes")
+		if (!res[0]) return []
+		return (
+			res[0].values.map((val) => {
+				return {
+					path: val[0] as string,
+					title: val[1] as string,
+					alt_title: val[2] as string | null,
+					slug: val[3] as string,
+					frontpage: val[4] as string | number,
+					lead: val[5] as string,
+					allowed_users: val[6] as string | null,
+					hash: val[7] as string,
+					last_updated: val[8] as number,
+				}
+			}) ?? []
+		)
+	}
+
+	async deleteNotesByHashes(hashes: string[]): Promise<void> {
+		if (hashes.length === 0) return
+		const placeholders = hashes.map(() => "?").join(",")
+		this.db.run(`DELETE FROM notes WHERE hash IN (${placeholders})`, hashes)
+	}
+
+	async pushPages(
+		pages: Pages,
+		settings: WikiGeneratorSettings
+	): Promise<void> {
+		for (const [notePath, page] of pages.entries()) {
+			this.db.run(insertNotes, [
+				notePath,
 				page.note.title,
 				page.note.alt_title,
-				page.note.path,
 				page.note.slug,
 				page.note.frontpage,
 				page.note.lead,
 				page.note.allowed_users,
-			],
-		})
+				page.note.hash,
+				page.note.last_updated,
+			])
 
-		for (const chunk of page.chunks) {
-			noteContentsQueries.push({
-				sql: insertNoteContents,
-				args: [
-					noteId,
+			for (const chunk of page.chunks) {
+				this.db.run(insertNoteContents, [
+					notePath,
 					chunk.chunk_id,
 					chunk.text,
 					chunk.allowed_users,
-					chunk.image_id,
-					chunk.note_transclusion_id,
-				],
-			})
-		}
+					chunk.image_path,
+					chunk.note_transclusion_path,
+				])
+			}
 
-		for (const detail of page.details) {
-			detailsQueries.push({
-				sql: insertDetails,
-				args: [noteId, detail.order, detail.key, detail.value],
-			})
-		}
+			for (const detail of page.details) {
+				this.db.run(insertDetails, [
+					notePath,
+					detail.order,
+					detail.key,
+					detail.value,
+				])
+			}
 
-		for (const img of page.sidebarImages) {
-			sidebarImagesQueries.push({
-				sql: insertSidebarImages,
-				args: [
-					noteId,
+			for (const img of page.sidebarImages) {
+				this.db.run(insertSidebarImages, [
+					notePath,
 					img.order,
 					img.image_name,
-					img.image_id,
+					img.image_path,
 					img.caption,
-				],
+				])
+			}
+		}
+
+		this.db.run(insertWikiSettings, [
+			settings.wikiTitle,
+			settings.allowLogins ? 1 : 0,
+		])
+	}
+
+	async export(vault: Vault, filename = "data.db"): Promise<void> {
+		const buf = this.db.export()
+		// Create a new ArrayBuffer and copy the data
+		const newBuffer = new ArrayBuffer(buf.length)
+		new Uint8Array(newBuffer).set(buf)
+		await vault.adapter.writeBinary(
+			findFileInPlugin(vault, filename, false),
+			newBuffer
+		)
+	}
+
+	async close(): Promise<void> {
+		this.db.close()
+	}
+}
+
+export class RemoteDatabaseAdapter implements DatabaseAdapter {
+	remote: boolean
+	constructor(private db: Client) {
+		this.remote = true
+	}
+
+	async runMigrations(): Promise<void> {
+		const tables = [
+			{ name: "notes", schema: createNotes },
+			{ name: "note_contents", schema: createNoteContents },
+			{ name: "details", schema: createDetails },
+			{ name: "sidebar_images", schema: createSidebarImages },
+			{ name: "wiki_settings", schema: createWikiSettings },
+			{ name: "users", schema: createUsers },
+		]
+
+		for (const table of tables) {
+			try {
+				const currentSchema = await getTableSchema(
+					this.db,
+					table.name,
+					this.remote
+				)
+				if (
+					currentSchema.length > 0 &&
+					schemaChanged(currentSchema, table.schema)
+				) {
+					console.log(
+						`Schema changed on ${table.name}. Recreating table...`
+					)
+					await this.db.execute(`DROP TABLE ${table.name}`)
+				}
+			} catch (e) {
+				// Table likely doesn't exist
+			}
+			await this.db.execute(table.schema)
+		}
+	}
+
+	async insertImages(
+		images: {
+			path: string
+			alt: string
+			hash: string
+			buf: ArrayBuffer
+		}[]
+	): Promise<void> {
+		for (const { path, alt, hash, buf } of images) {
+			await this.db.execute({
+				sql: insertImage,
+				args: [path, buf, alt, hash, Math.floor(Date.now() / 1000), 1],
 			})
 		}
 	}
 
-	await client.batch(noteQueries)
-	await client.batch(noteContentsQueries)
-	await client.batch(detailsQueries)
-	await client.batch(sidebarImagesQueries)
-	await client.execute({
-		sql: insertWikiSettings,
-		args: [settings.wikiTitle, settings.allowLogins ? 1 : 0],
-	})
-}
+	async deleteImagesByHashes(hashes: string[]): Promise<void> {
+		if (hashes.length === 0) return
+		const placeholders = hashes.map(() => "?").join(",")
+		await this.db.execute({
+			sql: `DELETE FROM images WHERE hash IN (${placeholders})`,
+			args: hashes,
+		})
+	}
 
-export function pushPagesToLocal(
-	db: Database,
-	pages: Pages,
-	settings: WikiGeneratorSettings
-) {
-	for (const [noteId, page] of pages.entries()) {
-		db.run(insertNotes, [
-			noteId,
-			page.note.title,
-			page.note.alt_title,
-			page.note.path,
-			page.note.slug,
-			page.note.frontpage,
-			page.note.lead,
-			page.note.allowed_users,
-		])
-
-		for (const chunk of page.chunks) {
-			db.run(insertNoteContents, [
-				noteId,
-				chunk.chunk_id,
-				chunk.text,
-				chunk.allowed_users,
-				chunk.image_id,
-				chunk.note_transclusion_id,
-			])
-		}
-
-		for (const detail of page.details) {
-			db.run(insertDetails, [
-				noteId,
-				detail.order,
-				detail.key,
-				detail.value,
-			])
-		}
-
-		for (const img of page.sidebarImages) {
-			db.run(insertSidebarImages, [
-				noteId,
-				img.order,
-				img.image_name,
-				img.image_id,
-				img.caption,
-			])
+	insertUsers(users: User[]) {
+		for (const user of users) {
+			this.db.execute({
+				sql: insertUser,
+				args: [user.id, user.username, user.password],
+			})
 		}
 	}
 
-	db.run(insertWikiSettings, [
-		settings.wikiTitle,
-		settings.allowLogins ? 1 : 0,
-	])
+	async getImages(): Promise<Image[]> {
+		const res = await this.db.execute(`SELECT * FROM images`)
+		//@ts-expect-error TypeScript doesn't know the schema
+		return res.rows as Image[]
+	}
+
+	async getExistingMediaId(filename: string): Promise<number | null> {
+		const res = await this.db.execute({
+			sql: `SELECT id FROM images WHERE alt = ? LIMIT 1`,
+			args: [filename],
+		})
+		return (res.rows[0]?.id as number) ?? null
+	}
+
+	async getNotes(): Promise<Note[]> {
+		const res = await this.db.execute("SELECT * FROM notes")
+		//@ts-expect-error TypeScript doesn't know the schema
+		return res.rows
+	}
+
+	async deleteNotesByHashes(hashes: string[]): Promise<void> {
+		if (hashes.length === 0) return
+		const placeholders = hashes.map(() => "?").join(",")
+		await this.db.execute({
+			sql: `DELETE FROM notes WHERE hash IN (${placeholders})`,
+			args: hashes,
+		})
+	}
+
+	async pushPages(
+		pages: Pages,
+		settings: WikiGeneratorSettings
+	): Promise<void> {
+		const noteQueries = []
+		const noteContentsQueries = []
+		const detailsQueries = []
+		const sidebarImagesQueries = []
+
+		// Clear existing notes. Notes are cheap to process so this is fine
+		// In the future, it might be nice to extend hashing to notes too so we avoid
+		// processing unchanged notes
+		// this.db.execute(deleteNotes)
+		// this.db.execute(createNotes)
+
+		for (const [notePath, page] of pages.entries()) {
+			noteQueries.push({
+				sql: insertNotes,
+				args: [
+					notePath,
+					page.note.title,
+					page.note.alt_title,
+					page.note.path,
+					page.note.slug,
+					page.note.frontpage,
+					page.note.lead,
+					page.note.allowed_users,
+					page.note.hash,
+					page.note.last_updated,
+				],
+			})
+
+			for (const chunk of page.chunks) {
+				noteContentsQueries.push({
+					sql: insertNoteContents,
+					args: [
+						notePath,
+						chunk.chunk_id,
+						chunk.text,
+						chunk.allowed_users,
+						chunk.image_path,
+						chunk.note_transclusion_path,
+					],
+				})
+			}
+
+			for (const detail of page.details) {
+				detailsQueries.push({
+					sql: insertDetails,
+					args: [notePath, detail.order, detail.key, detail.value],
+				})
+			}
+
+			for (const img of page.sidebarImages) {
+				sidebarImagesQueries.push({
+					sql: insertSidebarImages,
+					args: [
+						notePath,
+						img.order,
+						img.image_name,
+						img.image_path,
+						img.caption,
+					],
+				})
+			}
+		}
+
+		await this.db.batch(noteQueries)
+		await this.db.batch(noteContentsQueries)
+		await this.db.batch(detailsQueries)
+		await this.db.batch(sidebarImagesQueries)
+		await this.db.execute({
+			sql: insertWikiSettings,
+			args: [settings.wikiTitle, settings.allowLogins ? 1 : 0],
+		})
+	}
+
+	async export(_vault: Vault): Promise<void> {
+		console.warn(
+			"Tried to export remote database. Only the local database can be exported. This should not happen."
+		)
+	}
+
+	async close(): Promise<void> {
+		this.db.close()
+	}
+}
+
+export async function getUsersFromRemote(
+	dbUrl: string,
+	authToken: string
+): Promise<User[]> {
+	const client = createClient({
+		url: dbUrl,
+		authToken,
+	})
+
+	const res = await client.execute(`SELECT * FROM users;`)
+	client.close()
+
+	//@ts-expect-error
+	return res.rows as User[]
 }
