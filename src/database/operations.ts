@@ -1,6 +1,12 @@
 import { Client, createClient } from "@libsql/client"
 import { Database } from "sql.js"
-import { Pages, User, DatabaseAdapter, Note, Image } from "src/database/types"
+import {
+	Pages,
+	User,
+	DatabaseAdapter,
+	Note,
+	ImageData,
+} from "src/database/types"
 import { WikiGeneratorSettings } from "src/settings"
 import { Vault } from "obsidian"
 import { findFileInPlugin } from "./filesystem"
@@ -72,6 +78,16 @@ CREATE TABLE IF NOT EXISTS users (
 	password TEXT NOT NULL
 );`
 
+const tables = [
+	{ name: "notes", schema: createNotes },
+	{ name: "images", schema: createImages },
+	{ name: "note_contents", schema: createNoteContents },
+	{ name: "details", schema: createDetails },
+	{ name: "sidebar_images", schema: createSidebarImages },
+	{ name: "wiki_settings", schema: createWikiSettings },
+	{ name: "users", schema: createUsers },
+]
+
 // const deleteNotes = `DROP TABLE IF EXISTS notes;`
 // const deleteImages = `DROP TABLE IF EXISTS images;`
 // const deleteNoteContents = `DROP TABLE IF EXISTS note_contents;`
@@ -142,6 +158,8 @@ INSERT OR REPLACE INTO users (
 	username,
 	password
 ) VALUES (?, ?, ?);`
+
+const selectImageData = `SELECT path, hash FROM images`
 
 /**
  * Get the schema for a table using `PRAGMA table_info`
@@ -215,16 +233,6 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 	}
 
 	async runMigrations(): Promise<void> {
-		const tables = [
-			{ name: "notes", schema: createNotes },
-			{ name: "images", schema: createImages },
-			{ name: "note_contents", schema: createNoteContents },
-			{ name: "details", schema: createDetails },
-			{ name: "sidebar_images", schema: createSidebarImages },
-			{ name: "wiki_settings", schema: createWikiSettings },
-			{ name: "users", schema: createUsers },
-		]
-
 		for (const table of tables) {
 			try {
 				const currentSchema = await getTableSchema(
@@ -285,17 +293,13 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 		)
 	}
 
-	async getImages(): Promise<Image[]> {
-		const res = this.db.exec(`SELECT * FROM images`)
+	async getImageData(): Promise<ImageData[]> {
+		const res = this.db.exec(selectImageData)
 		if (!res[0]) return []
 		return res[0].values.map((val) => {
 			return {
 				path: val[0] as string,
-				blob: val[1] as Uint8Array,
-				alt: val[2] as string | null,
-				hash: val[3] as string,
-				last_updated: val[4] as number,
-				compressed: val[5] as number,
+				hash: val[1] as string,
 			}
 		})
 	}
@@ -411,15 +415,6 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 	}
 
 	async runMigrations(): Promise<void> {
-		const tables = [
-			{ name: "notes", schema: createNotes },
-			{ name: "note_contents", schema: createNoteContents },
-			{ name: "details", schema: createDetails },
-			{ name: "sidebar_images", schema: createSidebarImages },
-			{ name: "wiki_settings", schema: createWikiSettings },
-			{ name: "users", schema: createUsers },
-		]
-
 		for (const table of tables) {
 			try {
 				const currentSchema = await getTableSchema(
@@ -477,10 +472,10 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 		}
 	}
 
-	async getImages(): Promise<Image[]> {
-		const res = await this.db.execute(`SELECT * FROM images`)
+	async getImageData(): Promise<ImageData[]> {
+		const res = await this.db.execute(selectImageData)
 		//@ts-expect-error TypeScript doesn't know the schema
-		return res.rows as Image[]
+		return res.rows as ImageData[]
 	}
 
 	async getExistingMediaId(filename: string): Promise<number | null> {
@@ -515,12 +510,6 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 		const detailsQueries = []
 		const sidebarImagesQueries = []
 
-		// Clear existing notes. Notes are cheap to process so this is fine
-		// In the future, it might be nice to extend hashing to notes too so we avoid
-		// processing unchanged notes
-		// this.db.execute(deleteNotes)
-		// this.db.execute(createNotes)
-
 		for (const [notePath, page] of pages.entries()) {
 			noteQueries.push({
 				sql: insertNotes,
@@ -528,7 +517,6 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 					notePath,
 					page.note.title,
 					page.note.alt_title,
-					page.note.path,
 					page.note.slug,
 					page.note.frontpage,
 					page.note.lead,

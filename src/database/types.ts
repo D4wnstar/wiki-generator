@@ -50,6 +50,11 @@ export type Image = {
 	compressed: number // actually boolean but SQLite is jank
 }
 
+export type ImageData = {
+	path: string
+	hash: string
+}
+
 export type Pages = Map<
 	string,
 	{
@@ -70,7 +75,7 @@ export interface DatabaseAdapter {
 	remote: boolean
 	runMigrations(): Promise<void>
 	insertUsers(users: User[]): void
-	getImages(): Promise<Image[]>
+	getImageData(): Promise<ImageData[]>
 	insertImages(
 		images: {
 			path: string

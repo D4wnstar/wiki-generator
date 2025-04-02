@@ -1,4 +1,4 @@
-import { Notice, request, TFile, Vault } from "obsidian"
+import { Notice, TFile, Vault } from "obsidian"
 import { WikiGeneratorSettings } from "./settings"
 import { getPublishableFiles, imageToArrayBuffer } from "./utils"
 import { unified } from "unified"
@@ -77,7 +77,9 @@ export async function uploadNotes(
 	let images: { file: TFile; hash: string }[] = []
 	const imageExtensions = ["png", "webp", "jpg", "jpeg", "gif", "bmp"]
 	const existingImageHashes = new Map<string, string>()
-	for (const image of await adapter.getImages()) {
+	for (const image of await adapter.getImageData()) {
+		// In theory these should exist, but due to schema changes double chekcing is good
+		if (!image.path || !image.hash) continue
 		existingImageHashes.set(image.path, image.hash)
 	}
 
@@ -239,10 +241,10 @@ export async function uploadNotes(
 	await adapter.close()
 
 	// Ping Vercel so it rebuilds the site
-	if (!settings.localExport) {
-		console.log("Sending POST request to deploy hook")
-		request({ url: settings.deployHook, method: "POST" })
-	}
+	// if (!settings.localExport) {
+	// 	console.log("Sending POST request to deploy hook")
+	// 	request({ url: settings.deployHook, method: "POST" })
+	// }
 
 	console.log(`Successfully uploaded ${uploadedNotes} notes`)
 }
