@@ -85,10 +85,10 @@ export interface DatabaseAdapter {
 		}[]
 	): Promise<void>
 	deleteImagesByHashes(hashes: string[]): Promise<void>
-	getExistingMediaId(filename: string): Promise<number | null>
 	getNotes(): Promise<Note[]>
 	pushPages(pages: Pages, settings: WikiGeneratorSettings): Promise<void>
 	deleteNotesByHashes(hashes: string[]): Promise<void>
+	clearContent(): Promise<void>
 	export(vault: Vault): Promise<void>
 	close(): Promise<void>
 }

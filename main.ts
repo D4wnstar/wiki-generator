@@ -79,9 +79,8 @@ export default class WikiGeneratorPlugin extends Plugin {
 			id: "upload-notes",
 			name: "Upload notes",
 			callback: async () => {
-				// uploadConfig.overwriteFiles = false
 				try {
-					await uploadNotes(this.app.vault, settings)
+					await uploadNotes(this.app.vault, settings, false)
 				} catch (error) {
 					console.error(
 						"An error occured while uploading notes.",
@@ -95,14 +94,24 @@ export default class WikiGeneratorPlugin extends Plugin {
 			},
 		})
 
-		// this.addCommand({
-		// 	id: "upload-notes-overwrite",
-		// 	name: "Upload notes and overwrite media files",
-		// 	callback: async () => {
-		// 		uploadConfig.overwriteFiles = true
-		// 		await uploadNotes(settings)
-		// 	},
-		// })
+		this.addCommand({
+			id: "upload-notes-reset",
+			name: "Upload notes (and clear existing content, excluding users)",
+			callback: async () => {
+				try {
+					await uploadNotes(this.app.vault, settings, true)
+				} catch (error) {
+					console.error(
+						"An error occured while uploading notes.",
+						error
+					)
+					new Notice(
+						`An error occured while uploading notes. ${error}`,
+						0
+					)
+				}
+			},
+		})
 
 		// Commands to make setting properties easier
 		this.addCommand({

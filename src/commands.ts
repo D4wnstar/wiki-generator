@@ -43,7 +43,8 @@ import { createClient } from "@libsql/client"
  */
 export async function uploadNotes(
 	vault: Vault,
-	settings: WikiGeneratorSettings
+	settings: WikiGeneratorSettings,
+	reset = false
 ) {
 	// Make sure we got everything we need
 	if (!settings.localExport && settings.deployHook.length === 0) {
@@ -66,6 +67,12 @@ export async function uploadNotes(
 				authToken: settings.dbToken,
 			})
 		)
+	}
+
+	if (reset) {
+		console.log("Dropping all content tables...")
+		new Notice("Clearing existing notes and media...")
+		await adapter.clearContent()
 	}
 
 	console.log("Running migrations...")

@@ -88,11 +88,11 @@ const tables = [
 	{ name: "users", schema: createUsers },
 ]
 
-// const deleteNotes = `DROP TABLE IF EXISTS notes;`
-// const deleteImages = `DROP TABLE IF EXISTS images;`
-// const deleteNoteContents = `DROP TABLE IF EXISTS note_contents;`
-// const deleteDetails = `DROP TABLE IF EXISTS details;`
-// const deleteSidebarImages = `DROP TABLE IF EXISTS sidebar_images;`
+const deleteNotes = `DROP TABLE IF EXISTS notes;`
+const deleteImages = `DROP TABLE IF EXISTS images;`
+const deleteNoteContents = `DROP TABLE IF EXISTS note_contents;`
+const deleteDetails = `DROP TABLE IF EXISTS details;`
+const deleteSidebarImages = `DROP TABLE IF EXISTS sidebar_images;`
 // const deleteWikiSettings = `DROP TABLE IF EXISTS wiki_settings;`
 // const deleteUsers = `DROP TABLE IF EXISTS users;`
 
@@ -304,14 +304,6 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 		})
 	}
 
-	async getExistingMediaId(filename: string): Promise<number | null> {
-		const rows = this.db.exec(
-			`SELECT id FROM images WHERE alt = ? LIMIT 1`,
-			[filename]
-		)
-		return (rows[0]?.values[0]?.[0] as number) ?? null
-	}
-
 	async getNotes(): Promise<Note[]> {
 		const res = this.db.exec("SELECT * FROM notes")
 		if (!res[0]) return []
@@ -342,54 +334,89 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 		pages: Pages,
 		settings: WikiGeneratorSettings
 	): Promise<void> {
+		const noteQueries = []
+		const noteContentsQueries = []
+		const detailsQueries = []
+		const sidebarImagesQueries = []
+
 		for (const [notePath, page] of pages.entries()) {
-			this.db.run(insertNotes, [
-				notePath,
-				page.note.title,
-				page.note.alt_title,
-				page.note.slug,
-				page.note.frontpage,
-				page.note.lead,
-				page.note.allowed_users,
-				page.note.hash,
-				page.note.last_updated,
-			])
+			noteQueries.push({
+				sql: insertNotes,
+				args: [
+					notePath,
+					page.note.title,
+					page.note.alt_title,
+					page.note.slug,
+					page.note.frontpage,
+					page.note.lead,
+					page.note.allowed_users,
+					page.note.hash,
+					page.note.last_updated,
+				],
+			})
 
 			for (const chunk of page.chunks) {
-				this.db.run(insertNoteContents, [
-					notePath,
-					chunk.chunk_id,
-					chunk.text,
-					chunk.allowed_users,
-					chunk.image_path,
-					chunk.note_transclusion_path,
-				])
+				noteContentsQueries.push({
+					sql: insertNoteContents,
+					args: [
+						notePath,
+						chunk.chunk_id,
+						chunk.text,
+						chunk.allowed_users,
+						chunk.image_path,
+						chunk.note_transclusion_path,
+					],
+				})
 			}
 
 			for (const detail of page.details) {
-				this.db.run(insertDetails, [
-					notePath,
-					detail.order,
-					detail.key,
-					detail.value,
-				])
+				detailsQueries.push({
+					sql: insertDetails,
+					args: [notePath, detail.order, detail.key, detail.value],
+				})
 			}
 
 			for (const img of page.sidebarImages) {
-				this.db.run(insertSidebarImages, [
-					notePath,
-					img.order,
-					img.image_name,
-					img.image_path,
-					img.caption,
-				])
+				sidebarImagesQueries.push({
+					sql: insertSidebarImages,
+					args: [
+						notePath,
+						img.order,
+						img.image_name,
+						img.image_path,
+						img.caption,
+					],
+				})
 			}
 		}
 
+		// Execute all inserts in a transaction
+		this.db.run("BEGIN TRANSACTION;")
+		for (const query of noteQueries) {
+			this.db.run(query.sql, query.args)
+		}
+		for (const query of noteContentsQueries) {
+			this.db.run(query.sql, query.args)
+		}
+		for (const query of detailsQueries) {
+			this.db.run(query.sql, query.args)
+		}
+		for (const query of sidebarImagesQueries) {
+			this.db.run(query.sql, query.args)
+		}
 		this.db.run(insertWikiSettings, [
 			settings.wikiTitle,
 			settings.allowLogins ? 1 : 0,
 		])
+		this.db.run("COMMIT;")
+	}
+
+	async clearContent(): Promise<void> {
+		this.db.run(deleteNoteContents)
+		this.db.run(deleteDetails)
+		this.db.run(deleteSidebarImages)
+		this.db.run(deleteImages)
+		this.db.run(deleteNotes)
 	}
 
 	async export(vault: Vault, filename = "data.db"): Promise<void> {
@@ -478,14 +505,6 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 		return res.rows as ImageData[]
 	}
 
-	async getExistingMediaId(filename: string): Promise<number | null> {
-		const res = await this.db.execute({
-			sql: `SELECT id FROM images WHERE alt = ? LIMIT 1`,
-			args: [filename],
-		})
-		return (res.rows[0]?.id as number) ?? null
-	}
-
 	async getNotes(): Promise<Note[]> {
 		const res = await this.db.execute("SELECT * FROM notes")
 		//@ts-expect-error TypeScript doesn't know the schema
@@ -569,6 +588,14 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 			sql: insertWikiSettings,
 			args: [settings.wikiTitle, settings.allowLogins ? 1 : 0],
 		})
+	}
+
+	async clearContent(): Promise<void> {
+		this.db.execute(deleteNoteContents)
+		this.db.execute(deleteDetails)
+		this.db.execute(deleteSidebarImages)
+		this.db.execute(deleteImages)
+		this.db.execute(deleteNotes)
 	}
 
 	async export(_vault: Vault): Promise<void> {
