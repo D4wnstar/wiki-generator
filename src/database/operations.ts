@@ -78,6 +78,14 @@ CREATE TABLE IF NOT EXISTS users (
 	password TEXT NOT NULL
 );`
 
+const createNotesAllowedUsersIndex = `
+CREATE INDEX IF NOT EXISTS idx_notes_allowed_users ON notes(allowed_users);
+`
+
+const createNoteContentsAllowedUsersIndex = `
+CREATE INDEX IF NOT EXISTS idx_note_contents_allowed_users ON note_contents(allowed_users);
+`
+
 const tables = [
 	{ name: "notes", schema: createNotes },
 	{ name: "images", schema: createImages },
@@ -86,6 +94,11 @@ const tables = [
 	{ name: "sidebar_images", schema: createSidebarImages },
 	{ name: "wiki_settings", schema: createWikiSettings },
 	{ name: "users", schema: createUsers },
+]
+
+const indexes = [
+	createNotesAllowedUsersIndex,
+	createNoteContentsAllowedUsersIndex,
 ]
 
 const deleteNotes = `DROP TABLE IF EXISTS notes;`
@@ -254,6 +267,10 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 				// Table likely doesn't exist
 			}
 			this.db.run(table.schema)
+		}
+
+		for (const indexQuery of indexes) {
+			this.db.run(indexQuery)
 		}
 	}
 
@@ -462,6 +479,10 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 				// Table likely doesn't exist
 			}
 			await this.db.execute(table.schema)
+		}
+
+		for (const indexQuery of indexes) {
+			this.db.execute(indexQuery)
 		}
 	}
 
