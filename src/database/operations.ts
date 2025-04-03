@@ -580,14 +580,17 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 			}
 		}
 
-		await this.db.batch(noteQueries)
-		await this.db.batch(noteContentsQueries)
-		await this.db.batch(detailsQueries)
-		await this.db.batch(sidebarImagesQueries)
-		await this.db.execute({
-			sql: insertWikiSettings,
-			args: [settings.wikiTitle, settings.allowLogins ? 1 : 0],
-		})
+		const queries = [
+			...noteQueries,
+			...noteContentsQueries,
+			...detailsQueries,
+			...sidebarImagesQueries,
+			{
+				sql: insertWikiSettings,
+				args: [settings.wikiTitle, settings.allowLogins ? 1 : 0],
+			},
+		]
+		await this.db.batch(queries)
 	}
 
 	async clearContent(): Promise<void> {
