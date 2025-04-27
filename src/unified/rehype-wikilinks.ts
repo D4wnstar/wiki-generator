@@ -1,12 +1,11 @@
 import { slug } from "github-slugger"
 import type { Element, ElementContent, Root } from "hast"
 import { h } from "hastscript"
+import { wikilinkRegex, wikilinkRegexNoGroups } from "src/notes/regexes"
 import { slugPath } from "src/utils"
 import { partition } from "src/utils"
 import { visit } from "unist-util-visit"
 
-const wikilinkRegexNoGroups = /!?\[\[.*?(?:#\^?.*?)?(?:\|.*?)?\]\]/g
-const wikilinkRegex = /(!)?\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/
 // Capture groups:
 //  0. ! (Transclusion or not)
 //  1. Linked page title
@@ -97,7 +96,8 @@ function findWikilinkProperties(
 	titleToPath: Map<string, string>,
 	imageNameToPath: Map<string, string>
 ): Wikilink {
-	const rmatch = link.match(wikilinkRegex)
+	const wikilingNoGlobal = new RegExp(wikilinkRegex, "")
+	const rmatch = link.match(wikilingNoGlobal)
 	if (!rmatch) {
 		return {
 			linkText: link,

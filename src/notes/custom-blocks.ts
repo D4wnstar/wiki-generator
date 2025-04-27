@@ -4,8 +4,11 @@ import { partition } from "src/utils"
 import { Processor } from "unified"
 import { Detail, SidebarImage, ContentChunk } from "../database/types"
 import {
-	secretBlockRegex,
-	secretBlockRegexNoGroups,
+	detailsRegex,
+	hiddenRegex,
+	imageRegex,
+	secretRegex,
+	secretRegexNoGroups,
 	transclusionRegex,
 	transclusionRegexNoGroups,
 } from "./regexes"
@@ -31,13 +34,12 @@ export async function replaceCustomBlocks(
 	imageNameToPath: Map<string, string>
 ) {
 	// Remove :::hidden::: blocks
-	md = md.replace(/^:::hidden\n.*?\n:::/gms, "")
+	md = md.replace(hiddenRegex, "")
 
 	// Find, parse and remove the first :::details::: block
 	// Any other :::details::: block will be ignored
 	// Both keys and values will be converted into HMTL
 	let details: Detail[] = []
-	const detailsRegex = /^:::details\n(.*?)\n:::/ms
 	const detailsMatch = md.match(detailsRegex)
 	if (detailsMatch) {
 		details = await parseDetailsBlock(detailsMatch[1], processor, filename)
@@ -52,7 +54,6 @@ export async function replaceCustomBlocks(
 	// Image links are replaced with their base64 representation and
 	// embedded into HMTL as-is. Captions are converted into HTML
 	const sidebarImages: SidebarImage[] = []
-	const imageRegex = /^:::image(\(fullres\))?\n(.*?)\n:::/gms
 	const imageMatch = Array.from(md.matchAll(imageRegex))
 	for (const i in imageMatch) {
 		const index = parseInt(i)
@@ -206,12 +207,10 @@ export function chunkMd(
 	imageNameToPath: Map<string, string>
 ): ContentChunk[] {
 	// First, partition by secrets while replacing each block with its contents
-	const splits = partition(text, secretBlockRegexNoGroups)
+	const splits = partition(text, secretRegexNoGroups)
 
 	// Get a list of the users mentioned in the blocks
-	const secretUsers = [...text.matchAll(secretBlockRegex)].map(
-		(match) => match[1]
-	)
+	const secretUsers = [...text.matchAll(secretRegex)].map((match) => match[1])
 
 	const tempChunks: ContentChunk[] = []
 	for (const [idx, split] of splits.entries()) {
@@ -228,7 +227,7 @@ export function chunkMd(
 				.map((s) => s.trim())
 				.join(";")
 			// Also replace each block with its own contents
-			text = split.replace(secretBlockRegex, "$2")
+			text = split.replace(secretRegex, "$2")
 		} else {
 			allowed_users = null
 			text = split

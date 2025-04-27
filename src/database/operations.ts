@@ -274,7 +274,7 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 		}
 	}
 
-	insertUsers(users: User[]) {
+	async insertUsers(users: User[]) {
 		for (const user of users) {
 			this.db.run(insertUser, [user.id, user.username, user.password])
 		}
@@ -511,9 +511,9 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 		})
 	}
 
-	insertUsers(users: User[]) {
+	async insertUsers(users: User[]) {
 		for (const user of users) {
-			this.db.execute({
+			await this.db.execute({
 				sql: insertUser,
 				args: [user.id, user.username, user.password],
 			})
@@ -615,11 +615,11 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 	}
 
 	async clearContent(): Promise<void> {
-		this.db.execute(deleteNoteContents)
-		this.db.execute(deleteDetails)
-		this.db.execute(deleteSidebarImages)
-		this.db.execute(deleteImages)
-		this.db.execute(deleteNotes)
+		await this.db.execute(deleteNoteContents)
+		await this.db.execute(deleteDetails)
+		await this.db.execute(deleteSidebarImages)
+		await this.db.execute(deleteImages)
+		await this.db.execute(deleteNotes)
 	}
 
 	async export(_vault: Vault): Promise<void> {

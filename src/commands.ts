@@ -30,9 +30,16 @@ import rehypeKatex from "rehype-katex"
 import rehypeMermaid from "rehype-mermaid"
 import rehypeSlug from "rehype-slug"
 import rehypeStringify from "rehype-stringify"
-import { propsRegex } from "./notes/regexes"
+import {
+	imageRegex,
+	propsRegex,
+	transclusionRegex,
+	wikilinkRegex,
+} from "./notes/regexes"
 import * as crypto from "crypto"
 import { createClient } from "@libsql/client"
+
+const imageExtensions = ["png", "webp", "jpg", "jpeg", "gif", "bmp"]
 
 /**
  * The main function of the plugin. Convert every publishable Markdown note in the vault
@@ -81,45 +88,41 @@ export async function uploadNotes(
 	// Process media files
 	console.log("Processing media files...")
 
-	let images: { file: TFile; hash: string }[] = []
-	const imageExtensions = ["png", "webp", "jpg", "jpeg", "gif", "bmp"]
+	// Get all images in the database
 	const existingImageHashes = new Map<string, string>()
 	for (const image of await adapter.getImageData()) {
-		// In theory these should exist, but due to schema changes double chekcing is good
+		// In theory these should exist, but due to schema changes double checking is good
 		if (!image.path || !image.hash) continue
 		existingImageHashes.set(image.path, image.hash)
 	}
 
-	// Divide media by file type
+	// First get all referenced images from markdown files
+	const referencedImages = await getReferencedImages(vault)
+
+	// Collect only referenced images that have changed
+	const images: { file: TFile; hash: string }[] = []
 	for (const file of vault.getFiles()) {
-		if (file.extension === "md") continue
+		// Ignore non-images
+		if (!imageExtensions.includes(file.extension)) continue
+		// Ignore anything that's never mentioned in a markdown file
+		if (!referencedImages.has(file.name)) continue
+		// Calculate the hash to ignore images that have not changed since last upload
+		const buf = await vault.readBinary(file)
+		const hash = crypto
+			.createHash("sha256")
+			.update(new Uint8Array(buf))
+			.digest("hex")
 
-		// Images
-		if (imageExtensions.includes(file.extension)) {
-			const buf = await vault.readBinary(file)
-			const hash = crypto
-				.createHash("sha256")
-				.update(new Uint8Array(buf))
-				.digest("hex")
-			images.push({ file, hash })
-		} else {
-			// Not an image - currently unsupported
-		}
-	}
-
-	// Filter out media that's unchanged since the last upload
-	images = images.filter(({ file, hash }) => {
 		const maybeExistingHash = existingImageHashes.get(file.path)
 		if (!maybeExistingHash || hash !== maybeExistingHash) {
-			// If the file doesn't exist or it's stale, insert/overwrite it
-			return true
+			// If the file doesn't exist or it changed, insert/overwrite it
+			images.push({ file, hash })
 		} else {
-			// If it exists and it's fresh, leave it alone
+			// If it exists and it's identical to last time, don't bother reprocessing it
 			existingImageHashes.delete(file.path)
-			return false
 		}
-	})
-	// What's left is what needs to be deleted
+	}
+	// Anything left needs to be deleted since it's old and needs to be overwritten
 	const imageHashesToDelete: string[] = [...existingImageHashes.values()]
 
 	const imageNameToPath: Map<string, string> = new Map()
@@ -130,13 +133,14 @@ export async function uploadNotes(
 	// Push the media to the database
 	console.log(`Deleting ${imageHashesToDelete.length} outdated images...`)
 	await adapter.deleteImagesByHashes(imageHashesToDelete)
+
 	const imagesToInsert = await Promise.all(
 		images.map(async ({ file, hash }) => {
 			return {
 				path: file.path.replace(/\.md$/, ""),
 				alt: file.name,
 				hash,
-				buf: await imageToArrayBuffer(file, vault, true),
+				buf: await imageToArrayBuffer(file, vault, { downscale: true }),
 			}
 		})
 	)
@@ -223,7 +227,7 @@ export async function uploadNotes(
 	if (settings.localExport && !settings.ignoreUsers) {
 		console.log("Cloning user accounts from Turso...")
 		const users = await getUsersFromRemote(settings.dbUrl, settings.dbToken)
-		adapter.insertUsers(users)
+		await adapter.insertUsers(users)
 	}
 
 	// Finally push the notes and media to the database
@@ -292,6 +296,32 @@ export function massAddPublish(
 			return noteText
 		})
 	}
+}
+
+/**
+ * Get all image files referenced in markdown files
+ * @param vault The vault instance
+ * @returns Set of referenced image filenames
+ */
+async function getReferencedImages(vault: Vault): Promise<Set<string>> {
+	const files = vault.getMarkdownFiles()
+	const referencedImages = new Set<string>()
+
+	for (const file of files) {
+		try {
+			// Scan all wikilinks for image filenames
+			const content = await vault.read(file)
+			for (const match of content.matchAll(wikilinkRegex)) {
+				const filename = match[2]
+				const extension = filename.match(/(?<=\.)[\w\d]+$/g)?.[0]
+				if (!extension || !imageExtensions.includes(extension)) continue
+				referencedImages.add(filename)
+			}
+		} catch (error) {
+			console.error(`Error reading ${file.path}:`, error)
+		}
+	}
+	return referencedImages
 }
 
 /**

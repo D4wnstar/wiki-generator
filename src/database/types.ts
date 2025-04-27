@@ -74,7 +74,7 @@ export type User = {
 export interface DatabaseAdapter {
 	remote: boolean
 	runMigrations(): Promise<void>
-	insertUsers(users: User[]): void
+	insertUsers(users: User[]): Promise<void>
 	getImageData(): Promise<ImageData[]>
 	insertImages(
 		images: {

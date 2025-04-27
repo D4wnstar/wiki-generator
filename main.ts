@@ -61,10 +61,9 @@ export default class WikiGeneratorPlugin extends Plugin {
 			)
 		)
 
-		// Add a ribbon icon to upload notes
-		this.addRibbonIcon("cloud-upload", "Upload notes", async () => {
+		const upload = async (reset: boolean) => {
 			try {
-				await uploadNotes(this.app.vault, settings)
+				await uploadNotes(this.app.vault, settings, reset)
 			} catch (error) {
 				console.error("An error occured while uploading notes.", error)
 				new Notice(
@@ -72,45 +71,24 @@ export default class WikiGeneratorPlugin extends Plugin {
 					0
 				)
 			}
-		})
+		}
+
+		// Add a ribbon icon to upload notes
+		this.addRibbonIcon("cloud-upload", "Upload notes", async () =>
+			upload(false)
+		)
 
 		// And a command for the same thing
 		this.addCommand({
 			id: "upload-notes",
 			name: "Upload notes",
-			callback: async () => {
-				try {
-					await uploadNotes(this.app.vault, settings, false)
-				} catch (error) {
-					console.error(
-						"An error occured while uploading notes.",
-						error
-					)
-					new Notice(
-						`An error occured while uploading notes. ${error}`,
-						0
-					)
-				}
-			},
+			callback: async () => upload(false),
 		})
 
 		this.addCommand({
 			id: "upload-notes-reset",
 			name: "Upload notes (and clear existing content, excluding users)",
-			callback: async () => {
-				try {
-					await uploadNotes(this.app.vault, settings, true)
-				} catch (error) {
-					console.error(
-						"An error occured while uploading notes.",
-						error
-					)
-					new Notice(
-						`An error occured while uploading notes. ${error}`,
-						0
-					)
-				}
-			},
+			callback: async () => upload(true),
 		})
 
 		// Commands to make setting properties easier

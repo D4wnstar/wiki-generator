@@ -1,7 +1,12 @@
 import { Editor, TFile, TFolder, Vault, normalizePath } from "obsidian"
 import { WikiGeneratorSettings } from "./settings"
-import Image from "image-js"
 import { slug } from "github-slugger"
+
+interface ImageOptions {
+	downscale?: boolean
+	maxDimension?: number
+	quality?: number
+}
 
 /**
  * Get the slug of a path by taking the slug of each path element separately.
@@ -126,27 +131,70 @@ export function partition(
  * Blob representation.
  * @param file The image's TFile
  * @param vault A reference to the Vault
- * @returns A Blob containing the image
+ * @param options Configuration options for image processing
+ * @returns A Promise resolving to the image's ArrayBuffer
  */
 export async function imageToArrayBuffer(
 	file: TFile,
 	vault: Vault,
-	downscale: boolean
+	options: ImageOptions = {}
 ): Promise<ArrayBuffer> {
-	const buf = await vault.readBinary(file)
-	let image = await Image.load(buf)
-	if (downscale) {
-		// Compress the image if it's overly large
-		if (image.height > 1600) {
-			image = image.resize({ height: 1600 })
-		}
-		if (image.width > 1600) {
-			image = image.resize({ width: 1600 })
-		}
-	}
+	const { downscale = true, maxDimension = 1600, quality = 80 } = options
 
-	const blob = await image.toBlob("image/webp", 85)
-	return blob.arrayBuffer()
+	try {
+		const buf = await vault.readBinary(file)
+
+		// Create image element
+		const img = new Image()
+		const url = URL.createObjectURL(new Blob([buf]))
+
+		// Wait for image to load
+		await new Promise((resolve, reject) => {
+			img.onload = resolve
+			img.onerror = () => reject(new Error("Failed to load image"))
+			img.src = url
+		})
+
+		// Create canvas for resizing
+		const canvas = document.createElement("canvas")
+		let width = img.width
+		let height = img.height
+
+		if (downscale) {
+			if (width > maxDimension || height > maxDimension) {
+				const ratio = Math.min(
+					maxDimension / width,
+					maxDimension / height
+				)
+				width = Math.floor(width * ratio)
+				height = Math.floor(height * ratio)
+			}
+		}
+
+		canvas.width = width
+		canvas.height = height
+
+		// Draw resized image
+		const ctx = canvas.getContext("2d")
+		if (!ctx) throw new Error("Could not get canvas context")
+		ctx.drawImage(img, 0, 0, width, height)
+
+		// Convert to WebP
+		return new Promise((resolve) => {
+			canvas.toBlob(
+				(blob) => {
+					URL.revokeObjectURL(url)
+					if (!blob) throw new Error("Conversion failed")
+					blob.arrayBuffer().then(resolve)
+				},
+				"image/webp",
+				quality / 100
+			)
+		})
+	} catch (error) {
+		console.error("Image processing error:", error)
+		throw error
+	}
 }
 
 export function resolveTFolder(folderPath: string, vault: Vault) {
