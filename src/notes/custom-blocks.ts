@@ -4,14 +4,178 @@ import { partition } from "src/utils"
 import { Processor } from "unified"
 import { Detail, SidebarImage, ContentChunk } from "../database/types"
 import {
-	detailsRegex,
-	hiddenRegex,
-	imageRegex,
 	secretRegex,
 	secretRegexNoGroups,
 	transclusionRegex,
 	transclusionRegexNoGroups,
 } from "./regexes"
+
+abstract class Block {
+	protected static getRegex(name: string): RegExp {
+		return new RegExp(`^:::\\s*${name}(\\(.*?\\))?\\n(.*?)\\n:::`, "gms")
+		// Group 1 is args, if any. Group 2 is block content.
+	}
+
+	// TypeScript won't complain about not implementing this on subclasses because it's
+	// a static method, but it should be on all of them (can't put abstract + static)
+	static parse: (
+		md: string,
+		args: Record<string, unknown>
+	) => Promise<
+		{
+			md: string
+		} & Record<string, unknown>
+	>
+}
+
+class HiddenBlock extends Block {
+	static async parse(md: string) {
+		const regex = this.getRegex("hidden")
+		return { md: md.replaceAll(regex, "") }
+	}
+}
+
+class DetailsBlock extends Block {
+	/**
+	 * Parse the contents of a :::details::: block.
+	 * @param md The markdown to process
+	 * @param processor A unified processor to convert the caption into HTML
+	 * @returns An array of Detail objects, one for each line, and the modified markdown
+	 */
+	static async parse(
+		md: string,
+		args: { processor: Processor<Root, Root, Root, Root, string> }
+	): Promise<{ md: string; details: Detail[] }> {
+		// Convert only the first details block and leave all others untouched
+		// so we remove the global flag. TODO: Maybe merge them all instead?
+		const regex = new RegExp(this.getRegex("details"), "ms")
+		const match = md.match(regex)
+		if (!match) return { md, details: [] }
+
+		// Delete the block from the page before errors happen
+		md = md.replace(match[0], "")
+
+		const contents = match[2]
+		const details: Detail[] = []
+		const detailLines = contents.split("\n").filter((line) => line !== "")
+
+		for (const i in detailLines) {
+			const index = parseInt(i)
+			const line = detailLines[i]
+
+			// Ignore empty lines
+			if (line === "") continue
+
+			// Split lines into key-value paris
+			const split = line.split(/:\s*/)
+			if (split.length === 0) {
+				// Ignore broken formatting and emit a warning
+				// Should never happen as we skip empty lines
+				throw new Error(`Improperly formatted :::details:::`)
+			}
+
+			if (split.length === 1) {
+				// Key-only details are valid
+				const key = await args.processor.process(split[0])
+				details.push({
+					order: index + 1,
+					key: key.toString(),
+					value: null,
+				})
+			} else {
+				// Both key and value. Make sure to handle excess splits due to additional
+				// colons in the value, which are allowed
+				const key = await args.processor.process(split[0])
+				const preValue = split.splice(1).reduce((a, b) => a + ": " + b)
+				const value = await args.processor.process(preValue)
+				details.push({
+					order: index + 1,
+					key: key.toString(),
+					value: value.toString(),
+				})
+			}
+		}
+
+		return { md, details }
+	}
+}
+
+class ImageBlock extends Block {
+	/**
+	 * Parse the contents of an :::image::: block.
+	 * @param md The markdown to process
+	 * @param processor A unified processor to convert the caption into HTML
+	 * @param imageNameToPath A Map linking image filenames into their path in the database
+	 * @returns An array of SidebarImage objects and the modified markdown
+	 */
+	static async parse(
+		md: string,
+		args: {
+			processor: Processor<Root, Root, Root, Root, string>
+			imageNameToPath: Map<string, string>
+		}
+	) {
+		const regex = this.getRegex("image")
+		const matches = [...md.matchAll(regex)]
+		if (matches.length === 0) return { md, images: [] }
+
+		// An :::image::: block should be made up of 1 or 2 lines
+		// The first is mandatory and is the wikilink to the image
+		// The second is optional and is the caption
+		// Any other line will be considered a part of the caption
+		const images: SidebarImage[] = []
+		for (const i in matches) {
+			const index = parseInt(i)
+			const match = matches[index]
+
+			// Delete the block from the page before errors happen
+			md = md.replace(match[0], "")
+
+			// const maybeArgs = match[1]
+			const contents = match[2]
+
+			const lines = contents.split("\n").filter((line) => line !== "")
+			if (lines.length === 0) {
+				throw new Error(`Improperly formatted`)
+			}
+
+			// Grab the image filename from the wikilink
+			const wikilink = lines[0].match(/!\[\[(.*?)(\|.*)?\]\]/)
+			if (!wikilink) {
+				throw new Error(`No image link`)
+			}
+			const imageFile = wikilink[1]
+
+			// Grab the path of the current image
+			const image_path = args.imageNameToPath.get(imageFile)
+			if (!image_path) {
+				throw new Error(
+					`Could not find full path to image '${imageFile}'`
+				)
+			}
+
+			// Then the caption, if present
+			let caption: string | null
+			if (lines.length > 1) {
+				caption = lines.splice(1).join("\n")
+				caption = (await args.processor.process(caption)).toString()
+			} else {
+				caption = null
+			}
+
+			images.push({
+				order: index + 1,
+				image_name: imageFile,
+				image_path,
+				caption,
+			})
+		}
+
+		return { md, images }
+	}
+}
+
+// Secret blocks are handled separately
 
 /**
  * Parse Markdown text, removing all\* special :::blocks::: and
@@ -34,163 +198,35 @@ export async function replaceCustomBlocks(
 	imageNameToPath: Map<string, string>
 ) {
 	// Remove :::hidden::: blocks
-	md = md.replace(hiddenRegex, "")
+	const hiddenResult = await HiddenBlock.parse(md)
+	md = hiddenResult.md
 
-	// Find, parse and remove the first :::details::: block
-	// Any other :::details::: block will be ignored
-	// Both keys and values will be converted into HMTL
+	// Parse and remove the first :::details::: block
 	let details: Detail[] = []
-	const detailsMatch = md.match(detailsRegex)
-	if (detailsMatch) {
-		details = await parseDetailsBlock(detailsMatch[1], processor, filename)
-		if (details.length === 0) {
-			new Notice(`Improperly formatted :::details::: in ${filename}`)
-			console.warn(`Improperly formatted :::details::: in ${filename}`)
-		}
-		md = md.replace(detailsRegex, "")
+	try {
+		const detailsResult = await DetailsBlock.parse(md, { processor })
+		md = detailsResult.md
+		details = detailsResult.details
+	} catch (error) {
+		new Notice(`Error in ${filename}: ${error}`, 0)
+		console.warn(`Error in ${filename}: ${error}`)
 	}
 
-	// Find, parse and remove all :::image::: blocks
-	// Image links are replaced with their base64 representation and
-	// embedded into HMTL as-is. Captions are converted into HTML
-	const sidebarImages: SidebarImage[] = []
-	const imageMatch = Array.from(md.matchAll(imageRegex))
-	for (const i in imageMatch) {
-		const index = parseInt(i)
-		const match = imageMatch[index]
-		const img = await parseImageBlock(
-			match[2],
-			index + 1,
+	// Parse and remove :::image::: blocks
+	let images: SidebarImage[] = []
+	try {
+		const imageResult = await ImageBlock.parse(md, {
 			processor,
 			imageNameToPath,
-			filename
-		)
-		if (img) sidebarImages.push(img)
-		md = md.replace(match[0], "")
+		})
+		md = imageResult.md
+		images = imageResult.images
+	} catch (error) {
+		new Notice(`Error in ${filename}: ${error}`, 0)
+		console.warn(`Error in ${filename}: ${error}`)
 	}
 
-	return { md, details, sidebarImages }
-}
-
-/**
- * Parse the contents of a :::details::: block.
- * @param contents The contents of a :::details::: block
- * @param processor A unified processor to convert Markdown into HTML
- * @param filename The filename of the file the block comes from, for user-friendly warnings
- * @returns A list Detail objects, one for each line in the block
- */
-async function parseDetailsBlock(
-	contents: string,
-	processor: Processor<Root, Root, Root, Root, string>,
-	filename: string
-): Promise<Detail[]> {
-	const detailsList: Detail[] = []
-	const details = contents.split("\n").filter((line) => line !== "")
-
-	for (const i in details) {
-		const index = parseInt(i)
-		const detail = details[i]
-
-		// Ignore empty lines
-		if (detail === "") continue
-
-		// Split lines into key-value paris
-		const split = detail.split(/:\s*/)
-		if (split.length === 0) {
-			// Ignore broken formatting and emit a warning
-			new Notice(`Improperly formatted :::details::: in ${filename}`)
-			console.warn(`Improperly formatted :::details::: in ${filename}`)
-			return [{ order: 1, key: "", value: "" }]
-		}
-		if (split.length === 1) {
-			// Key-only details are valid
-			const key = (await processor.process(split[0])).toString()
-			detailsList.push({
-				order: index + 1,
-				key,
-				value: null,
-			})
-		} else {
-			// Both key and value. Make sure to handle excess splits due to additional
-			// colons in the value, which are allowed
-			const key = (await processor.process(split[0])).toString()
-			const preValue = split.splice(1).reduce((a, b) => a + ": " + b)
-			const value = (await processor.process(preValue)).toString()
-			detailsList.push({
-				order: index + 1,
-				key,
-				value,
-			})
-		}
-	}
-
-	return detailsList
-}
-
-/**
- * Parse the contents of an :::image::: block.
- * @param contents The contents of an :::image::: block
- * @param order The ordering of the block in the page, compared to other :::image::: blocks
- * @param processor A unified processor to convert the caption into HTML
- * @param imageNameToPath A Map linking image filenames into their path in the database
- * @param filename The filename of the file the block comes from, for user-friendly warnings
- * @returns A SidebarImage object encoding the block's contents.
- * May be undefined if the formatting is wrong.
- */
-async function parseImageBlock(
-	contents: string,
-	order: number,
-	processor: Processor<Root, Root, Root, Root, string>,
-	imageNameToPath: Map<string, string>,
-	filename: string
-): Promise<SidebarImage | undefined> {
-	// An :::image::: block should be made up of 1 or 2 lines
-	// The first is mandatory and is the wikilink to the image
-	// The second is optional and is the caption
-	// Any other line will be considered a part of the caption
-
-	const lines = contents.split("\n").filter((line) => line !== "")
-	if (lines.length === 0) {
-		// Ignore broken formatting and emit a warning
-		console.warn(`Error parsing :::image::: block in ${filename}.`)
-		new Notice(`Error parsing :::image::: block in ${filename}.`)
-		return undefined
-	}
-
-	// Grab the image filename from the wikilink
-	const wikilink = lines[0].match(/!\[\[(.*?)(\|.*)?\]\]/)
-	if (!wikilink) {
-		console.warn(
-			`Failed to find image filename in :::image::: block in ${filename}.`
-		)
-		new Notice(
-			`Failed to find image filename in :::image::: block in ${filename}.`
-		)
-		return undefined
-	}
-	const imageFile = wikilink[1]
-
-	// Then the caption, if present
-	let caption: string | null
-	if (lines.length > 1) {
-		caption = lines.splice(1).join("\n")
-		caption = (await processor.process(caption)).toString()
-	} else {
-		caption = null
-	}
-
-	// Grab the base64 representation for the current image and skip the block if it isn't found
-	const image_path = imageNameToPath.get(imageFile)
-	if (!image_path) {
-		return undefined
-	}
-
-	return {
-		order,
-		image_name: imageFile,
-		image_path,
-		caption,
-	}
+	return { md, details, sidebarImages: images }
 }
 
 /**

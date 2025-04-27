@@ -30,12 +30,7 @@ import rehypeKatex from "rehype-katex"
 import rehypeMermaid from "rehype-mermaid"
 import rehypeSlug from "rehype-slug"
 import rehypeStringify from "rehype-stringify"
-import {
-	imageRegex,
-	propsRegex,
-	transclusionRegex,
-	wikilinkRegex,
-} from "./notes/regexes"
+import { propsRegex, wikilinkRegex } from "./notes/regexes"
 import * as crypto from "crypto"
 import { createClient } from "@libsql/client"
 
@@ -177,27 +172,23 @@ export async function uploadNotes(
 		existingHashes.set(note.path, note.hash)
 	}
 
-	let files = await Promise.all(
-		vault.getMarkdownFiles().map(async (file) => {
-			const buf = await vault.readBinary(file)
-			const hash = crypto
-				.createHash("sha256")
-				.update(new Uint8Array(buf))
-				.digest("hex")
-			return { file, hash }
-		})
-	)
-	files = files.filter(({ file, hash }) => {
+	const files: { file: TFile; hash: string }[] = []
+	for (const file of vault.getMarkdownFiles()) {
+		const buf = await vault.readBinary(file)
+		const hash = crypto
+			.createHash("sha256")
+			.update(new Uint8Array(buf))
+			.digest("hex")
+
 		const maybeExistingHash = existingHashes.get(file.path)
 		if (!maybeExistingHash || hash !== maybeExistingHash) {
-			// If the note doesn't exist or it's stale, insert/overwrite it
-			return true
+			// If the note doesn't exist or it changed, insert/overwrite it
+			files.push({ file, hash })
 		} else {
-			// If it exists and it's fresh, leave it alone
+			// If it exists and it's identical to last time, don't bother reprocessing it
 			existingHashes.delete(file.path)
-			return false
 		}
-	})
+	}
 	// What's left is what needs to be deleted
 	const hashesToDelete: string[] = [...existingHashes.values()]
 
