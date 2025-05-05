@@ -34,7 +34,7 @@ import { propsRegex, wikilinkRegex } from "./notes/regexes"
 import * as crypto from "crypto"
 import { createClient } from "@libsql/client"
 
-const imageExtensions = ["png", "webp", "jpg", "jpeg", "gif", "bmp"]
+const imageExtensions = ["png", "webp", "jpg", "jpeg", "gif", "bmp", "svg"]
 
 /**
  * The main function of the plugin. Convert every publishable Markdown note in the vault
@@ -92,17 +92,14 @@ export async function uploadNotes(
 	}
 
 	// First get all referenced images from markdown files
-	const { rasterRefs, svgRefs } = await getReferencedImages(vault)
+	const imageRefs = await getReferencedImages(vault)
 
 	// Collect only referenced images that have changed
 	const images: { file: TFile; hash: string; type: "raster" | "svg" }[] = []
 	for (const file of vault.getFiles()) {
-		if (
-			imageExtensions.includes(file.extension) ||
-			file.extension === "svg"
-		) {
+		if (imageExtensions.includes(file.extension)) {
 			// Ignore anything that's never mentioned in a markdown file
-			if (!rasterRefs.has(file.name) && !svgRefs.has(file.name)) continue
+			if (!imageRefs.has(file.name)) continue
 			// Calculate the hash to ignore images that have not changed since last upload
 			const buf = await vault.readBinary(file)
 			const hash = crypto
@@ -127,9 +124,11 @@ export async function uploadNotes(
 	// Anything left needs to be deleted since it's old and needs to be overwritten
 	const imageHashesToDelete: string[] = [...existingImageHashes.values()]
 
+	// Create a map between image filenames and their path
 	const imageNameToPath: Map<string, string> = new Map()
-	for (const image of images) {
-		imageNameToPath.set(image.file.name, image.file.path)
+	for (const file of vault.getFiles()) {
+		if (!imageExtensions.includes(file.extension)) continue
+		imageNameToPath.set(file.name, file.path)
 	}
 
 	// Push the media to the database
@@ -215,6 +214,13 @@ export async function uploadNotes(
 		vault
 	)
 	const uploadedNotes = pages.size
+	console.log([
+		...pages
+			.values()
+			.filter((page) =>
+				page.chunks.some((chunk) => chunk.image_path?.endsWith(".svg"))
+			),
+	])
 
 	// Initialize one last processor to handle wikilink conversion
 	const postprocessor = unified()
@@ -307,12 +313,9 @@ export function massAddPublish(
  * @param vault The vault instance
  * @returns Set of referenced image filenames
  */
-async function getReferencedImages(
-	vault: Vault
-): Promise<{ rasterRefs: Set<string>; svgRefs: Set<string> }> {
+async function getReferencedImages(vault: Vault): Promise<Set<string>> {
 	const files = vault.getMarkdownFiles()
-	const rasterRefs = new Set<string>()
-	const svgRefs = new Set<string>()
+	const refs = new Set<string>()
 
 	for (const file of files) {
 		try {
@@ -322,21 +325,22 @@ async function getReferencedImages(
 				const filename = match[2]
 				const extension = filename.match(/(?<=\.)[\w\d]+$/g)?.[0]
 				if (!extension) continue
+
 				if (imageExtensions.includes(extension)) {
-					rasterRefs.add(filename)
-				} else if (extension === "svg") {
-					svgRefs.add(filename)
-				} else if (extension === "excalidraw") {
+					refs.add(filename)
+				} else if (
+					extension === "excalidraw" ||
+					content.includes("excalidraw-plugin:")
+				) {
 					// Excalidraw files should reference the auto-exported SVGs
-					svgRefs.add(filename + ".dark.svg")
-					svgRefs.add(filename + ".light.svg")
+					refs.add(filename + ".svg")
 				}
 			}
 		} catch (error) {
 			console.error(`Error reading ${file.path}:`, error)
 		}
 	}
-	return { rasterRefs, svgRefs }
+	return refs
 }
 
 /**

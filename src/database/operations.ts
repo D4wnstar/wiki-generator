@@ -251,6 +251,7 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 	}
 
 	async runMigrations(): Promise<void> {
+		this.db.run("BEGIN TRANSACTION;")
 		for (const table of tables) {
 			try {
 				const currentSchema = await getTableSchema(
@@ -277,6 +278,7 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 		for (const indexQuery of indexes) {
 			this.db.run(indexQuery)
 		}
+		this.db.run("COMMIT;")
 	}
 
 	async insertUsers(users: User[]) {
@@ -295,28 +297,16 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 		}[]
 	): Promise<void> {
 		for (const { path, alt, hash, buf, svg_text } of images) {
-			if (buf) {
-				const U8Arr = new Uint8Array(buf)
-				this.db.exec(insertImage, [
-					path,
-					U8Arr,
-					null,
-					alt,
-					hash,
-					Math.floor(Date.now() / 1000),
-					1,
-				])
-			} else if (svg_text) {
-				this.db.exec(insertImage, [
-					path,
-					null,
-					svg_text,
-					alt,
-					hash,
-					Math.floor(Date.now() / 1000),
-					1,
-				])
-			}
+			const U8Arr = buf ? new Uint8Array(buf) : null
+			this.db.exec(insertImage, [
+				path,
+				U8Arr,
+				svg_text,
+				alt,
+				hash,
+				Math.floor(Date.now() / 1000),
+				1,
+			])
 		}
 	}
 
@@ -448,11 +438,13 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 	}
 
 	async clearContent(): Promise<void> {
+		this.db.run("BEGIN TRANSACTION;")
 		this.db.run(deleteNoteContents)
 		this.db.run(deleteDetails)
 		this.db.run(deleteSidebarImages)
 		this.db.run(deleteImages)
 		this.db.run(deleteNotes)
+		this.db.run("COMMIT;")
 	}
 
 	async export(vault: Vault, filename = "data.db"): Promise<void> {
@@ -511,12 +503,21 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 			alt: string
 			hash: string
 			buf: ArrayBuffer
+			svg_text: string | null
 		}[]
 	): Promise<void> {
-		for (const { path, alt, hash, buf } of images) {
+		for (const { path, alt, hash, buf, svg_text } of images) {
 			await this.db.execute({
 				sql: insertImage,
-				args: [path, buf, alt, hash, Math.floor(Date.now() / 1000), 1],
+				args: [
+					path,
+					buf,
+					svg_text,
+					alt,
+					hash,
+					Math.floor(Date.now() / 1000),
+					1,
+				],
 			})
 		}
 	}
@@ -634,11 +635,13 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 	}
 
 	async clearContent(): Promise<void> {
-		await this.db.execute(deleteNoteContents)
-		await this.db.execute(deleteDetails)
-		await this.db.execute(deleteSidebarImages)
-		await this.db.execute(deleteImages)
-		await this.db.execute(deleteNotes)
+		await this.db.batch([
+			deleteNoteContents,
+			deleteDetails,
+			deleteSidebarImages,
+			deleteImages,
+			deleteNotes,
+		])
 	}
 
 	async export(_vault: Vault): Promise<void> {

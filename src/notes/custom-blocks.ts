@@ -239,7 +239,7 @@ export async function replaceCustomBlocks(
  */
 export function chunkMd(
 	text: string,
-	noteNameToPath: Map<string, string>,
+	noteNameToPath: Map<string, { path: string; isExcalidraw: boolean }>,
 	imageNameToPath: Map<string, string>
 ): ContentChunk[] {
 	// First, partition by secrets while replacing each block with its contents
@@ -288,36 +288,34 @@ export function chunkMd(
 
 		const currOffset = tempChunks2.length
 		for (const [idx, split] of splits.entries()) {
-			let note_transclusion_path: string | null
-			let image_path: string | null
+			let note_transclusion_path: string | null = null
+			let image_path: string | null = null
 			if (idx % 2 === 1) {
 				const refNameIdx = Math.floor(idx / 2)
-				const linkName = linkNames[refNameIdx]
-
+				let linkName = linkNames[refNameIdx]
 				const fileExtension = linkName.match(/\..*$/)
+
 				if (fileExtension) {
-					// The nullish coalescing also takes care of non-image file formats
-					note_transclusion_path = null
+					// Make sure to reference the svg and not the excalidraw files
 					if (fileExtension[0] === ".excalidraw") {
-						// TODO: Update schema to allow for both light and dark variants
-						image_path =
-							imageNameToPath.get(linkName + ".dark.svg") ?? null
-					} else {
-						image_path = imageNameToPath.get(linkName) ?? null
+						linkName = linkName + ".svg"
 					}
+
+					// The nullish coalescing also takes care of non-image file formats
+					image_path = imageNameToPath.get(linkName) ?? null
 				} else {
-					note_transclusion_path =
-						noteNameToPath.get(linkName) ?? null
-					image_path = null
+					const info = noteNameToPath.get(linkName)
+					if (info?.isExcalidraw) {
+						image_path = info.path + ".svg"
+					} else {
+						note_transclusion_path = info?.path ?? null
+					}
 				}
-			} else {
-				note_transclusion_path = null
-				image_path = null
 			}
 
 			tempChunks2.push({
 				chunk_id: idx + currOffset,
-				text: split,
+				text: image_path || note_transclusion_path ? "" : split,
 				// Inherit allowed users from the current chunk
 				allowed_users: chunk.allowed_users,
 				image_path,

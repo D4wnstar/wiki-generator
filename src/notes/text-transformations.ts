@@ -29,13 +29,17 @@ export async function makePagesFromFiles(
 	imageNameToPath: Map<string, string>,
 	vault: Vault
 ): Promise<{ pages: Pages; titleToPath: Map<string, string> }> {
+	const lastUpdated = Math.floor(Date.now() / 1000)
 	const pages: Pages = new Map()
 	const titleToPath: Map<string, string> = new Map()
-	const noteNameToPath: Map<string, string> = files.reduce(
-		(map, { file }) => map.set(file.basename, file.path),
+	const noteNameToPath: Map<string, { path: string; isExcalidraw: boolean }> =
 		new Map()
-	)
-	const lastUpdated = Math.floor(Date.now() / 1000)
+
+	for (const { file } of files) {
+		const content = await vault.cachedRead(file)
+		const isExcalidraw = content.includes("excalidraw-plugin:")
+		noteNameToPath.set(file.basename, { path: file.path, isExcalidraw })
+	}
 
 	// Keep track of previous slugs to avoid collisions
 	// This is done manually despite using github-slugger because slugger turns
@@ -122,7 +126,7 @@ export async function makePagesFromFiles(
 }
 
 /**
- * Replace inline code adn codeblocks with plain text identifiers (<|inlinecode_i|> and
+ * Replace inline code and codeblocks with plain text identifiers (<|inlinecode_i|> and
  * <|codeblock_i|> where i is the order of appearance of the codeblock (starting from 1).
  * Intended to be * coupled with `addCodeblocksBack`, mostly to prevent codeblocks from
  * being formatted.
