@@ -92,29 +92,36 @@ export async function uploadNotes(
 	}
 
 	// First get all referenced images from markdown files
-	const referencedImages = await getReferencedImages(vault)
+	const { rasterRefs, svgRefs } = await getReferencedImages(vault)
 
 	// Collect only referenced images that have changed
-	const images: { file: TFile; hash: string }[] = []
+	const images: { file: TFile; hash: string; type: "raster" | "svg" }[] = []
 	for (const file of vault.getFiles()) {
-		// Ignore non-images
-		if (!imageExtensions.includes(file.extension)) continue
-		// Ignore anything that's never mentioned in a markdown file
-		if (!referencedImages.has(file.name)) continue
-		// Calculate the hash to ignore images that have not changed since last upload
-		const buf = await vault.readBinary(file)
-		const hash = crypto
-			.createHash("sha256")
-			.update(new Uint8Array(buf))
-			.digest("hex")
+		if (
+			imageExtensions.includes(file.extension) ||
+			file.extension === "svg"
+		) {
+			// Ignore anything that's never mentioned in a markdown file
+			if (!rasterRefs.has(file.name) && !svgRefs.has(file.name)) continue
+			// Calculate the hash to ignore images that have not changed since last upload
+			const buf = await vault.readBinary(file)
+			const hash = crypto
+				.createHash("sha256")
+				.update(new Uint8Array(buf))
+				.digest("hex")
+			const type = file.extension === "svg" ? "svg" : "raster"
 
-		const maybeExistingHash = existingImageHashes.get(file.path)
-		if (!maybeExistingHash || hash !== maybeExistingHash) {
-			// If the file doesn't exist or it changed, insert/overwrite it
-			images.push({ file, hash })
+			const maybeExistingHash = existingImageHashes.get(file.path)
+			if (!maybeExistingHash || hash !== maybeExistingHash) {
+				// If the file doesn't exist or it changed, insert/overwrite it
+				images.push({ file, hash, type })
+			} else {
+				// If it exists and it's identical to last time, don't bother reprocessing it
+				existingImageHashes.delete(file.path)
+			}
 		} else {
-			// If it exists and it's identical to last time, don't bother reprocessing it
-			existingImageHashes.delete(file.path)
+			// Unsupported filetypes are skipped
+			continue
 		}
 	}
 	// Anything left needs to be deleted since it's old and needs to be overwritten
@@ -130,12 +137,18 @@ export async function uploadNotes(
 	await adapter.deleteImagesByHashes(imageHashesToDelete)
 
 	const imagesToInsert = await Promise.all(
-		images.map(async ({ file, hash }) => {
+		images.map(async ({ file, hash, type }) => {
 			return {
 				path: file.path.replace(/\.md$/, ""),
 				alt: file.name,
 				hash,
-				buf: await imageToArrayBuffer(file, vault, { downscale: true }),
+				buf:
+					type === "raster"
+						? await imageToArrayBuffer(file, vault, {
+								downscale: true,
+						  })
+						: null,
+				svg_text: type === "svg" ? await vault.cachedRead(file) : null,
 			}
 		})
 	)
@@ -294,25 +307,36 @@ export function massAddPublish(
  * @param vault The vault instance
  * @returns Set of referenced image filenames
  */
-async function getReferencedImages(vault: Vault): Promise<Set<string>> {
+async function getReferencedImages(
+	vault: Vault
+): Promise<{ rasterRefs: Set<string>; svgRefs: Set<string> }> {
 	const files = vault.getMarkdownFiles()
-	const referencedImages = new Set<string>()
+	const rasterRefs = new Set<string>()
+	const svgRefs = new Set<string>()
 
 	for (const file of files) {
 		try {
 			// Scan all wikilinks for image filenames
-			const content = await vault.read(file)
+			const content = await vault.cachedRead(file)
 			for (const match of content.matchAll(wikilinkRegex)) {
 				const filename = match[2]
 				const extension = filename.match(/(?<=\.)[\w\d]+$/g)?.[0]
-				if (!extension || !imageExtensions.includes(extension)) continue
-				referencedImages.add(filename)
+				if (!extension) continue
+				if (imageExtensions.includes(extension)) {
+					rasterRefs.add(filename)
+				} else if (extension === "svg") {
+					svgRefs.add(filename)
+				} else if (extension === "excalidraw") {
+					// Excalidraw files should reference the auto-exported SVGs
+					svgRefs.add(filename + ".dark.svg")
+					svgRefs.add(filename + ".light.svg")
+				}
 			}
 		} catch (error) {
 			console.error(`Error reading ${file.path}:`, error)
 		}
 	}
-	return referencedImages
+	return { rasterRefs, svgRefs }
 }
 
 /**

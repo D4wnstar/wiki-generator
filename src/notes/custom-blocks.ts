@@ -294,11 +294,17 @@ export function chunkMd(
 				const refNameIdx = Math.floor(idx / 2)
 				const linkName = linkNames[refNameIdx]
 
-				const hasFileExtension = linkName.match(/\..*$/)
-				if (hasFileExtension) {
+				const fileExtension = linkName.match(/\..*$/)
+				if (fileExtension) {
 					// The nullish coalescing also takes care of non-image file formats
 					note_transclusion_path = null
-					image_path = imageNameToPath.get(linkName) ?? null
+					if (fileExtension[0] === ".excalidraw") {
+						// TODO: Update schema to allow for both light and dark variants
+						image_path =
+							imageNameToPath.get(linkName + ".dark.svg") ?? null
+					} else {
+						image_path = imageNameToPath.get(linkName) ?? null
+					}
 				} else {
 					note_transclusion_path =
 						noteNameToPath.get(linkName) ?? null

@@ -11,6 +11,9 @@ import { WikiGeneratorSettings } from "src/settings"
 import { Vault } from "obsidian"
 import { findFileInPlugin } from "./filesystem"
 
+// IMPORTANT: Update the type definitions if these are changed!
+// Both in database/types.ts and in the frontend template.
+
 const createNotes = `
 CREATE TABLE IF NOT EXISTS notes (
 	path TEXT PRIMARY KEY,
@@ -27,7 +30,8 @@ CREATE TABLE IF NOT EXISTS notes (
 const createImages = `
 CREATE TABLE IF NOT EXISTS images (
 	path TEXT PRIMARY KEY,
-	blob BLOB NOT NULL,
+	blob BLOB, -- for raster images
+	svg_text TEXT, -- for SVG images
 	alt TEXT,
 	hash TEXT NOT NULL,
 	last_updated INTEGER NOT NULL,
@@ -159,11 +163,12 @@ const insertImage = `
 INSERT INTO images (
 	path,
 	blob,
+	svg_text,
 	alt,
 	hash,
 	last_updated,
 	compressed
-) VALUES (?, ?, ?, ?, ?, ?) RETURNING path;`
+) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING path;`
 
 const insertUser = `
 INSERT OR REPLACE INTO users (
@@ -285,19 +290,33 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 			path: string
 			alt: string
 			hash: string
-			buf: ArrayBuffer
+			buf: ArrayBuffer | null
+			svg_text: string | null
 		}[]
 	): Promise<void> {
-		for (const { path, alt, hash, buf } of images) {
-			const U8Arr = new Uint8Array(buf)
-			this.db.exec(insertImage, [
-				path,
-				U8Arr,
-				alt,
-				hash,
-				Math.floor(Date.now() / 1000),
-				1,
-			])
+		for (const { path, alt, hash, buf, svg_text } of images) {
+			if (buf) {
+				const U8Arr = new Uint8Array(buf)
+				this.db.exec(insertImage, [
+					path,
+					U8Arr,
+					null,
+					alt,
+					hash,
+					Math.floor(Date.now() / 1000),
+					1,
+				])
+			} else if (svg_text) {
+				this.db.exec(insertImage, [
+					path,
+					null,
+					svg_text,
+					alt,
+					hash,
+					Math.floor(Date.now() / 1000),
+					1,
+				])
+			}
 		}
 	}
 

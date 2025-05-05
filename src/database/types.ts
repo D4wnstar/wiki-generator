@@ -43,7 +43,8 @@ export type ContentChunk = {
 
 export type Image = {
 	path: string
-	blob: Uint8Array
+	blob?: Uint8Array | null
+	svg_text: string | null
 	alt: string | null
 	hash: string
 	last_updated: number
@@ -81,7 +82,8 @@ export interface DatabaseAdapter {
 			path: string
 			alt: string
 			hash: string
-			buf: ArrayBuffer
+			buf: ArrayBuffer | null
+			svg_text: string | null
 		}[]
 	): Promise<void>
 	deleteImagesByHashes(hashes: string[]): Promise<void>
