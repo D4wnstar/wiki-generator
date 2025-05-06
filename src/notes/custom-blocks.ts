@@ -4,38 +4,59 @@ import { partition } from "src/utils"
 import { Processor } from "unified"
 import { Detail, SidebarImage, ContentChunk } from "../database/types"
 import {
-	secretRegex,
 	secretRegexNoGroups,
 	transclusionRegex,
 	transclusionRegexNoGroups,
 } from "./regexes"
+
+interface WorkingContentChunk extends ContentChunk {
+	locked: boolean
+}
 
 abstract class Block {
 	protected static getRegex(name: string): RegExp {
 		return new RegExp(`^:::\\s*${name}(\\(.*?\\))?\\n(.*?)\\n:::`, "gms")
 		// Group 1 is args, if any. Group 2 is block content.
 	}
+}
 
-	// TypeScript won't complain about not implementing this on subclasses because it's
-	// a static method, but it should be on all of them (can't put abstract + static)
-	static parse: (
-		md: string,
-		args: Record<string, unknown>
-	) => Promise<
+// TypeScript won't complain about not implementing parse methods on subclasses because they
+// are static methods, but they should be on all of them (can't put abstract + static)
+
+abstract class InlineBlock extends Block {
+	// Modifies content in-place
+	static parseToString?: (md: string) => Promise<
 		{
 			md: string
 		} & Record<string, unknown>
 	>
+
+	static parseChunks?: (
+		chunks: WorkingContentChunk[],
+		args?: Record<string, any>
+	) => Promise<
+		{
+			chunks: WorkingContentChunk[]
+		} & Record<string, unknown>
+	>
 }
 
-class HiddenBlock extends Block {
-	static async parse(md: string) {
+abstract class ExtractedBlock extends Block {
+	// Removes content and returns additional data
+	static parse: (
+		md: string,
+		args: Record<string, unknown>
+	) => Promise<{ md: string } & Record<string, unknown>>
+}
+
+class HiddenBlock extends InlineBlock {
+	static async parseToString(md: string) {
 		const regex = this.getRegex("hidden")
 		return { md: md.replaceAll(regex, "") }
 	}
 }
 
-class DetailsBlock extends Block {
+class DetailsBlock extends ExtractedBlock {
 	/**
 	 * Parse the contents of a :::details::: block.
 	 * @param md The markdown to process
@@ -100,7 +121,7 @@ class DetailsBlock extends Block {
 	}
 }
 
-class ImageBlock extends Block {
+class ImageBlock extends ExtractedBlock {
 	/**
 	 * Parse the contents of an :::image::: block.
 	 * @param md The markdown to process
@@ -175,31 +196,130 @@ class ImageBlock extends Block {
 	}
 }
 
-// Secret blocks are handled separately
+class SecretBlock extends InlineBlock {
+	static async parseChunks(chunks: WorkingContentChunk[]) {
+		const secretRegex = this.getRegex("secret")
+		const outChunks = []
+		for (const chunk of chunks) {
+			if (chunk.locked) {
+				outChunks.push(chunk)
+				continue
+			}
+
+			// Get a list of the users mentioned in the blocks
+			const secretUsers = [...chunk.text.matchAll(secretRegex)].map(
+				(match) =>
+					match[1]
+						.split(",")
+						.map((s) => s.trim())
+						.join(";")
+			)
+
+			// Partition by secrets while replacing each block with its contents
+			const splits = partition(chunk.text, secretRegexNoGroups)
+			if (splits.length === 1) continue
+
+			const newChunks: WorkingContentChunk[] = splits.map(
+				(text, idx) => ({
+					...chunk,
+					chunk_id: chunk.chunk_id + idx,
+					text:
+						idx % 2 === 1 ? text.replace(secretRegex, "$2") : text,
+					allowed_users:
+						idx % 2 === 1 ? secretUsers[Math.floor(idx / 2)] : null,
+				})
+			)
+
+			outChunks.push(...newChunks)
+		}
+
+		return { chunks }
+	}
+}
+
+// TODO: Use the order of the chunk array for the ids instead of assigning them here
+
+// A bit of a "fake" block in that it does not actually inherit from Block but the
+// use case is the same
+class WikilinkTransclusion {
+	static parseChunks(
+		chunks: WorkingContentChunk[],
+		args: {
+			imageNameToPath: Map<string, string>
+			noteNameToPath: Map<string, { path: string; isExcalidraw: boolean }>
+		}
+	) {
+		const outChunks = []
+		for (const chunk of chunks) {
+			if (chunk.locked) {
+				outChunks.push(chunk)
+				continue
+			}
+
+			const linkNames = [...chunk.text.matchAll(transclusionRegex)].map(
+				(match) => match[1]
+			)
+
+			const splits = partition(chunk.text, transclusionRegexNoGroups)
+			if (splits.length === 1) continue
+
+			for (const idx of splits.keys()) {
+				const newChunk: WorkingContentChunk = {
+					...chunk,
+					chunk_id: chunk.chunk_id + idx,
+					locked: idx % 2 === 1,
+				}
+				let linkName = linkNames[Math.floor(idx / 2)]
+				const fileExtension = linkName.match(/\..*$/)
+
+				if (fileExtension) {
+					// Make sure to reference the svg and not the excalidraw files
+					if (fileExtension[0] === ".excalidraw") {
+						linkName = linkName + ".svg"
+					}
+
+					// The nullish coalescing also takes care of non-image file formats
+					newChunk.image_path =
+						args.imageNameToPath.get(linkName) ?? null
+				} else {
+					const info = args.noteNameToPath.get(linkName)
+					if (info?.isExcalidraw) {
+						newChunk.image_path = info.path + ".svg"
+					} else {
+						newChunk.note_transclusion_path = info?.path ?? null
+					}
+				}
+
+				outChunks.push(newChunk)
+			}
+		}
+
+		return { chunks: outChunks }
+	}
+}
 
 /**
- * Parse Markdown text, removing all\* special :::blocks::: and
- * returning their content. Also takes care of converting each block's
- * Markdown into HTML.
+ * Parse Markdown text for custom syntax that's not handled by remark already,
+ * mostly custom :::blocks::: and Obsidian transclusions.
  *
- *
- * \*This function ignores :::secret::: blocks.
  * Use the `chunkMd` function to split the page by those.
  * @param md The markdown text to transform
  * @param filename The name of the file that's being processed
  * @param processor A unified processor to convert Markdown into HTML
- * @param imageNameToPath A map that links image filenames to their base64 representation
+ * @param imageNameToPath A map that links image filenames to their vault path
+ * @param noteNameToPath A map that links note filenames to their vault path
  * @returns The modified text, alongside all other additional data from custom blocks
  */
-export async function replaceCustomBlocks(
+export async function handleCustomSyntax(
 	md: string,
 	filename: string,
 	processor: Processor<Root, Root, Root, Root, string>,
-	imageNameToPath: Map<string, string>
+	imageNameToPath: Map<string, string>,
+	noteNameToPath: Map<string, { path: string; isExcalidraw: boolean }>
 ) {
-	// Remove :::hidden::: blocks
-	const hiddenResult = await HiddenBlock.parse(md)
-	md = hiddenResult.md
+	// Remove :::hidden::: blocks and Markdown comments
+	md = md.replace(/%%.*?%%/gs, "")
+	md = (await HiddenBlock.parseToString(md)).md
 
 	// Parse and remove the first :::details::: block
 	let details: Detail[] = []
@@ -208,8 +328,8 @@ export async function replaceCustomBlocks(
 		md = detailsResult.md
 		details = detailsResult.details
 	} catch (error) {
-		new Notice(`Error in ${filename}: ${error}`, 0)
-		console.warn(`Error in ${filename}: ${error}`)
+		new Notice(`Error parsing :::details::: in ${filename}: ${error}`, 0)
+		console.warn(`Error parsing :::details::: in ${filename}: ${error}`)
 	}
 
 	// Parse and remove :::image::: blocks
@@ -222,107 +342,28 @@ export async function replaceCustomBlocks(
 		md = imageResult.md
 		images = imageResult.images
 	} catch (error) {
-		new Notice(`Error in ${filename}: ${error}`, 0)
-		console.warn(`Error in ${filename}: ${error}`)
+		new Notice(`Error parsing :::image::: in ${filename}: ${error}`, 0)
+		console.warn(`Error parsing :::image::: in ${filename}: ${error}`)
 	}
 
-	return { md, details, sidebarImages: images }
-}
+	// remarkMath needs newlines to consider a math block as display
+	// The quadruple $ is because $ is the backreference character in
+	// regexes and is escaped as $$, so $$$$ -> $$
+	md = md.replace(/^\$\$/gm, "$$$$\n").replace(/\$\$$/gm, "\n$$$$")
 
-/**
- * Split Markdown text into chunks with different user permission.
- * The text is split by :::secret::: and ![[transclusions]] blocks and
- * each is given the permission determined by the argument of the block.
- * @param text The text to split
- * @param imageNameToPath A mapping between image filenames and their path
- * @returns An array ContentChunks
- */
-export function chunkMd(
-	text: string,
-	noteNameToPath: Map<string, { path: string; isExcalidraw: boolean }>,
-	imageNameToPath: Map<string, string>
-): ContentChunk[] {
-	// First, partition by secrets while replacing each block with its contents
-	const splits = partition(text, secretRegexNoGroups)
-
-	// Get a list of the users mentioned in the blocks
-	const secretUsers = [...text.matchAll(secretRegex)].map((match) => match[1])
-
-	const tempChunks: ContentChunk[] = []
-	for (const [idx, split] of splits.entries()) {
-		// Only odd splits are secret: "pub sec pub" -> ["pub ", "sec", " pub"]
-		// This still applies if there is a secret block at the start or end
-		// (pub would be an empty string)
-		let allowed_users: string | null
-		let text: string
-		if (idx % 2 === 1) {
-			const usersIdx = Math.floor(idx / 2)
-			// Guarantee that users are split by semicolon and that there is no extra whitespace
-			allowed_users = secretUsers[usersIdx]
-				.split(",")
-				.map((s) => s.trim())
-				.join(";")
-			// Also replace each block with its own contents
-			text = split.replace(secretRegex, "$2")
-		} else {
-			allowed_users = null
-			text = split
-		}
-
-		tempChunks.push({
-			chunk_id: idx + 1,
-			text,
-			allowed_users,
-			image_path: null,
-			note_transclusion_path: null,
-		})
+	const initialChunk: WorkingContentChunk = {
+		chunk_id: 1,
+		text: md,
+		allowed_users: null,
+		image_path: null,
+		note_transclusion_path: null,
+		locked: false,
 	}
+	let wChunks = await SecretBlock.parseChunks([initialChunk])
+	wChunks = WikilinkTransclusion.parseChunks(wChunks.chunks, {
+		imageNameToPath,
+		noteNameToPath,
+	})
 
-	// Do the same for every transclusion, in every chunk
-	const tempChunks2: ContentChunk[] = []
-	for (const chunk of tempChunks) {
-		const linkNames = [...chunk.text.matchAll(transclusionRegex)].map(
-			(match) => match[1]
-		)
-		const splits = partition(chunk.text, transclusionRegexNoGroups)
-
-		const currOffset = tempChunks2.length
-		for (const [idx, split] of splits.entries()) {
-			let note_transclusion_path: string | null = null
-			let image_path: string | null = null
-			if (idx % 2 === 1) {
-				const refNameIdx = Math.floor(idx / 2)
-				let linkName = linkNames[refNameIdx]
-				const fileExtension = linkName.match(/\..*$/)
-
-				if (fileExtension) {
-					// Make sure to reference the svg and not the excalidraw files
-					if (fileExtension[0] === ".excalidraw") {
-						linkName = linkName + ".svg"
-					}
-
-					// The nullish coalescing also takes care of non-image file formats
-					image_path = imageNameToPath.get(linkName) ?? null
-				} else {
-					const info = noteNameToPath.get(linkName)
-					if (info?.isExcalidraw) {
-						image_path = info.path + ".svg"
-					} else {
-						note_transclusion_path = info?.path ?? null
-					}
-				}
-			}
-
-			tempChunks2.push({
-				chunk_id: idx + currOffset,
-				text: image_path || note_transclusion_path ? "" : split,
-				// Inherit allowed users from the current chunk
-				allowed_users: chunk.allowed_users,
-				image_path,
-				note_transclusion_path,
-			})
-		}
-	}
-
-	return tempChunks2
+	return { wChunks, details, sidebarImages: images }
 }

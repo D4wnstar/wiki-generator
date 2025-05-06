@@ -2,7 +2,7 @@ import { TFile, Vault } from "obsidian"
 import { Root } from "remark-parse/lib"
 import { ensureUniqueSlug, slugPath } from "src/utils"
 import { Processor } from "unified"
-import { replaceCustomBlocks, chunkMd } from "./custom-blocks"
+import { handleCustomSyntax } from "./custom-blocks"
 import {
 	ContentChunk,
 	Detail,
@@ -66,36 +66,20 @@ export async function makePagesFromFiles(
 
 		// Parse and replace custom :::blocks::: and delete Obsidian comments
 		// Codeblocks are removed and added back later to keep them unmodified
-		const {
-			md: strippedMd,
-			inlineCode,
-			codeBlocks,
-		} = removeCodeblocks(content)
-		const strippedMd2 = strippedMd.replace(/%%.*?%%/gs, "")
-		const {
-			md: strippedMd3,
-			details,
-			sidebarImages,
-		} = await replaceCustomBlocks(
-			strippedMd2,
+		const { md, inlineCode, codeBlocks } = removeCodeblocks(content)
+		const { wChunks, details, sidebarImages } = await handleCustomSyntax(
+			md,
 			file.name,
 			//@ts-ignore
 			processor,
-			imageNameToPath
+			imageNameToPath,
+			noteNameToPath
 		)
-		const strippedMd4 = strippedMd3
-			.replace(/^\$\$/gm, "$$$$\n") // remarkMath needs newlines to consider a math block as display
-			.replace(/\$\$$/gm, "\n$$$$") // The quadruple $ is because $ is the backreference character in regexes and is escaped as $$, so $$$$ -> $$
-
-		// Split the page into chunks based on permissions
-		const tempChunks = chunkMd(strippedMd4, noteNameToPath, imageNameToPath)
-
-		const chunks = addCodeblocksBack(tempChunks, inlineCode, codeBlocks)
+		const chunks = addCodeblocksBack(wChunks.chunks, inlineCode, codeBlocks)
 
 		// Convert the markdown of each chunk separately
 		chunks.forEach(async (chunk) => {
-			const vfile = await processor.process(chunk.text)
-			chunk.text = String(vfile)
+			chunk.text = String(await processor.process(chunk.text))
 		})
 
 		// Get everything until the first header as the lead

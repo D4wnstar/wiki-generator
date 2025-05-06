@@ -381,12 +381,13 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 				],
 			})
 
-			for (const chunk of page.chunks) {
+			for (const [idx, chunk] of page.chunks.entries()) {
 				noteContentsQueries.push({
 					sql: insertNoteContents,
 					args: [
 						notePath,
-						chunk.chunk_id,
+						// Use whatever order the chunks were passed in
+						idx,
 						chunk.text,
 						chunk.allowed_users,
 						chunk.image_path,
@@ -586,12 +587,13 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 				],
 			})
 
-			for (const chunk of page.chunks) {
+			for (const [idx, chunk] of page.chunks.entries()) {
 				noteContentsQueries.push({
 					sql: insertNoteContents,
 					args: [
 						notePath,
-						chunk.chunk_id,
+						// Use whatever order the chunks were passed in
+						idx,
 						chunk.text,
 						chunk.allowed_users,
 						chunk.image_path,
