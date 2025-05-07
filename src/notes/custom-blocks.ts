@@ -206,6 +206,13 @@ class SecretBlock extends InlineBlock {
 				continue
 			}
 
+			// Partition by secrets while replacing each block with its contents
+			const splits = partition(chunk.text, secretRegexNoGroups)
+			if (splits.length === 1) {
+				outChunks.push(chunk)
+				continue
+			}
+
 			// Get a list of the users mentioned in the blocks
 			const secretUsers = [...chunk.text.matchAll(secretRegex)].map(
 				(match) =>
@@ -214,10 +221,6 @@ class SecretBlock extends InlineBlock {
 						.map((s) => s.trim())
 						.join(";")
 			)
-
-			// Partition by secrets while replacing each block with its contents
-			const splits = partition(chunk.text, secretRegexNoGroups)
-			if (splits.length === 1) continue
 
 			const newChunks: WorkingContentChunk[] = splits.map(
 				(text, idx) => ({
@@ -256,19 +259,28 @@ class WikilinkTransclusion {
 				continue
 			}
 
+			const splits = partition(chunk.text, transclusionRegexNoGroups)
+			if (splits.length === 1) {
+				outChunks.push(chunk)
+				continue
+			}
+
 			const linkNames = [...chunk.text.matchAll(transclusionRegex)].map(
 				(match) => match[1]
 			)
 
-			const splits = partition(chunk.text, transclusionRegexNoGroups)
-			if (splits.length === 1) continue
-
-			for (const idx of splits.keys()) {
+			for (const [idx, split] of splits.entries()) {
 				const newChunk: WorkingContentChunk = {
 					...chunk,
+					text: idx % 2 === 1 ? "" : split,
 					chunk_id: chunk.chunk_id + idx,
 					locked: idx % 2 === 1,
 				}
+				if (idx % 2 !== 1) {
+					outChunks.push(newChunk)
+					continue
+				}
+
 				let linkName = linkNames[Math.floor(idx / 2)]
 				const fileExtension = linkName.match(/\..*$/)
 
@@ -351,6 +363,7 @@ export async function handleCustomSyntax(
 	// regexes and is escaped as $$, so $$$$ -> $$
 	md = md.replace(/^\$\$/gm, "$$$$\n").replace(/\$\$$/gm, "\n$$$$")
 
+	// Handle chunking
 	const initialChunk: WorkingContentChunk = {
 		chunk_id: 1,
 		text: md,
