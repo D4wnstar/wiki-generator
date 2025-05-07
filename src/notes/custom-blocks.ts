@@ -18,20 +18,31 @@ abstract class Block {
 		return new RegExp(`^:::\\s*${name}(\\(.*?\\))?\\n(.*?)\\n:::`, "gms")
 		// Group 1 is args, if any. Group 2 is block content.
 	}
-}
 
-// TypeScript won't complain about not implementing parse methods on subclasses because they
-// are static methods, but they should be on all of them (can't put abstract + static)
+	/**
+	 * Parse the block arguments and return an array of them.
+	 * @param args The string of arguments, ideally as given by the capture group from getRegex
+	 * @returns An array of arguments
+	 */
+	protected static parseArgs(args: string): string[] {
+		return args.split(",").map((arg) => arg.toLowerCase().trim())
+	}
 
-abstract class InlineBlock extends Block {
-	// Modifies content in-place
-	static parseToString?: (md: string) => Promise<
+	// TypeScript won't complain about not implementing parse methods on subclasses because they
+	// are static methods, but they should be on all of them (can't put abstract + static)
+
+	// Removes content and returns additional data
+	static extract?: (
+		md: string,
+		args?: Record<string, any>
+	) => Promise<
 		{
 			md: string
 		} & Record<string, unknown>
 	>
 
-	static parseChunks?: (
+	// Modifies content in-place by splitting into chunks with different data
+	static applyOnChunks?: (
 		chunks: WorkingContentChunk[],
 		args?: Record<string, any>
 	) => Promise<
@@ -41,29 +52,21 @@ abstract class InlineBlock extends Block {
 	>
 }
 
-abstract class ExtractedBlock extends Block {
-	// Removes content and returns additional data
-	static parse: (
-		md: string,
-		args: Record<string, unknown>
-	) => Promise<{ md: string } & Record<string, unknown>>
-}
-
-class HiddenBlock extends InlineBlock {
-	static async parseToString(md: string) {
+class HiddenBlock extends Block {
+	static async extract(md: string) {
 		const regex = this.getRegex("hidden")
 		return { md: md.replaceAll(regex, "") }
 	}
 }
 
-class DetailsBlock extends ExtractedBlock {
+class DetailsBlock extends Block {
 	/**
 	 * Parse the contents of a :::details::: block.
 	 * @param md The markdown to process
 	 * @param processor A unified processor to convert the caption into HTML
 	 * @returns An array of Detail objects, one for each line, and the modified markdown
 	 */
-	static async parse(
+	static async extract(
 		md: string,
 		args: { processor: Processor<Root, Root, Root, Root, string> }
 	): Promise<{ md: string; details: Detail[] }> {
@@ -121,15 +124,16 @@ class DetailsBlock extends ExtractedBlock {
 	}
 }
 
-class ImageBlock extends ExtractedBlock {
+class ImageBlock extends Block {
 	/**
-	 * Parse the contents of an :::image::: block.
+	 * Parse the contents of an :::image::: block, but only if it has the "sidebar" argument.
+	 * Inline images are nadled by applyOnChunks
 	 * @param md The markdown to process
 	 * @param processor A unified processor to convert the caption into HTML
 	 * @param imageNameToPath A Map linking image filenames into their path in the database
 	 * @returns An array of SidebarImage objects and the modified markdown
 	 */
-	static async parse(
+	static async extract(
 		md: string,
 		args: {
 			processor: Processor<Root, Root, Root, Root, string>
@@ -137,7 +141,12 @@ class ImageBlock extends ExtractedBlock {
 		}
 	) {
 		const regex = this.getRegex("image")
-		const matches = [...md.matchAll(regex)]
+		const matches = [
+			...md.matchAll(regex).filter((match) =>
+				// Ignore anything that's not marked sidebar
+				this.parseArgs(match[1]).includes("sidebar")
+			),
+		]
 		if (matches.length === 0) return { md, images: [] }
 
 		// An :::image::: block should be made up of 1 or 2 lines
@@ -194,10 +203,12 @@ class ImageBlock extends ExtractedBlock {
 
 		return { md, images }
 	}
+
+	// TODO: Implement applyOnChunks for non-sidebar images
 }
 
-class SecretBlock extends InlineBlock {
-	static async parseChunks(chunks: WorkingContentChunk[]) {
+class SecretBlock extends Block {
+	static async applyOnChunks(chunks: WorkingContentChunk[]) {
 		const secretRegex = this.getRegex("secret")
 		const outChunks = []
 		for (const chunk of chunks) {
@@ -245,7 +256,7 @@ class SecretBlock extends InlineBlock {
 // A bit of a "fake" block in that it does not actually inherit from Block but the
 // use case is the same
 class WikilinkTransclusion {
-	static parseChunks(
+	static applyOnChunks(
 		chunks: WorkingContentChunk[],
 		args: {
 			imageNameToPath: Map<string, string>
@@ -331,14 +342,14 @@ export async function handleCustomSyntax(
 ) {
 	// Remove :::hidden::: blocks and Markdown comments
 	md = md.replace(/%%.*?%%/gs, "")
-	md = (await HiddenBlock.parseToString(md)).md
+	md = (await HiddenBlock.extract(md)).md
 
 	// Parse and remove the first :::details::: block
 	let details: Detail[] = []
 	try {
-		const detailsResult = await DetailsBlock.parse(md, { processor })
-		md = detailsResult.md
-		details = detailsResult.details
+		const extractedDetails = await DetailsBlock.extract(md, { processor })
+		md = extractedDetails.md
+		details = extractedDetails.details
 	} catch (error) {
 		new Notice(`Error parsing :::details::: in ${filename}: ${error}`, 0)
 		console.warn(`Error parsing :::details::: in ${filename}: ${error}`)
@@ -347,12 +358,12 @@ export async function handleCustomSyntax(
 	// Parse and remove :::image::: blocks
 	let images: SidebarImage[] = []
 	try {
-		const imageResult = await ImageBlock.parse(md, {
+		const extractedImages = await ImageBlock.extract(md, {
 			processor,
 			imageNameToPath,
 		})
-		md = imageResult.md
-		images = imageResult.images
+		md = extractedImages.md
+		images = extractedImages.images
 	} catch (error) {
 		new Notice(`Error parsing :::image::: in ${filename}: ${error}`, 0)
 		console.warn(`Error parsing :::image::: in ${filename}: ${error}`)
@@ -372,8 +383,8 @@ export async function handleCustomSyntax(
 		note_transclusion_path: null,
 		locked: false,
 	}
-	let wChunks = await SecretBlock.parseChunks([initialChunk])
-	wChunks = WikilinkTransclusion.parseChunks(wChunks.chunks, {
+	let wChunks = await SecretBlock.applyOnChunks([initialChunk])
+	wChunks = WikilinkTransclusion.applyOnChunks(wChunks.chunks, {
 		imageNameToPath,
 		noteNameToPath,
 	})
