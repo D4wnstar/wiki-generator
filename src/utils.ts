@@ -48,12 +48,12 @@ export function ensureUniqueSlug(
 }
 
 /**
- * Splits the text by the splitter string and retains it in the return value, unlike `split`
- * which drops it. Assumes `splitter` exists in `text`.
+ * Splits the text by the splitter while retaining the splitter in the result.
  * @param text The text to partition
- * @param splitter The string to partition by. May be a RegExp with `g` flag and NO capture groups
- * @param limit Maximum number of splits done
- * @returns An array containing the partitioned text
+ * @param splitter The string or RegExp to partition by. If a RegExp, must have the 'g' flag.
+ * @param options Configuration options
+ * @param options.limit Maximum number of splits to perform (-1 for unlimited)
+ * @returns An array containing the partitioned text alongside whether that piece was a match or not
  */
 export function partition(
 	text: string,
@@ -61,69 +61,63 @@ export function partition(
 	options: {
 		limit?: number
 	} = { limit: -1 }
-): string[] {
+): { text: string; matched: boolean }[] {
+	options.limit = options.limit ?? -1
 	if (options.limit === 0) {
-		return [text]
+		return [{ text, matched: false }]
 	}
 
-	const split = text.split(splitter)
+	// Convert string splitter to regex with capture group
+	const regex =
+		typeof splitter === "string"
+			? new RegExp(`(${escapeRegExp(splitter)})`, "g")
+			: splitter
 
-	if (typeof splitter === "string") {
-		const length = split.length
-		for (let i = 1; i < length; i++) {
-			if (i - 1 === options.limit) {
-				split.slice(i).reduce((acc, curr, idx) => {
-					if (idx < split.length - 1) {
-						return acc + curr + splitter
-					} else {
-						return acc + curr
-					}
-				}, "")
-			} else {
-				split.splice(i, 0, splitter)
-			}
-		}
-		return split
-	} else {
-		const matches = [...text.matchAll(splitter)]
-		if (!matches || matches.length === 0) {
-			return [text]
-		}
-		const out: string[] = []
-		// Each step we mix a split and a match
-		for (let i = 0; i < split.length; i++) {
-			if (i === 0) {
-				out.push(split[0])
-			} else {
-				// We drain the matches array bit by bit
-				// Since split and matches are created by the same regex, we are guaranteed to
-				// not shift() an empty array
-
-				//@ts-ignore
-				out.push(matches.shift()[0])
-				if (i === options.limit) {
-					// If we reach the limit, we reduce all of the remaining splits/matches into a string
-					const rest = split
-						.slice(options.limit)
-						.reduce((acc, curr) => {
-							if (matches.length > 0) {
-								//@ts-ignore
-								const m = matches.shift()[0]
-								return acc + curr + m
-							} else {
-								return acc + curr
-							}
-						}, "")
-					out.push(rest)
-					break
-				} else {
-					out.push(split[i])
-				}
-			}
-		}
-
-		return out
+	// Ensure regex has global flag
+	if (!regex.global) {
+		throw new Error("RegExp splitter must have the global (g) flag")
 	}
+
+	const result: { text: string; matched: boolean }[] = []
+	let lastIndex = 0
+	let splitCount = 0
+	const matches = [...text.matchAll(regex)]
+
+	for (const match of matches) {
+		if (options.limit >= 0 && splitCount >= options.limit) {
+			break
+		}
+
+		// Add text before match
+		if (match.index > lastIndex) {
+			result.push({
+				text: text.slice(lastIndex, match.index),
+				matched: false,
+			})
+		}
+
+		// Add the match itself
+		result.push({ text: match[0], matched: true })
+		lastIndex = match.index + match[0].length
+		splitCount += 1
+	}
+
+	// Add remaining text
+	if (lastIndex < text.length) {
+		result.push({ text: text.slice(lastIndex), matched: false })
+	}
+
+	// Handle case where there were no matches
+	if (result.length === 0) {
+		return [{ text, matched: false }]
+	}
+
+	return result
+}
+
+// Helper to escape regex special characters in strings
+function escapeRegExp(string: string): string {
+	return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
 /**

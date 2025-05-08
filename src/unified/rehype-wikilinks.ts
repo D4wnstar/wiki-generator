@@ -1,7 +1,7 @@
 import { slug } from "github-slugger"
 import type { Element, ElementContent, Root } from "hast"
 import { h } from "hastscript"
-import { wikilinkRegex, wikilinkRegexNoGroups } from "src/notes/regexes"
+import { wikilinkRegex } from "src/notes/regexes"
 import { slugPath } from "src/utils"
 import { partition } from "src/utils"
 import { visit } from "unist-util-visit"
@@ -28,7 +28,7 @@ function handleElement(
 	titleToPath: Map<string, string>,
 	imageNameToPath: Map<string, string>
 ) {
-	// Ignore code and pre blocks
+	// Ignore empty blocks and also code and pre blocks
 	if (
 		elem.children.length === 0 ||
 		elem.tagName === "code" ||
@@ -36,51 +36,54 @@ function handleElement(
 	) {
 		return
 	}
-	let idx = 0
-	//eslint-disable-next-line
-	while (true) {
-		const currChild = elem.children[idx]
-		// Loop until there are children nodes
-		if (!currChild || idx > 1000) {
-			break
-		}
+
+	// Process all text children
+	for (let i = elem.children.length - 1; i >= 0; i--) {
+		const child = elem.children[i]
 		// Ignore anything that's not text
-		if (currChild.type !== "text") {
-			idx += 1
-			continue
-		}
+		if (child.type !== "text") continue
 
-		const text = currChild.value
-		const parts = partition(text, wikilinkRegexNoGroups, { limit: 1 })
-		if (parts.length !== 3) {
-			idx += 1
-			continue
-		}
-		const preNode = {
-			type: "text",
-			value: parts[0],
-		} as ElementContent
-		const postNode = {
-			type: "text",
-			value: parts[2],
-		} as ElementContent
+		const text = child.value
+		if (!text.match(wikilinkRegex)) continue
 
-		const props = findWikilinkProperties(
-			parts[1],
-			titleToPath,
-			imageNameToPath
-		)
+		// Split text into parts separated by wikilinks
+		const parts = partition(text, wikilinkRegex)
+		const newChildren: ElementContent[] = []
+		let hasWikilink = false
 
-		const linkNode = props.remove
-			? ({
+		for (const part of parts) {
+			if (!part.matched) {
+				// Anything that didn't match is just normal text
+				newChildren.push({
 					type: "text",
-					value: props.linkText,
-			  } as ElementContent)
-			: h("a", { class: props.class, href: props.href }, [props.linkText])
+					value: part.text,
+				})
+			} else {
+				hasWikilink = true
+				const props = findWikilinkProperties(
+					part.text,
+					titleToPath,
+					imageNameToPath
+				)
+				// If the wikilink is to be removed, just keep the text
+				// otherwise add an anchor tag
+				newChildren.push(
+					props.remove
+						? {
+								type: "text",
+								value: props.linkText,
+						  }
+						: h("a", { class: props.class, href: props.href }, [
+								props.linkText,
+						  ])
+				)
+			}
+		}
 
-		elem.children.splice(idx, 1, ...[preNode, linkNode, postNode])
-
-		idx += 1
+		if (hasWikilink) {
+			// Replace original text node with processed nodes
+			elem.children.splice(i, 1, ...newChildren)
+		}
 	}
 }
 
@@ -96,8 +99,7 @@ function findWikilinkProperties(
 	titleToPath: Map<string, string>,
 	imageNameToPath: Map<string, string>
 ): Wikilink {
-	const wikilingNoGlobal = new RegExp(wikilinkRegex, "")
-	const rmatch = link.match(wikilingNoGlobal)
+	const rmatch = [...link.matchAll(wikilinkRegex)].at(0)
 	if (!rmatch) {
 		return {
 			linkText: link,

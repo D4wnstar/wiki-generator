@@ -15,8 +15,17 @@ interface WorkingContentChunk extends ContentChunk {
 
 abstract class Block {
 	protected static getRegex(name: string): RegExp {
-		return new RegExp(`^:::\\s*${name}(\\(.*?\\))?\\n(.*?)\\n:::`, "gms")
+		return new RegExp(
+			`^:::\\s*${name}(?:\\((.*?)\\))?\\n(.*?)\\n:::`,
+			"gms"
+		)
 		// Group 1 is args, if any. Group 2 is block content.
+		// General block syntax is
+		//
+		// :::block-name(maybe, args)
+		// Block content here
+		// On however many lines
+		// ::::
 	}
 
 	/**
@@ -144,7 +153,7 @@ class ImageBlock extends Block {
 		const matches = [
 			...md.matchAll(regex).filter((match) =>
 				// Ignore anything that's not marked sidebar
-				this.parseArgs(match[1]).includes("sidebar")
+				this.parseArgs(match.at(1) ?? "").includes("sidebar")
 			),
 		]
 		if (matches.length === 0) return { md, images: [] }
@@ -203,18 +212,25 @@ class ImageBlock extends Block {
 			}
 
 			const splits = partition(chunk.text, imageRegex)
+
 			if (splits.length === 1) {
 				outChunks.push(chunk)
 				continue
 			}
 
 			const newChunks: WorkingContentChunk[] = await Promise.all(
-				splits.map(async (split, idx) => {
-					const match = split.match(imageRegex)
-					if (!match) return chunk
+				splits.map(async (split) => {
+					const newChunk: WorkingContentChunk = {
+						...chunk,
+						text: split.text,
+						locked: split.matched,
+					}
 
-					const blockArgs = this.parseArgs(match[1])
-					if (blockArgs.includes("sidebar")) return chunk
+					const match = imageRegex.exec(split.text)
+					if (!match) return newChunk
+
+					const blockArgs = this.parseArgs(match.at(1) ?? "")
+					if (blockArgs.includes("sidebar")) return newChunk
 
 					const contents = match[2]
 					const { image_path, caption } = await this.processBlock(
@@ -222,12 +238,12 @@ class ImageBlock extends Block {
 						args.processor,
 						args.imageNameToPath
 					)
-					const odd = idx % 2 === 1
 					return {
-						...chunk,
-						text: odd ? caption ?? "" : chunk.text,
-						image_path: odd ? image_path : chunk.image_path,
-						locked: odd,
+						...newChunk,
+						text: split.matched ? caption ?? "" : newChunk.text,
+						image_path: split.matched
+							? image_path
+							: chunk.image_path,
 					}
 				})
 			)
@@ -235,7 +251,7 @@ class ImageBlock extends Block {
 			outChunks.push(...newChunks)
 		}
 
-		return { chunks }
+		return { chunks: outChunks }
 	}
 
 	private static async processBlock(
@@ -301,20 +317,21 @@ class SecretBlock extends Block {
 			)
 
 			const newChunks: WorkingContentChunk[] = splits.map(
-				(text, idx) => ({
+				(split, idx) => ({
 					...chunk,
-					chunk_id: chunk.chunk_id + idx,
-					text:
-						idx % 2 === 1 ? text.replace(secretRegex, "$2") : text,
-					allowed_users:
-						idx % 2 === 1 ? secretUsers[Math.floor(idx / 2)] : null,
+					text: split.matched
+						? split.text.replace(secretRegex, "$2")
+						: split.text,
+					allowed_users: split.matched
+						? secretUsers[Math.floor(idx / 2)]
+						: null,
 				})
 			)
 
 			outChunks.push(...newChunks)
 		}
 
-		return { chunks }
+		return { chunks: outChunks }
 	}
 }
 
@@ -351,11 +368,10 @@ class WikilinkTransclusion {
 			for (const [idx, split] of splits.entries()) {
 				const newChunk: WorkingContentChunk = {
 					...chunk,
-					text: idx % 2 === 1 ? "" : split,
-					chunk_id: chunk.chunk_id + idx,
-					locked: idx % 2 === 1,
+					text: split.matched ? "" : split.text,
+					locked: split.matched,
 				}
-				if (idx % 2 !== 1) {
+				if (!split.matched) {
 					outChunks.push(newChunk)
 					continue
 				}

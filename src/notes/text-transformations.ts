@@ -227,7 +227,7 @@ export async function convertWikilinks(
 			newChunks.push({ ...chunk, text: newText })
 		}
 
-		// Process all Details. Only values need to converted
+		// Process all Details. Only values need to be converted
 		const newDetails: Detail[] = []
 		for (const detail of page.details) {
 			let newValue: string | null

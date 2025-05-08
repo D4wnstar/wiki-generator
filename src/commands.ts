@@ -214,13 +214,6 @@ export async function uploadNotes(
 		vault
 	)
 	const uploadedNotes = pages.size
-	console.log([
-		...pages
-			.values()
-			.filter((page) =>
-				page.chunks.some((chunk) => chunk.image_path?.endsWith(".svg"))
-			),
-	])
 
 	// Initialize one last processor to handle wikilink conversion
 	const postprocessor = unified()
