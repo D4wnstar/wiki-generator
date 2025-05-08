@@ -127,7 +127,7 @@ class DetailsBlock extends Block {
 class ImageBlock extends Block {
 	/**
 	 * Parse the contents of an :::image::: block, but only if it has the "sidebar" argument.
-	 * Inline images are nadled by applyOnChunks
+	 * Inline images are handled by `applyOnChunks`.
 	 * @param md The markdown to process
 	 * @param processor A unified processor to convert the caption into HTML
 	 * @param imageNameToPath A Map linking image filenames into their path in the database
@@ -157,45 +157,20 @@ class ImageBlock extends Block {
 		for (const i in matches) {
 			const index = parseInt(i)
 			const match = matches[index]
+			const contents = match[2]
 
 			// Delete the block from the page before errors happen
 			md = md.replace(match[0], "")
 
-			// const maybeArgs = match[1]
-			const contents = match[2]
-
-			const lines = contents.split("\n").filter((line) => line !== "")
-			if (lines.length === 0) {
-				throw new Error(`Improperly formatted`)
-			}
-
-			// Grab the image filename from the wikilink
-			const wikilink = lines[0].match(/!\[\[(.*?)(\|.*)?\]\]/)
-			if (!wikilink) {
-				throw new Error(`No image link`)
-			}
-			const imageFile = wikilink[1]
-
-			// Grab the path of the current image
-			const image_path = args.imageNameToPath.get(imageFile)
-			if (!image_path) {
-				throw new Error(
-					`Could not find full path to image '${imageFile}'`
-				)
-			}
-
-			// Then the caption, if present
-			let caption: string | null
-			if (lines.length > 1) {
-				caption = lines.splice(1).join("\n")
-				caption = (await args.processor.process(caption)).toString()
-			} else {
-				caption = null
-			}
+			const { image_name, image_path, caption } = await this.processBlock(
+				contents,
+				args.processor,
+				args.imageNameToPath
+			)
 
 			images.push({
 				order: index + 1,
-				image_name: imageFile,
+				image_name,
 				image_path,
 				caption,
 			})
@@ -204,7 +179,99 @@ class ImageBlock extends Block {
 		return { md, images }
 	}
 
-	// TODO: Implement applyOnChunks for non-sidebar images
+	/**
+	 * Parse the contents of an :::image::: block, excluding ones with the "sidebar" argument.
+	 * Sidebar images are handled by `extract`.
+	 * @param chunks The chunks to process
+	 * @param processor A unified processor to convert the caption into HTML
+	 * @param imageNameToPath A Map linking image filenames into their path in the database
+	 * @returns The modified chunks
+	 */
+	static async applyOnChunks(
+		chunks: WorkingContentChunk[],
+		args: {
+			processor: Processor<Root, Root, Root, Root, string>
+			imageNameToPath: Map<string, string>
+		}
+	) {
+		const imageRegex = this.getRegex("image")
+		const outChunks = []
+		for (const chunk of chunks) {
+			if (chunk.locked) {
+				outChunks.push(chunk)
+				continue
+			}
+
+			const splits = partition(chunk.text, imageRegex)
+			if (splits.length === 1) {
+				outChunks.push(chunk)
+				continue
+			}
+
+			const newChunks: WorkingContentChunk[] = await Promise.all(
+				splits.map(async (split, idx) => {
+					const match = split.match(imageRegex)
+					if (!match) return chunk
+
+					const blockArgs = this.parseArgs(match[1])
+					if (blockArgs.includes("sidebar")) return chunk
+
+					const contents = match[2]
+					const { image_path, caption } = await this.processBlock(
+						contents,
+						args.processor,
+						args.imageNameToPath
+					)
+					const odd = idx % 2 === 1
+					return {
+						...chunk,
+						text: odd ? caption ?? "" : chunk.text,
+						image_path: odd ? image_path : chunk.image_path,
+						locked: odd,
+					}
+				})
+			)
+
+			outChunks.push(...newChunks)
+		}
+
+		return { chunks }
+	}
+
+	private static async processBlock(
+		contents: string,
+		processor: Processor<Root, Root, Root, Root, string>,
+		imageNameToPath: Map<string, string>
+	) {
+		const lines = contents.split("\n").filter((line) => line !== "")
+		if (lines.length === 0) {
+			throw new Error(`Improperly formatted`)
+		}
+
+		// Grab the image filename from the wikilink
+		const wikilink = lines[0].match(/!\[\[(.*?)(\|.*)?\]\]/)
+		if (!wikilink) {
+			throw new Error(`No image link`)
+		}
+		const image_name = wikilink[1]
+
+		// Grab the path of the current image
+		const image_path = imageNameToPath.get(image_name)
+		if (!image_path) {
+			throw new Error(`Could not find full path to image '${image_name}'`)
+		}
+
+		// Then the caption, if present
+		let caption: string | null
+		if (lines.length > 1) {
+			caption = lines.splice(1).join("\n")
+			caption = (await processor.process(caption)).toString()
+		} else {
+			caption = null
+		}
+
+		return { image_name, image_path, caption }
+	}
 }
 
 class SecretBlock extends Block {
@@ -251,7 +318,8 @@ class SecretBlock extends Block {
 	}
 }
 
-// TODO: Use the order of the chunk array for the ids instead of assigning them here
+// TODO: Remove chunk_id from everywhere since it's now unused
+// (assigned based on array index instead)
 
 // A bit of a "fake" block in that it does not actually inherit from Block but the
 // use case is the same
@@ -384,6 +452,10 @@ export async function handleCustomSyntax(
 		locked: false,
 	}
 	let wChunks = await SecretBlock.applyOnChunks([initialChunk])
+	wChunks = await ImageBlock.applyOnChunks(wChunks.chunks, {
+		processor,
+		imageNameToPath,
+	})
 	wChunks = WikilinkTransclusion.applyOnChunks(wChunks.chunks, {
 		imageNameToPath,
 		noteNameToPath,
