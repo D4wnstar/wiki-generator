@@ -109,7 +109,11 @@ class DetailsBlock extends Block {
 
 			if (split.length === 1) {
 				// Key-only details are valid
-				const key = await args.processor.process(split[0])
+				// A single dash is used as an <hr> in the frontend
+				const key =
+					split[0] === "-"
+						? ""
+						: await args.processor.process(split[0])
 				details.push({
 					order: index + 1,
 					key: key.toString(),
