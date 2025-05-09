@@ -1,4 +1,4 @@
-import { Notice, TFile, Vault } from "obsidian"
+import { Notice, request, TFile, Vault } from "obsidian"
 import { WikiGeneratorSettings } from "./settings"
 import { getPublishableFiles, imageToArrayBuffer } from "./utils"
 import { unified } from "unified"
@@ -256,10 +256,10 @@ export async function uploadNotes(
 	await adapter.close()
 
 	// Ping Vercel so it rebuilds the site
-	// if (!settings.localExport) {
-	// 	console.log("Sending POST request to deploy hook")
-	// 	request({ url: settings.deployHook, method: "POST" })
-	// }
+	if (!settings.localExport) {
+		console.log("Sending POST request to deploy hook")
+		request({ url: settings.deployHook, method: "POST" })
+	}
 
 	console.log(`Successfully uploaded ${uploadedNotes} notes`)
 	console.log("-".repeat(10), "[WIKI GENERATOR UPLOAD END]", "-".repeat(10))
