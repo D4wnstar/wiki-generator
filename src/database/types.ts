@@ -7,11 +7,12 @@ export type Note = {
 	search_terms: string
 	path: string
 	slug: string
-	frontpage: string | number
+	frontpage: string | number // actually boolean but SQLite is jank
 	lead: string
 	allowed_users: string | null
 	hash: string
 	last_updated: number
+	can_prerender: number // actually boolean but SQLite is jank
 }
 
 export type Frontmatter = {

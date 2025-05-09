@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS notes (
 	lead TEXT NOT NULL,
 	allowed_users TEXT,
 	hash TEXT NOT NULL, -- hash is calculated BEFORE preprocessing anything!
-	last_updated INTEGER NOT NULL
+	last_updated INTEGER NOT NULL,
+	can_prerender BOOLEAN NOT NULL
 );`
 
 const createImages = `
@@ -125,8 +126,9 @@ INSERT INTO notes (
 	lead,
 	allowed_users,
 	hash,
-	last_updated
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+	last_updated,
+	can_prerender
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 
 const insertNoteContents = `
 INSERT INTO note_contents (
@@ -376,6 +378,7 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 					allowed_users: val[7] as string | null,
 					hash: val[8] as string,
 					last_updated: val[9] as number,
+					can_prerender: val[10] as number,
 				}
 			}) ?? []
 		)
@@ -410,6 +413,7 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 					page.note.allowed_users,
 					page.note.hash,
 					page.note.last_updated,
+					page.note.can_prerender,
 				],
 			})
 
@@ -617,6 +621,7 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 					page.note.allowed_users,
 					page.note.hash,
 					page.note.last_updated,
+					page.note.can_prerender,
 				],
 			})
 

@@ -158,11 +158,21 @@ function handleImageReference(
 		? imageTitleOrPath.split("/").last() ?? ""
 		: imageTitleOrPath
 
-	const imageId = imageNameToPath.get(imageName)
-	return {
-		linkText: imageTitleOrPath,
-		href: `/api/v1/image?image_id=${imageId}`,
-		class: "anchor",
-		remove: false,
+	const imagePath = imageNameToPath.get(imageName)
+	if (imagePath) {
+		return {
+			linkText: imageTitleOrPath,
+			// NOTE: This won't work if the image is an SVG
+			href: `/api/v1/image-blob/${encodeURIComponent(imagePath)}`,
+			class: "anchor",
+			remove: false,
+		}
+	} else {
+		return {
+			linkText: imageTitleOrPath,
+			href: "",
+			class: "",
+			remove: true,
+		}
 	}
 }

@@ -92,20 +92,31 @@ export async function makePagesFromFiles(
 		titleToPath.set(title.toLowerCase(), slug)
 
 		// Get aliases as search terms
-		const aliases = frontmatter["aliases"]?.join("; ")
+		const alt_title = frontmatter["wiki-title"] ?? null
+		const aliases = frontmatter["aliases"]?.join("; ") as string | undefined
+		let search_terms = title
+		search_terms += alt_title ? `; ${alt_title}` : ""
+		search_terms += aliases ? `; ${aliases}` : ""
+
+		// A page can be prerendered if it does not depend on user permission
+		const allowed_users =
+			frontmatter["wiki-allowed-users"]?.join("; ") ?? null
+		const requiresAuth =
+			allowed_users !== null ||
+			chunks.some((chunk) => chunk.allowed_users !== null)
 
 		const note: Note = {
 			title,
-			alt_title: frontmatter["wiki-title"] ?? null,
-			search_terms: aliases ? `${title}; ${aliases}` : title,
+			alt_title,
+			search_terms,
 			path,
 			slug: slug,
 			frontpage: frontmatter["wiki-home"] ?? 0,
 			lead,
-			allowed_users:
-				frontmatter["wiki-allowed-users"]?.join("; ") ?? null,
+			allowed_users,
 			hash,
 			last_updated: lastUpdated,
+			can_prerender: Number(!requiresAuth),
 		}
 		pages.set(path, { note, chunks, details, sidebarImages })
 	}
