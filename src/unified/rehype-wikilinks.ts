@@ -162,8 +162,7 @@ function handleImageReference(
 	if (imagePath) {
 		return {
 			linkText: imageTitleOrPath,
-			// NOTE: This won't work if the image is an SVG
-			href: `/api/v1/image-blob/${encodeURIComponent(imagePath)}`,
+			href: `/api/v1/image/${encodeURIComponent(imagePath)}`,
 			class: "anchor",
 			remove: false,
 		}
