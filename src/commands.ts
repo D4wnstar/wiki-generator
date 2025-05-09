@@ -55,6 +55,7 @@ export async function uploadNotes(
 		)
 	}
 
+	console.log("-".repeat(10), "[WIKI GENERATOR UPLOAD START]", "-".repeat(10))
 	console.log("Uploading notes...")
 	new Notice("Uploading notes. This might take a while...")
 
@@ -261,6 +262,7 @@ export async function uploadNotes(
 	// }
 
 	console.log(`Successfully uploaded ${uploadedNotes} notes`)
+	console.log("-".repeat(10), "[WIKI GENERATOR UPLOAD END]", "-".repeat(10))
 }
 
 /**

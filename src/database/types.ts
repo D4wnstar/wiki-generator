@@ -4,6 +4,7 @@ import { WikiGeneratorSettings } from "src/settings"
 export type Note = {
 	title: string
 	alt_title: string | null
+	search_terms: string
 	path: string
 	slug: string
 	frontpage: string | number
@@ -18,7 +19,7 @@ export type Frontmatter = {
 	"wiki-title": string | undefined
 	"wiki-home": string | undefined
 	"wiki-allowed-users": string[] | undefined
-}
+} & Record<string, any>
 
 export type Detail = {
 	order: number

@@ -91,9 +91,13 @@ export async function makePagesFromFiles(
 		// Save the current title/slug pair for later use
 		titleToPath.set(title.toLowerCase(), slug)
 
+		// Get aliases as search terms
+		const aliases = frontmatter["aliases"]?.join("; ")
+
 		const note: Note = {
 			title,
 			alt_title: frontmatter["wiki-title"] ?? null,
+			search_terms: aliases ? `${title}; ${aliases}` : title,
 			path,
 			slug: slug,
 			frontpage: frontmatter["wiki-home"] ?? 0,

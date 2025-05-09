@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS notes (
 	path TEXT PRIMARY KEY,
 	title TEXT NOT NULL,
 	alt_title TEXT,
+	search_terms TEXT NOT NULL, -- semicolon separated list. Default should be alt_title ?? title
 	slug TEXT UNIQUE NOT NULL,
 	frontpage BOOLEAN DEFAULT FALSE,
 	lead TEXT NOT NULL,
@@ -118,13 +119,14 @@ INSERT INTO notes (
 	path,
 	title,
 	alt_title,
+	search_terms,
 	slug,
 	frontpage,
 	lead,
 	allowed_users,
 	hash,
 	last_updated
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
 
 const insertNoteContents = `
 INSERT INTO note_contents (
@@ -177,7 +179,7 @@ INSERT OR REPLACE INTO users (
 	password
 ) VALUES (?, ?, ?);`
 
-const selectImageData = `SELECT path, hash FROM images`
+const selectImageData = `SELECT path, hash FROM images;`
 
 /**
  * Get the schema for a table using `PRAGMA table_info`
@@ -220,25 +222,53 @@ function schemaChanged(current: any[], desired: string): boolean {
 				line.trim().length > 0
 		)
 		.map((line) => {
-			const parts = line.trim().replace(/,$/, "").split(/\s+/)
+			const trimmed = line.trim().replace(/,$/, "")
+			const nameMatch = trimmed.match(/^"?([^"\s]+)"?/)
+			if (!nameMatch) return null
+
+			const name = nameMatch[1]
+			const remaining = trimmed.slice(nameMatch[0].length).trim()
+			const typeMatch = remaining.match(/^([^\s,]+)/)
+			if (!typeMatch) return null
+
 			return {
-				name: parts[0].replace(/"/g, ""),
-				type: parts[1].toUpperCase(),
-				constraints: parts.slice(2).join(" ").toUpperCase(),
+				name,
+				type: typeMatch[1].toUpperCase(),
+				// Ignore constraints for comparison
 			}
 		})
+		.filter(Boolean) // Filter out any nulls from failed parsing
 
 	// If the number of columns is different, that's obviously a different schema
-	if (current.length !== desiredCols.length) return true
+	if (current.length !== desiredCols.length) {
+		console.debug(
+			`Schema column count mismatch: current=${current.length}, desired=${desiredCols.length}`
+		)
+		return true
+	}
 
 	// Check each individual column name and type
 	for (let i = 0; i < current.length; i++) {
 		const currCol = current[i]
 		const desCol = desiredCols[i]
 
-		if (currCol.name !== desCol.name) return true
-		if (currCol.type !== desCol.type) return true
-		// Skip constraints check for simplicity
+		if (!desCol) {
+			console.debug(`Missing desired column at position ${i}`)
+			return true
+		}
+
+		if (currCol.name !== desCol.name) {
+			console.debug(
+				`Column name mismatch at position ${i}: current='${currCol.name}', desired='${desCol.name}'`
+			)
+			return true
+		}
+		if (currCol.type.toUpperCase() !== desCol.type) {
+			console.debug(
+				`Column type mismatch at position ${i}: current='${currCol.type}', desired='${desCol.type}'`
+			)
+			return true
+		}
 	}
 
 	return false
@@ -339,12 +369,13 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 					path: val[0] as string,
 					title: val[1] as string,
 					alt_title: val[2] as string | null,
-					slug: val[3] as string,
-					frontpage: val[4] as string | number,
-					lead: val[5] as string,
-					allowed_users: val[6] as string | null,
-					hash: val[7] as string,
-					last_updated: val[8] as number,
+					search_terms: val[3] as string,
+					slug: val[4] as string,
+					frontpage: val[5] as string | number,
+					lead: val[6] as string,
+					allowed_users: val[7] as string | null,
+					hash: val[8] as string,
+					last_updated: val[9] as number,
 				}
 			}) ?? []
 		)
@@ -372,6 +403,7 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 					notePath,
 					page.note.title,
 					page.note.alt_title,
+					page.note.search_terms,
 					page.note.slug,
 					page.note.frontpage,
 					page.note.lead,
@@ -578,6 +610,7 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 					notePath,
 					page.note.title,
 					page.note.alt_title,
+					page.note.search_terms,
 					page.note.slug,
 					page.note.frontpage,
 					page.note.lead,
