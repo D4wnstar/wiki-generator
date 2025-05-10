@@ -14,21 +14,8 @@ import {
 } from "./notes/text-transformations"
 import { DatabaseAdapter, Pages } from "./database/types"
 
-import remarkParse from "remark-parse"
-import remarkGfm from "remark-gfm"
-import remarkFrontmatter from "remark-frontmatter"
-import remarkRehype from "remark-rehype"
-import remarkMath from "remark-math"
-import remarkFrontmatterExport from "./unified/remark-frontmatter-export"
-
-import rehypeStylist from "./unified/rehype-stylist"
 import rehypeParse from "rehype-parse"
 import rehypeWikilinks from "./unified/rehype-wikilinks"
-import rehypeCallouts from "rehype-callouts"
-import rehypePrism from "rehype-prism-plus"
-import rehypeKatex from "rehype-katex"
-import rehypeMermaid from "rehype-mermaid"
-import rehypeSlug from "rehype-slug"
 import rehypeStringify from "rehype-stringify"
 import { propsRegex, wikilinkRegex } from "./notes/regexes"
 import * as crypto from "crypto"
@@ -156,27 +143,6 @@ export async function uploadNotes(
 	console.log(`Inserting ${uploadedImages} images...`)
 	await adapter.insertImages(imagesToInsert)
 
-	// Initialize two unified processors to handle syntax conversion and frontmatter export
-	const processor = unified()
-		.use(remarkParse) // Parse markdown into a syntax tree
-		.use(remarkMath) // Parse $inline$ and $$display$$ math blocks
-		.use(remarkGfm, { singleTilde: false }) // Parse Github-flavored markdown
-		.use(remarkFrontmatter) // Expose frontmatter in the syntax tree
-		.use(remarkRehype, { allowDangerousHtml: true }) // Convert to an HTML syntax tree
-		.use(rehypeSlug) // Add ids to headers
-		.use(rehypeCallouts) // Handle Obsidian-style callouts
-		.use(rehypeStylist) // Add classes to tags that are unstyled in Tailwind
-		.use(rehypePrism, { ignoreMissing: true }) // Highlight code blocks
-		.use(rehypeKatex) // Render LaTeX math with KaTeX
-		.use(rehypeMermaid, { strategy: "img-svg", dark: true }) // Render Mermaid diagrams
-		.use(rehypeStringify, { allowDangerousHtml: true }) // Compile syntax tree into an HTML string
-
-	const frontmatterProcessor = unified()
-		.use(remarkFrontmatter)
-		.use(remarkFrontmatterExport) // Export the frontmatter into an array
-		.use(rehypeParse)
-		.use(rehypeStringify)
-
 	// Fetch all markdown files and filter out ones that are unchanged since the last upload
 	console.log("Converting Markdown to HTML...")
 	const existingHashes = new Map<string, string>()
@@ -207,9 +173,6 @@ export async function uploadNotes(
 	// Convert them into rich data structures
 	const { pages, titleToPath } = await makePagesFromFiles(
 		files,
-		//@ts-ignore
-		processor,
-		frontmatterProcessor,
 		imageNameToPath,
 		vault
 	)

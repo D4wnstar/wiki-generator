@@ -1,7 +1,7 @@
 import { TFile, Vault } from "obsidian"
 import { Root } from "remark-parse/lib"
 import { ensureUniqueSlug, slugPath } from "src/utils"
-import { Processor } from "unified"
+import { Processor, unified } from "unified"
 import { handleCustomSyntax } from "./custom-blocks"
 import {
 	ContentChunk,
@@ -11,6 +11,22 @@ import {
 	Pages,
 	SidebarImage,
 } from "../database/types"
+
+import remarkParse from "remark-parse"
+import remarkGfm from "remark-gfm"
+import remarkFrontmatter from "remark-frontmatter"
+import remarkRehype from "remark-rehype"
+import remarkMath from "remark-math"
+import remarkFrontmatterExport from "../unified/remark-frontmatter-export"
+
+import rehypeStylist from "../unified/rehype-stylist"
+import rehypeParse from "rehype-parse"
+import rehypeCallouts from "rehype-callouts"
+import rehypePrism from "rehype-prism-plus"
+import rehypeKatex from "rehype-katex"
+import rehypeMermaid from "rehype-mermaid"
+import rehypeSlug from "rehype-slug"
+import rehypeStringify from "rehype-stringify"
 
 /**
  * Convert Markdown files into rich data structures encoding their contents.
@@ -24,8 +40,6 @@ import {
  */
 export async function makePagesFromFiles(
 	files: { file: TFile; hash: string }[],
-	processor: Processor<Root, Root, Root, Root, string>,
-	frontmatterProcessor: Processor<Root, undefined, undefined, Root, string>,
 	imageNameToPath: Map<string, string>,
 	vault: Vault
 ): Promise<{ pages: Pages; titleToPath: Map<string, string> }> {
@@ -41,6 +55,27 @@ export async function makePagesFromFiles(
 		noteNameToPath.set(file.basename, { path: file.path, isExcalidraw })
 	}
 
+	// Initialize two unified processors to handle syntax conversion and frontmatter export
+	const processor = unified()
+		.use(remarkParse) // Parse markdown into a syntax tree
+		.use(remarkGfm, { singleTilde: false }) // Parse Github-flavored markdown
+		.use(remarkMath) // Parse $inline$ and $$display$$ math blocks
+		.use(remarkFrontmatter) // Expose frontmatter in the syntax tree
+		.use(remarkRehype, { allowDangerousHtml: true }) // Convert to an HTML syntax tree
+		.use(rehypeKatex, { trust: true }) // Render LaTeX math with KaTeX
+		.use(rehypeSlug) // Add ids to headers
+		// .use(rehypeCallouts) // Handle Obsidian-style callouts
+		.use(rehypeStylist) // Add classes to tags that are unstyled in Tailwind
+		.use(rehypePrism, { ignoreMissing: true }) // Highlight code blocks
+		.use(rehypeMermaid, { strategy: "img-svg", dark: true }) // Render Mermaid diagrams
+		.use(rehypeStringify, { allowDangerousHtml: true }) // Compile syntax tree into an HTML string
+
+	const frontmatterProcessor = unified()
+		.use(remarkFrontmatter)
+		.use(remarkFrontmatterExport) // Export the frontmatter into an array
+		.use(rehypeParse)
+		.use(rehypeStringify)
+
 	// Keep track of previous slugs to avoid collisions
 	// This is done manually despite using github-slugger because slugger turns
 	// '/' into '-' and breaks paths, so it is instead ran on each path element
@@ -53,16 +88,16 @@ export async function makePagesFromFiles(
 		const slug = ensureUniqueSlug(slugPath(file.path), previousSlugs)
 		previousSlugs.add(slug)
 
-		const content = await vault.read(file)
+		let content = await vault.read(file)
 
 		// Grab the frontmatter first because we need some properties
 		const fmVfile = await frontmatterProcessor.process(content)
 		const frontmatter = fmVfile.data.matter as Frontmatter
 
 		// Skip pages that shouldn't be published (wiki-publish is either false or undefined)
-		if (!frontmatter["wiki-publish"]) {
-			continue
-		}
+		if (!frontmatter["wiki-publish"]) continue
+
+		content = content.replaceAll(/^>\s*\$+(.*?)\$+/gm, "\n\n$1\n\n")
 
 		// Parse and replace custom :::blocks::: and delete Obsidian comments
 		// Codeblocks are removed and added back later to keep them unmodified
