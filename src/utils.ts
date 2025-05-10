@@ -121,6 +121,27 @@ function escapeRegExp(string: string): string {
 }
 
 /**
+ * Like `String.prototype.replaceAll`, but allows an async replacement function.
+ * ```javascript
+ * replaceAllAsync(text, regexp, replacer) === text.replaceAll(regexp, replacer)
+ * ```
+ */
+export async function replaceAllAsync(
+	text: string,
+	regexp: RegExp,
+	replacer: (substring: string, ...args: any[]) => Promise<string>
+) {
+	const matches = [...text.matchAll(regexp)]
+	const processed = await Promise.all(
+		matches.map((match) => replacer(match[0], ...match.slice(1)))
+	)
+	return matches.reduce(
+		(str, match, i) => str.replace(match[0], processed[i]),
+		text
+	)
+}
+
+/**
  * Convert an image from the Vault into webp, possibly downscaling it, and return its
  * Blob representation.
  * @param file The image's TFile

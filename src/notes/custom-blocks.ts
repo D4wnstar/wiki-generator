@@ -426,7 +426,8 @@ class WikilinkTransclusion {
 export async function handleCustomSyntax(
 	md: string,
 	filename: string,
-	processor: Processor<Root, Root, Root, Root, string>,
+	processor: Processor<any, any, any, any, any>,
+	// latexProcessor: Processor<any, any, any, any, any>,
 	imageNameToPath: Map<string, string>,
 	noteNameToPath: Map<string, { path: string; isExcalidraw: boolean }>
 ) {
@@ -463,6 +464,22 @@ export async function handleCustomSyntax(
 	// The quadruple $ is because $ is the backreference character in
 	// regexes and is escaped as $$, so $$$$ -> $$
 	md = md.replace(/^\$\$/gm, "$$$$\n").replace(/\$\$$/gm, "\n$$$$")
+
+	// Find and process all LaTeX display blocks
+	// const latexMatches = [...md.matchAll(/^\$\$(.*?)\$\$/gm)]
+	// const processedLatex = await Promise.all(
+	// 	latexMatches.map(async (match, idx) => {
+	// 		return String(
+	// 			await latexProcessor.process("$$\n" + match[1] + "\n$$")
+	// 		)
+	// 	})
+	// )
+
+	// // Replace each match with its processed version
+	// md = latexMatches.reduce(
+	// 	(str, match, i) => str.replace(match[0], processedLatex[i]),
+	// 	md
+	// )
 
 	// Handle chunking
 	const initialChunk: WorkingContentChunk = {

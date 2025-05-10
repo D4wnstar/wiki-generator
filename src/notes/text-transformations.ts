@@ -1,6 +1,6 @@
 import { TFile, Vault } from "obsidian"
 import { Root } from "remark-parse/lib"
-import { ensureUniqueSlug, slugPath } from "src/utils"
+import { ensureUniqueSlug, replaceAllAsync, slugPath } from "src/utils"
 import { Processor, unified } from "unified"
 import { handleCustomSyntax } from "./custom-blocks"
 import {
@@ -55,7 +55,7 @@ export async function makePagesFromFiles(
 		noteNameToPath.set(file.basename, { path: file.path, isExcalidraw })
 	}
 
-	// Initialize two unified processors to handle syntax conversion and frontmatter export
+	// Initialize unified processors to handle syntax conversion and frontmatter export
 	const processor = unified()
 		.use(remarkParse) // Parse markdown into a syntax tree
 		.use(remarkGfm, { singleTilde: false }) // Parse Github-flavored markdown
@@ -64,11 +64,18 @@ export async function makePagesFromFiles(
 		.use(remarkRehype, { allowDangerousHtml: true }) // Convert to an HTML syntax tree
 		.use(rehypeKatex, { trust: true }) // Render LaTeX math with KaTeX
 		.use(rehypeSlug) // Add ids to headers
-		// .use(rehypeCallouts) // Handle Obsidian-style callouts
+		.use(rehypeCallouts) // Handle Obsidian-style callouts
 		.use(rehypeStylist) // Add classes to tags that are unstyled in Tailwind
-		.use(rehypePrism, { ignoreMissing: true }) // Highlight code blocks
+		.use(rehypePrism, { defaultLanguage: "markdown", ignoreMissing: true }) // Highlight code blocks
 		.use(rehypeMermaid, { strategy: "img-svg", dark: true }) // Render Mermaid diagrams
 		.use(rehypeStringify, { allowDangerousHtml: true }) // Compile syntax tree into an HTML string
+
+	const latexProcessor = unified()
+		.use(remarkParse)
+		.use(remarkMath)
+		.use(remarkRehype, { allowDangerousHtml: true })
+		.use(rehypeKatex, { trust: true })
+		.use(rehypeStringify, { allowDangerousHtml: true })
 
 	const frontmatterProcessor = unified()
 		.use(remarkFrontmatter)
@@ -97,11 +104,22 @@ export async function makePagesFromFiles(
 		// Skip pages that shouldn't be published (wiki-publish is either false or undefined)
 		if (!frontmatter["wiki-publish"]) continue
 
-		content = content.replaceAll(/^>\s*\$+(.*?)\$+/gm, "\n\n$1\n\n")
+		// LaTeX display blocks are kinda broken with the builtin remark/rehype pipeline if they
+		// are not on a clean line. They break if they are on a line with existing formatting, such
+		// as a list, a blockquote or a callout. As a workaround, we extract these manually and process
+		// them in isolation. The HTML is the passed as-is through the main processor
+		content = await replaceAllAsync(
+			content,
+			/^([^\n\$]+?)\$\$(.*?)\$\$/gms,
+			async (_match, before, inner) =>
+				before +
+				String(await latexProcessor.process(`\n$$\n${inner}\n$$\n`))
+		)
 
 		// Parse and replace custom :::blocks::: and delete Obsidian comments
 		// Codeblocks are removed and added back later to keep them unmodified
 		const { md, inlineCode, codeBlocks } = removeCodeblocks(content)
+
 		const { wChunks, details, sidebarImages } = await handleCustomSyntax(
 			md,
 			file.name,
@@ -113,15 +131,9 @@ export async function makePagesFromFiles(
 		const chunks = addCodeblocksBack(wChunks.chunks, inlineCode, codeBlocks)
 
 		// Convert the markdown of each chunk separately
-		chunks.forEach(async (chunk) => {
+		for (const chunk of chunks) {
 			chunk.text = String(await processor.process(chunk.text))
-		})
-
-		// Get everything until the first header as the lead
-		const leadMatch = chunks[0].text.match(/(.+?)(?=<h\d)/s)
-		const lead = leadMatch
-			? unwrapWikilinks(leadMatch[1], false, true)
-			: chunks[0].text
+		}
 
 		// Save the current title/slug pair for later use
 		titleToPath.set(title.toLowerCase(), slug)
@@ -147,7 +159,7 @@ export async function makePagesFromFiles(
 			path,
 			slug: slug,
 			frontpage: frontmatter["wiki-home"] ?? 0,
-			lead,
+			lead: "", // Currently unused, needed for popups once they are reimplemented
 			allowed_users,
 			hash,
 			last_updated: lastUpdated,
@@ -241,12 +253,14 @@ export function unwrapWikilinks(
 	const transclusionRegex = /!\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/g
 	const referenceRegex = /\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/g
 
+	console.log("Replacing transclusions")
 	text = text.replaceAll(transclusionRegex, (_match, groups) => {
 		if (removeTransclusions) return ""
 		if (groups[3]) return groups[3]
 		return groups[1]
 	})
 
+	console.log("Replacing references")
 	text = text.replace(referenceRegex, (_match, groups) => {
 		if (removeReferences) return ""
 		if (groups[3]) return groups[3]
