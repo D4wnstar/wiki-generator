@@ -10,6 +10,7 @@ import {
 	TFolder,
 } from "obsidian"
 import { checkForTemplateUpdates, pullWebsiteUpdates } from "./repository"
+import { resetDatabase } from "./commands"
 
 export interface WikiGeneratorSettings {
 	firstUpload: boolean
@@ -70,7 +71,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Autopublish new notes")
 			.setDesc(
-				"Automatically add the 'wiki-publish' property to new notes. Can be restricted."
+				"Automatically add the 'wiki-publish' property to new notes. Restricted."
 			)
 			.addToggle((toggle) => {
 				toggle
@@ -84,7 +85,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Restrict folders")
 			.setDesc(
-				"Restrict publishing-related commands to work only within these folders. Set the folders below."
+				"Apply folder restrictions. Set the folders below. Any command or setting marked as 'restricted' will respect these."
 			)
 			.addToggle((toggle) => {
 				toggle
@@ -97,17 +98,14 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 
 		const folderDesc = document.createDocumentFragment()
 		folderDesc.append(
-			"Set folders to publish notes from. Commands and settings that automatically set publish state, such as the above 'Autopublish new notes', will only apply to notes created and present in these folders. Note that the 'wiki-publish' property has the final say on whether the note gets published or not, regardless of what folder it's in.",
+			"Restricted commands and settings will only access files from these folders. Anything outside will be ignored. Having no public folders set means that all files are public. Note that this has no bearing on which notes the upload command grabs: that is exclusively determined by the value of 'wiki-publish'",
 			folderDesc.createEl("br"),
 			folderDesc.createEl("br"),
 			"You must provide the full path to the folder, separated by forward slashes. For example:",
-			folderDesc.createEl("br"),
 			folderDesc.createEl("code", {
 				text: "University/Course Notes/Stellar Evolution",
 			}),
-			folderDesc.createEl("br"),
-			folderDesc.createEl("strong", { text: "Hot Tip:" }),
-			" If you right click on a folder, you'll see two options to add it here automatically."
+			". You can also add a folder by right clicking it in the file browser. Remember to update these if you change the names of the folder as it won't be done automatically!"
 		)
 		new Setting(containerEl)
 			.setName("Public folders")
@@ -153,7 +151,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Private folders")
 			.setDesc(
-				'Set folders to NOT publish notes from. Works exactly as above, but in reverse. Use this as a way to filter out some things from public folders, as in "Publish everything in here, except..."'
+				"Like public folders, but in reverse. Anything in a private folder will be ignored by restricted commands and settings. Useful if you want to publish everything in your vault except notes from a few folders, or if you want to remove a subfolder from a public folder."
 			)
 			.addButton((button) => {
 				button
@@ -355,6 +353,17 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					settings.dbToken = value
 					await this.plugin.saveSettings()
 				})
+			})
+
+		new Setting(containerEl)
+			.setName("Clear database")
+			.setDesc(
+				"Clear the contents of the database, excluding user accounts. Useful for troubleshooting and to initialize the database the first time."
+			)
+			.addButton((button) => {
+				button
+					.setButtonText("Clear database")
+					.onClick(() => resetDatabase(settings, this.app.vault))
 			})
 
 		new Setting(containerEl)

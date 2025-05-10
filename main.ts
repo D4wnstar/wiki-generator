@@ -87,26 +87,26 @@ export default class WikiGeneratorPlugin extends Plugin {
 
 		this.addCommand({
 			id: "upload-notes-reset",
-			name: "Upload notes (and clear existing content, excluding users)",
+			name: "Clear database, then upload notes",
 			callback: async () => upload(true),
 		})
 
 		// Commands to make setting properties easier
 		this.addCommand({
 			id: "mass-add-publish",
-			name: "Add publish property to publishable notes",
+			name: "Add 'wiki-publish' to everything (restricted)",
 			callback: () => massAddPublish(true, settings, this.app.vault),
 		})
 
 		this.addCommand({
 			id: "mass-set-publish-true",
-			name: "Set publish property to true on publishable notes",
+			name: "Set 'wiki-publish' to true on everything (restricted)",
 			callback: () => massSetPublishState(true, settings, this.app.vault),
 		})
 
 		this.addCommand({
 			id: "mass-set-publish-false",
-			name: "Set publish property to false on publishable notes",
+			name: "Set 'wiki-publish' to false on everything (restricted)",
 			callback: () =>
 				massSetPublishState(false, settings, this.app.vault),
 		})

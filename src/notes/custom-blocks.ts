@@ -386,7 +386,8 @@ class WikilinkTransclusion {
 				if (fileExtension) {
 					// Make sure to reference the svg and not the excalidraw files
 					if (fileExtension[0] === ".excalidraw") {
-						linkName = linkName + ".svg"
+						linkName =
+							linkName.replace(/\.excalidraw$/, "") + ".svg"
 					}
 
 					// The nullish coalescing also takes care of non-image file formats
@@ -395,7 +396,8 @@ class WikilinkTransclusion {
 				} else {
 					const info = args.noteNameToPath.get(linkName)
 					if (info?.isExcalidraw) {
-						newChunk.image_path = info.path + ".svg"
+						newChunk.image_path =
+							info.path.replace(/\.md$/, "") + ".svg"
 					} else {
 						newChunk.note_transclusion_path = info?.path ?? null
 					}

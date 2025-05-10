@@ -205,53 +205,38 @@ export function resolveTFolder(folderPath: string, vault: Vault) {
 }
 
 /**
- * Get all files in the vault within the given array of folders. Optionally give some
- * additional folders to filter out.
- * @param publicFolders The folders to get files from
- * @param privateFolders Optional argument. Files within these folders won't be returned
+ * Get all files in the vault that are in the whitelisted folders and not in the blacklisted
+ * folders.
+ * @param whitelist Path array of folders to get files from. No public folders means the entire vault.
+ * @param blacklist Path array of folders to ignore files form.
  * @returns An array of TFile objects
  */
 export function getFilesFromFolders(
 	vault: Vault,
-	publicFolders: string[] | string,
-	privateFolders?: string[]
+	whitelist: string[] = [],
+	blacklist: string[] = []
 ): TFile[] {
-	const files: TFile[] = []
-
-	// Skip if given an empty string
-	if (publicFolders instanceof String) {
-		if (publicFolders.length === 0) {
-			return []
-		} else {
-			publicFolders = <string[]>[publicFolders]
-		}
-	}
-
 	// Consider no public folders as the entire vault so that you can use private folders
-	// without having to set everything else as public manually
-	if (publicFolders.length === 0) {
-		return vault.getMarkdownFiles()
-	}
-
-	for (const folder of publicFolders) {
-		const folderObj = resolveTFolder(folder, vault)
-		Vault.recurseChildren(folderObj, (file) => {
-			if (file instanceof TFile) {
-				if (
-					privateFolders &&
-					privateFolders.some((path) => file.path.startsWith(path))
-				) {
-					return
-				}
-
-				files.push(file)
-			}
-		})
-	}
-
-	return files
+	// without having to set everything else as public
+	return vault.getMarkdownFiles().filter((file) => {
+		const isPrivate =
+			blacklist.length === 0
+				? false
+				: blacklist.some((path) => file.path.startsWith(path))
+		const isPublic =
+			whitelist.length === 0
+				? true
+				: whitelist.some((path) => file.path.startsWith(path))
+		return isPublic && !isPrivate
+	})
 }
 
+/**
+ * Get a list of Markdown files that have a truthy `wiki-publish` property.
+ * @param settings The Obsidian settings
+ * @param vault A reference to the vault
+ * @returns An array of Markdown files with truthy `wiki-publish` property
+ */
 export function getPublishableFiles(
 	settings: WikiGeneratorSettings,
 	vault: Vault

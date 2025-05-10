@@ -12,7 +12,7 @@ import {
 	convertWikilinks,
 	makePagesFromFiles,
 } from "./notes/text-transformations"
-import { DatabaseAdapter } from "./database/types"
+import { DatabaseAdapter, Pages } from "./database/types"
 
 import remarkParse from "remark-parse"
 import remarkGfm from "remark-gfm"
@@ -48,10 +48,10 @@ export async function uploadNotes(
 	settings: WikiGeneratorSettings,
 	reset = false
 ) {
-	// Make sure we got everything we need
+	// Warn the user in case they don't have a deploy hook
 	if (!settings.localExport && settings.deployHook.length === 0) {
-		throw new Error(
-			"Deploy hook is not set. Please create one before uploading."
+		new Notice(
+			"Deploy hook is not set. Notes will be uploaded, but website will not update."
 		)
 	}
 
@@ -204,7 +204,6 @@ export async function uploadNotes(
 	}
 	// What's left is what needs to be deleted
 	const hashesToDelete: string[] = [...existingHashes.values()]
-
 	// Convert them into rich data structures
 	const { pages, titleToPath } = await makePagesFromFiles(
 		files,
@@ -237,6 +236,9 @@ export async function uploadNotes(
 	// Finally push the notes and media to the database
 	console.log(`Deleting ${hashesToDelete.length} outdated notes`)
 	await adapter.deleteNotesByHashes(hashesToDelete)
+
+	// Validate foreign key references before insertion
+	validateForeignKeys(pagesWithLinks, imagesToInsert)
 	console.log(`Inserting ${uploadedNotes} notes...`)
 	await adapter.pushPages(pagesWithLinks, settings)
 
@@ -256,51 +258,13 @@ export async function uploadNotes(
 	await adapter.close()
 
 	// Ping Vercel so it rebuilds the site
-	if (!settings.localExport) {
+	if (!settings.localExport && settings.deployHook) {
 		console.log("Sending POST request to deploy hook")
 		request({ url: settings.deployHook, method: "POST" })
 	}
 
 	console.log(`Successfully uploaded ${uploadedNotes} notes`)
 	console.log("-".repeat(10), "[WIKI GENERATOR UPLOAD END]", "-".repeat(10))
-}
-
-/**
- * Add or set `wiki-publish: true` in all publishable files.
- * @param value The boolean value to set `wiki-publish` to
- * @param settings The plugin settings
- * @param vault A reference to the vault
- */
-export function massAddPublish(
-	value: boolean,
-	settings: WikiGeneratorSettings,
-	vault: Vault
-) {
-	const notes = getPublishableFiles(settings, vault)
-	for (const note of notes) {
-		vault.process(note, (noteText) => {
-			// Isolate properties
-			const props = noteText.match(propsRegex)
-			if (props) {
-				// Check if a publish property is already there
-				const publish = props[1].match(
-					/(wiki|dg)-publish: (true|false)/
-				)
-				// If it is, leave it as is
-				if (publish) return noteText
-				// Otherwise add a new property
-				noteText = noteText.replace(
-					propsRegex,
-					`---\nwiki-publish: ${value}\n$1\n---`
-				)
-			} else {
-				// If there are no properties, prepend a new publish one
-				noteText = `---\nwiki-publish: ${value}\n---\n` + noteText
-			}
-
-			return noteText
-		})
-	}
 }
 
 /**
@@ -319,16 +283,18 @@ async function getReferencedImages(vault: Vault): Promise<Set<string>> {
 			for (const match of content.matchAll(wikilinkRegex)) {
 				const filename = match[2]
 				const extension = filename.match(/(?<=\.)[\w\d]+$/g)?.[0]
-				if (!extension) continue
 
-				if (imageExtensions.includes(extension)) {
+				if (extension && imageExtensions.includes(extension)) {
 					refs.add(filename)
-				} else if (
-					extension === "excalidraw" ||
-					content.includes("excalidraw-plugin:")
-				) {
-					// Excalidraw files should reference the auto-exported SVGs
+				} else if (extension === "excalidraw") {
 					refs.add(filename + ".svg")
+				} else if (!extension && match[1] /* is transclusion */) {
+					// Since Excalidraw files are (very annoyingly) just markdown, it's
+					// pretty much impossible to reliably distinguish Excalidraw transclusions from
+					// generic note transclusions. As such, we optimistically assume any transclusion
+					// without an extension is actually an Excalidraw file and add it to the refs.
+					// Worst case scenario we add a bit too many images.
+					refs.add(filename.replace(/\.md$/, "") + ".svg")
 				}
 			}
 		} catch (error) {
@@ -336,6 +302,109 @@ async function getReferencedImages(vault: Vault): Promise<Set<string>> {
 		}
 	}
 	return refs
+}
+
+/**
+ * Debug function to analyze the set of pages to upload before actually doing so.
+ * This function will try to find inconsistencies in the foreign key handling. If any
+ * such issues are found, it will throw, otherwise it won't do anything. The point of
+ * this function isn't to avoid crashes, but rather to dump a bunch of error logs that
+ * explain exactly what parts of which files are causing foreign key errors, as SQLite
+ * only gives cryptic "error happened ¯\\_(ツ)_/¯" errors.
+ * @param pages The Pages to analyze
+ * @param images The set of images that goes alongside the pages
+ */
+function validateForeignKeys(pages: Pages, images: { path: string }[]) {
+	const missingRefs = new Map<string, string[]>()
+	for (const [notePath, page] of pages.entries()) {
+		const chunksWithIssues: string[] = []
+
+		for (const [idx, chunk] of page.chunks.entries()) {
+			if (
+				chunk.note_transclusion_path &&
+				!pages.has(chunk.note_transclusion_path)
+			) {
+				chunksWithIssues.push(
+					`Chunk ${idx}: Missing transcluded note '${chunk.note_transclusion_path}'`
+				)
+			}
+			if (chunk.image_path) {
+				const imageExists = images.some(
+					(img) => img.path === chunk.image_path
+				)
+				if (!imageExists) {
+					chunksWithIssues.push(
+						`Chunk ${idx}: Missing image '${chunk.image_path}'`
+					)
+				}
+			}
+		}
+
+		if (chunksWithIssues.length > 0) {
+			missingRefs.set(notePath, chunksWithIssues)
+		}
+	}
+
+	if (missingRefs.size > 0) {
+		console.error("FOREIGN KEY constraint violations detected:")
+		for (const [notePath, issues] of missingRefs.entries()) {
+			let errorText = `- Note '${notePath}':`
+			for (const issue of issues) {
+				errorText += `\n|- ${issue}`
+			}
+			console.error(errorText)
+		}
+		throw new Error(
+			"Cannot proceed with database insertion due to missing foreign key references. Press CTRL+SHIFT+I for more info."
+		)
+	}
+}
+
+/**
+ * Add or set `wiki-publish: true` in all publishable files.
+ * @param value The boolean value to set `wiki-publish` to
+ * @param settings The plugin settings
+ * @param vault A reference to the vault
+ */
+export function massAddPublish(
+	value: boolean,
+	settings: WikiGeneratorSettings,
+	vault: Vault
+) {
+	const notes = getPublishableFiles(settings, vault)
+	new Notice(`Adding 'wiki-publish' to all public notes`)
+	for (const note of notes) {
+		try {
+			vault.process(note, (noteText) => {
+				// Ignore Excalidraw files
+				if (noteText.includes("excalidraw-plugin:")) return noteText
+
+				// Isolate properties
+				const props = noteText.match(propsRegex)
+				if (props) {
+					// Check if a publish property is already there
+					const publish = props[1].match(
+						/(wiki|dg)-publish: (true|false)/
+					)
+					// If it is, leave it as is
+					if (publish) return noteText
+					// Otherwise add a new property
+					noteText = noteText.replace(
+						propsRegex,
+						`---\nwiki-publish: ${value}\n$1\n---`
+					)
+				} else {
+					// If there are no properties, prepend a new publish one
+					noteText = `---\nwiki-publish: ${value}\n---\n` + noteText
+				}
+
+				return noteText
+			})
+		} catch (e) {
+			console.error(`Error when add wiki-publish to ${note.name}: ${e}`)
+			new Notice(`Error when add wiki-publish to ${note.name}: ${e}`)
+		}
+	}
 }
 
 /**
@@ -362,5 +431,39 @@ export function massSetPublishState(
 				`---\n$1wiki-publish: ${value}$2\n---\n`
 			)
 		})
+	}
+}
+
+/**
+ * Reset the database. This will drop all tables except user accounts and wiki settings.
+ * @param settings The plugin settings
+ * @param vault A reference to the Vault
+ */
+export async function resetDatabase(
+	settings: WikiGeneratorSettings,
+	vault: Vault
+) {
+	new Notice("Clearing database...")
+	let adapter: DatabaseAdapter
+	if (settings.localExport) {
+		adapter = new LocalDatabaseAdapter(await createLocalDatabase(vault))
+	} else {
+		adapter = new RemoteDatabaseAdapter(
+			createClient({
+				url: settings.dbUrl,
+				authToken: settings.dbToken,
+			})
+		)
+	}
+
+	try {
+		await adapter.clearContent()
+		await adapter.runMigrations()
+		new Notice("Database cleared successfully.")
+	} catch (e) {
+		console.error(`Error when clearing database: ${e}`)
+		new Notice(`Error when clearing database: ${e}`)
+	} finally {
+		await adapter.close()
 	}
 }
