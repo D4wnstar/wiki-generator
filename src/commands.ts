@@ -73,10 +73,12 @@ export async function uploadNotes(
 
 	// Get all images in the database
 	const existingImageHashes = new Map<string, string>()
+	const existingImagePaths = []
 	for (const image of await adapter.getImageData()) {
 		// In theory these should exist, but due to schema changes double checking is good
 		if (!image.path || !image.hash) continue
 		existingImageHashes.set(image.path, image.hash)
+		existingImagePaths.push(image.path)
 	}
 
 	// First get all referenced images from markdown files
@@ -201,9 +203,16 @@ export async function uploadNotes(
 	await adapter.deleteNotesByHashes(hashesToDelete)
 
 	// Validate foreign key references before insertion
-	validateForeignKeys(pagesWithLinks, imagesToInsert)
+	const imagePathsInDb = [
+		...imagesToInsert,
+		...existingImagePaths.map((path) => ({ path })),
+	]
+	validateForeignKeys(pagesWithLinks, imagePathsInDb)
 	console.log(`Inserting ${uploadedNotes} notes...`)
-	await adapter.pushPages(pagesWithLinks, settings)
+	await adapter.pushPages(pagesWithLinks)
+
+	console.log("Updating settings...")
+	await adapter.updateSettings(settings)
 
 	if (settings.localExport) {
 		console.log("Exporting database...")
@@ -220,8 +229,12 @@ export async function uploadNotes(
 	// Cleanup
 	await adapter.close()
 
-	// Ping Vercel so it rebuilds the site
-	if (!settings.localExport && settings.deployHook) {
+	// Ping Vercel so it rebuilds the site, but only if something changed
+	if (
+		!settings.localExport &&
+		settings.deployHook &&
+		(uploadedImages > 0 || uploadedNotes > 0)
+	) {
 		console.log("Sending POST request to deploy hook")
 		request({ url: settings.deployHook, method: "POST" })
 	}

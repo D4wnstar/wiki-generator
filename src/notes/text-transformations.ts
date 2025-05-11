@@ -95,7 +95,7 @@ export async function makePagesFromFiles(
 		const slug = ensureUniqueSlug(slugPath(file.path), previousSlugs)
 		previousSlugs.add(slug)
 
-		let content = await vault.read(file)
+		let content = await vault.cachedRead(file)
 
 		// Grab the frontmatter first because we need some properties
 		const fmVfile = await frontmatterProcessor.process(content)
@@ -104,34 +104,24 @@ export async function makePagesFromFiles(
 		// Skip pages that shouldn't be published (wiki-publish is either false or undefined)
 		if (!frontmatter["wiki-publish"]) continue
 
-		// LaTeX display blocks are kinda broken with the builtin remark/rehype pipeline if they
-		// are not on a clean line. They break if they are on a line with existing formatting, such
-		// as a list, a blockquote or a callout. As a workaround, we extract these manually and process
-		// them in isolation. The HTML is the passed as-is through the main processor
-		content = await replaceAllAsync(
-			content,
-			/^([^\n\$]+?)\$\$(.*?)\$\$/gms,
-			async (_match, before, inner) =>
-				before +
-				String(await latexProcessor.process(`\n$$\n${inner}\n$$\n`))
-		)
-
-		// Parse and replace custom :::blocks::: and delete Obsidian comments
+		// Parse and replace custom :::blocks::: and other non-standard syntax
 		// Codeblocks are removed and added back later to keep them unmodified
+		content = await processDisplayLatex(content, latexProcessor)
 		const { md, inlineCode, codeBlocks } = removeCodeblocks(content)
-
+		const { md: md2, footnotes } = await removeFootnotes(md, processor)
 		const { wChunks, details, sidebarImages } = await handleCustomSyntax(
-			md,
+			md2,
 			file.name,
-			//@ts-ignore
 			processor,
 			imageNameToPath,
 			noteNameToPath
 		)
-		const chunks = addCodeblocksBack(wChunks.chunks, inlineCode, codeBlocks)
+		let chunks = addFootnotesBack(wChunks.chunks, footnotes)
+		chunks = addCodeblocksBack(chunks, inlineCode, codeBlocks)
 
 		// Convert the markdown of each chunk separately
-		for (const chunk of chunks) {
+		for (const [i, chunk] of chunks.entries()) {
+			if (!chunk.text) continue
 			chunk.text = String(await processor.process(chunk.text))
 		}
 
@@ -232,6 +222,91 @@ export function addCodeblocksBack(
 			)
 		return { ...chunk, text }
 	})
+}
+
+/**
+ * LaTeX display blocks are kinda broken with the builtin remark/rehype pipeline if they
+ * are not on a clean line. They break if they are on a line with existing formatting, such
+ * as a list, a blockquote or a callout. As a workaround, thi function extracts display math
+ * blocks individually and process them in isolation. The HTML is then intended to be passed
+ * as-is through the main processor.
+ *
+ * @param md The text to process
+ * @param latexProcessor A processor to convert math blocks into HTML
+ * @returns The processed text
+ */
+async function processDisplayLatex(
+	md: string,
+	latexProcessor: Processor<any, any, any, any, any>
+) {
+	return await replaceAllAsync(
+		md,
+		/^([>+*-])\s*\$\$(.*?)\$\$/gms,
+		async (_match, before, inner) => {
+			return (
+				before +
+				String(await latexProcessor.process(`\n$$\n${inner}\n$$\n\n`))
+			)
+		}
+	)
+}
+
+/**
+ * Remove footnote definitions and encode references to those footnotes to avoid them being
+ * processed by the main loop. This is because automatic footnote processing is broken when
+ * done chunk-by-chunk since they require referencing all the way across the file. Meant to
+ * be paired with `addFootnotesBack`.
+ *
+ * @param md The text to parse
+ * @param processor General purpose processor to convert md to HTML
+ * @returns The text without the footnotes and encoded references
+ */
+async function removeFootnotes(
+	md: string,
+	processor: Processor<any, any, any, any, any>
+) {
+	const footnotes: Map<string, string> = new Map()
+	for (const match of md.matchAll(/^\[\^(.*?)\]:\s*(.*)/gm)) {
+		const id = encodeURIComponent(match[1])
+		const text = match[2] + ` <a class="anchor" href="#ref_${id}">↩</a>`
+		footnotes.set(match[1], String(await processor.process(text)))
+	}
+
+	md = md.replaceAll(/^\[\^.*?\]:.*/gm, "")
+	md = md.replaceAll(/\[\^(.*?)\]/g, "<|footnote_$1|>")
+	return { md, footnotes }
+}
+
+/**
+ * Add the footnotes removed by `removeFootnotes`.
+ * @param chunks The chunks to process
+ * @param footnotes The Map of footnotes created by `removeFootnotes`
+ * @returns The processed chunks
+ */
+function addFootnotesBack(
+	chunks: ContentChunk[],
+	footnotes: Map<string, string>
+) {
+	for (const [idx, chunk] of chunks.entries()) {
+		chunk.text = chunk.text.replaceAll(/<\|footnote_(.*?)\|>/g, (_m, i) => {
+			const id = encodeURIComponent(i)
+			return `<sup id="ref_${id}"><a class="anchor" href="#footnote_${id}">[${i}]</a></sup>`
+		})
+
+		if (idx === chunks.length - 1 && footnotes.size > 0) {
+			const footnoteText = footnotes.entries().reduce((t, [i, f]) => {
+				const id = encodeURIComponent(i)
+				return (t += `<div class="flex" id="footnote_${id}"><span style="opacity: 0.5; margin-right: 4px;">${i}.</span>${f}</div>`)
+			}, "")
+
+			chunk.text +=
+				'<hr class="hr" /><section class="space-y-2">' +
+				footnoteText +
+				"</section>"
+		}
+	}
+
+	return chunks
 }
 
 /**

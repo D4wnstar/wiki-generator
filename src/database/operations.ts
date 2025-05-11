@@ -390,10 +390,7 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 		this.db.run(`DELETE FROM notes WHERE hash IN (${placeholders})`, hashes)
 	}
 
-	async pushPages(
-		pages: Pages,
-		settings: WikiGeneratorSettings
-	): Promise<void> {
+	async pushPages(pages: Pages): Promise<void> {
 		const noteQueries = []
 		const noteContentsQueries = []
 		const detailsQueries = []
@@ -467,6 +464,12 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 		for (const query of sidebarImagesQueries) {
 			this.db.run(query.sql, query.args)
 		}
+		this.db.run("COMMIT;")
+	}
+
+	async updateSettings(settings: WikiGeneratorSettings): Promise<void> {
+		this.db.run("BEGIN TRANSACTION;")
+		this.db.run("DELETE FROM wiki_settings;")
 		this.db.run(insertWikiSettings, [
 			settings.wikiTitle,
 			settings.allowLogins ? 1 : 0,
@@ -598,10 +601,7 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 		})
 	}
 
-	async pushPages(
-		pages: Pages,
-		settings: WikiGeneratorSettings
-	): Promise<void> {
+	async pushPages(pages: Pages): Promise<void> {
 		const noteQueries = []
 		const noteContentsQueries = []
 		const detailsQueries = []
@@ -666,12 +666,18 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 			...noteContentsQueries,
 			...detailsQueries,
 			...sidebarImagesQueries,
+		]
+		await this.db.batch(queries)
+	}
+
+	async updateSettings(settings: WikiGeneratorSettings): Promise<void> {
+		await this.db.batch([
+			"DELETE FROM wiki_settings;",
 			{
 				sql: insertWikiSettings,
 				args: [settings.wikiTitle, settings.allowLogins ? 1 : 0],
 			},
-		]
-		await this.db.batch(queries)
+		])
 	}
 
 	async clearContent(): Promise<void> {
