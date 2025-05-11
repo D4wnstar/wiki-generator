@@ -120,7 +120,7 @@ export async function makePagesFromFiles(
 		chunks = addCodeblocksBack(chunks, inlineCode, codeBlocks)
 
 		// Convert the markdown of each chunk separately
-		for (const [i, chunk] of chunks.entries()) {
+		for (const chunk of chunks) {
 			if (!chunk.text) continue
 			chunk.text = String(await processor.process(chunk.text))
 		}
@@ -183,7 +183,9 @@ export function removeCodeblocks(text: string): {
 	const inlineCode: Map<number, string> = new Map()
 
 	let counter = 0
-	text = text.replace(codeBlockRegex, (block) => {
+	text = text.replace(codeBlockRegex, (block, lang) => {
+		// Ignore TikZ! These are rendered into SVG separately when chunking
+		if (lang === "tikz") return block
 		counter += 1
 		codeBlocks.set(counter, block)
 		return `<|codeblock_${counter}|>`
@@ -347,7 +349,7 @@ export function unwrapWikilinks(
 
 export async function convertWikilinks(
 	pages: Pages,
-	processor: Processor<Root, undefined, undefined, Root, string>
+	processor: Processor<any, any, any, any, any>
 ) {
 	const newPages: Pages = new Map()
 

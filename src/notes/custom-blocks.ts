@@ -8,6 +8,7 @@ import {
 	transclusionRegex,
 	transclusionRegexNoGroups,
 } from "./regexes"
+import tex2svg from "node-tikzjax"
 
 interface WorkingContentChunk extends ContentChunk {
 	locked: boolean
@@ -344,6 +345,41 @@ class SecretBlock extends Block {
 
 // A bit of a "fake" block in that it does not actually inherit from Block but the
 // use case is the same
+class TikzImage {
+	static async applyOnChunks(chunks: WorkingContentChunk[]) {
+		// Grab TikZ codeblocks for SVG creation later
+		const tikzCodeRegex = /^```tikz\n(.*?)\n```/gms
+
+		const outChunks = []
+		for (const chunk of chunks) {
+			if (chunk.locked) {
+				outChunks.push(chunk)
+				continue
+			}
+
+			const splits = partition(chunk.text, tikzCodeRegex)
+			if (splits.length === 1) {
+				outChunks.push(chunk)
+				continue
+			}
+
+			for (const split of splits) {
+				if (!split.matched) {
+					outChunks.push({
+						...chunk,
+						text: split.text,
+					} satisfies WorkingContentChunk)
+					continue
+				}
+
+				// Remove first and last lines which are just codeblock backticks
+				const tex = split.text.replace(/^.*\n/, "").replace(/\n.*$/, "")
+				const svg = await tex2svg(tex)
+			}
+		}
+	}
+}
+
 class WikilinkTransclusion {
 	static applyOnChunks(
 		chunks: WorkingContentChunk[],
@@ -431,7 +467,7 @@ export async function handleCustomSyntax(
 	noteNameToPath: Map<string, { path: string; isExcalidraw: boolean }>
 ) {
 	// Remove :::hidden::: blocks and Markdown comments
-	md = md.replace(/%%.*?%%/gs, "")
+	md = md.replaceAll(/%%.*?%%/gs, "")
 	md = (await HiddenBlock.extract(md)).md
 
 	// Parse and remove the first :::details::: block
@@ -482,6 +518,11 @@ export async function handleCustomSyntax(
 		imageNameToPath,
 		noteNameToPath,
 	})
+
+	// Grab TikZ codeblocks for SVG creation later
+	const tikzCodeRegex = /^```(\w*)\n(.*?)\n```/gms
+	const tikz = [...md.matchAll(tikzCodeRegex)]
+	md = md.replaceAll(tikzCodeRegex, "")
 
 	return { wChunks, details, sidebarImages: images }
 }
