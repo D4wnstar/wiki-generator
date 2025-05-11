@@ -1,5 +1,4 @@
 import { TFile, Vault } from "obsidian"
-import { Root } from "remark-parse/lib"
 import { ensureUniqueSlug, replaceAllAsync, slugPath } from "src/utils"
 import { Processor, unified } from "unified"
 import { handleCustomSyntax } from "./custom-blocks"

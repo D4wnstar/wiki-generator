@@ -20,7 +20,6 @@ import rehypeStringify from "rehype-stringify"
 import { propsRegex, wikilinkRegex } from "./notes/regexes"
 import * as crypto from "crypto"
 import { createClient } from "@libsql/client"
-import tex2svg from "node-tikzjax"
 
 const imageExtensions = ["png", "webp", "jpg", "jpeg", "gif", "bmp", "svg"]
 
@@ -44,52 +43,55 @@ export async function uploadNotes(
 	}
 
 	console.log("-".repeat(10), "[WIKI GENERATOR UPLOAD START]", "-".repeat(10))
-	console.log("Uploading notes...")
-	new Notice("Uploading notes. This might take a while...")
+	if (reset) {
+		new Notice("Clearing and reuploading notes. This might take a while...")
+	} else {
+		new Notice("Uploading notes. This might take a while...")
+	}
 
 	// Initialize common database interface
 	const adapter = await initializeAdapter(settings, vault)
 
 	if (reset) {
 		console.log("Dropping all content tables...")
-		new Notice("Clearing existing notes and media...")
 		await adapter.clearContent()
 	}
 
 	console.log("Running migrations...")
 	await adapter.runMigrations()
 
-	console.log("Processing media files...")
-	const { images, imageNameToPath, imageHashesToDelete, existingImagePaths } =
-		await collectMedia(adapter, vault)
+	console.log("Collecting images...")
+	const images = await collectMedia(adapter, vault)
 
-	console.log("Converting Markdown to HTML...")
+	console.log("Collecting notes...")
 	const { files, hashesToDelete } = await collectNotes(adapter, vault)
 
-	const { uploadedImages, insertedImagePaths } = await insertMedia(
-		imageHashesToDelete,
-		images,
+	console.log("Processing notes...")
+	const pages = await processNotes(files, images.nameToPath, vault)
+	const uploadedNotes = pages.size
+
+	console.log("Inserting images...")
+	const insertedImagePaths = await insertMedia(
+		images.files,
+		images.hashesToDelete,
 		adapter,
 		vault
 	)
+	const uploadedImages = insertedImagePaths.length
 
-	/* PAGE CONVERSION */
-	const pages = await processNotes(files, imageNameToPath, vault)
-	const uploadedNotes = pages.size
+	console.log("Inserting notes...")
+	const imagePathsInDb = [...insertedImagePaths, ...images.existingPaths]
+	await insertNotes(pages, hashesToDelete, imagePathsInDb, adapter)
 
-	// Fetch user accounts from the website and insert them into the database
-	// to avoid deleting user accounts every time
+	console.log("Updating settings...")
+	await adapter.updateSettings(settings)
+
 	if (settings.localExport && !settings.ignoreUsers) {
+		// If exporting locally, clone user accounts from the website
 		console.log("Cloning user accounts from Turso...")
 		const users = await getUsersFromRemote(settings.dbUrl, settings.dbToken)
 		await adapter.insertUsers(users)
 	}
-
-	const imagePathsInDb = [...insertedImagePaths, ...existingImagePaths]
-	await insertNotes(pages, hashesToDelete, adapter, imagePathsInDb)
-
-	console.log("Updating settings...")
-	await adapter.updateSettings(settings)
 
 	if (settings.localExport) {
 		console.log("Exporting database...")
@@ -168,10 +170,10 @@ async function collectMedia(adapter: DatabaseAdapter, vault: Vault) {
 	const imageHashesToDelete: string[] = [...existingImageHashes.values()]
 
 	return {
-		images,
-		imageNameToPath,
-		imageHashesToDelete,
-		existingImagePaths,
+		files: images,
+		nameToPath: imageNameToPath,
+		hashesToDelete: imageHashesToDelete,
+		existingPaths: existingImagePaths,
 	}
 }
 
@@ -184,7 +186,6 @@ async function collectNotes(adapter: DatabaseAdapter, vault: Vault) {
 	}
 
 	const files: { file: TFile; hash: string }[] = []
-	const tikzSvgs: string[] = []
 	for (const file of vault.getMarkdownFiles()) {
 		const buf = await vault.readBinary(file)
 		const hash = crypto
@@ -196,15 +197,6 @@ async function collectNotes(adapter: DatabaseAdapter, vault: Vault) {
 		if (!maybeExistingHash || hash !== maybeExistingHash) {
 			// If the note doesn't exist or it changed, insert/overwrite it
 			files.push({ file, hash })
-			const md = await vault.cachedRead(file)
-			const tikzCodeRegex = /^```tikz\n(.*?)\n```/gms
-			const tikzCodeBlocks = [
-				...md.matchAll(tikzCodeRegex).map((m) => m[1]),
-			]
-			for (const block of tikzCodeBlocks) {
-				const svg = await tex2svg(block)
-				tikzSvgs.push(svg)
-			}
 		} else {
 			// If it exists and it's identical to last time, don't bother reprocessing it
 			existingHashes.delete(file.path)
@@ -217,8 +209,8 @@ async function collectNotes(adapter: DatabaseAdapter, vault: Vault) {
 }
 
 async function insertMedia(
-	imageHashesToDelete: string[],
 	images: { file: TFile; hash: string; type: "raster" | "svg" }[],
+	imageHashesToDelete: string[],
 	adapter: DatabaseAdapter,
 	vault: Vault
 ) {
@@ -242,13 +234,10 @@ async function insertMedia(
 			}
 		})
 	)
-	const uploadedImages = imagesToInsert.length
-	console.log(`Inserting ${uploadedImages} images...`)
+	console.log(`Inserting ${imagesToInsert.length} images...`)
 	await adapter.insertImages(imagesToInsert)
 
-	const insertedImagePaths = imagesToInsert.map((img) => img.path)
-
-	return { uploadedImages, insertedImagePaths }
+	return imagesToInsert.map((img) => img.path)
 }
 
 async function processNotes(
@@ -278,8 +267,8 @@ async function processNotes(
 async function insertNotes(
 	pages: Pages,
 	hashesToDelete: string[],
-	adapter: DatabaseAdapter,
-	imagePathsInDb: string[]
+	imagePathsInDb: string[],
+	adapter: DatabaseAdapter
 ) {
 	// Finally push the notes and media to the database
 	console.log(`Deleting ${hashesToDelete.length} outdated notes`)

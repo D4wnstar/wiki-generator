@@ -4,7 +4,7 @@ import { findFileInPlugin } from "./filesystem"
 import * as fs from "fs"
 import { WikiGeneratorSettings } from "src/settings"
 import { LocalDatabaseAdapter, RemoteDatabaseAdapter } from "./operations"
-import { createClient } from "@libsql/client/."
+import { createClient } from "@libsql/client"
 
 export async function createLocalDatabase(vault: Vault): Promise<Database> {
 	const SQL = await initSqlJs({
