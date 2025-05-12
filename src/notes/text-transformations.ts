@@ -232,6 +232,10 @@ export function addCodeblocksBack(
  * blocks individually and process them in isolation. The HTML is then intended to be passed
  * as-is through the main processor.
  *
+ * It also updates environments that lead to automatic equation numbering in normal LaTeX, like
+ * `align`, and turns them in their respective non-numbering version, like `align*`, to match
+ * Obsidian behavior.
+ *
  * @param md The text to process
  * @param latexProcessor A processor to convert math blocks into HTML
  * @returns The processed text
@@ -240,10 +244,15 @@ async function processDisplayLatex(
 	md: string,
 	latexProcessor: Processor<any, any, any, any, any>
 ) {
+	md = md.replaceAll(
+		/\\(begin|end){(align|equation|gather|multline|eqnarray)}/g,
+		"\\$1{$2*}"
+	)
 	return await replaceAllAsync(
 		md,
-		/^([>+*-])\s*\$\$(.*?)\$\$/gms,
+		/^\s*([>-])\s*\$\$(.*?)\$\$/gms,
 		async (_match, before, inner) => {
+			inner = inner.replaceAll(/^\s*[>-]\s*/gm, "")
 			return (
 				before +
 				String(await latexProcessor.process(`\n$$\n${inner}\n$$\n\n`))
