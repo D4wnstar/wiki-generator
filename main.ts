@@ -67,7 +67,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 			} catch (error) {
 				console.error("An error occured while uploading notes.", error)
 				new Notice(
-					`An error occured while uploading notes. ${error}`,
+					`An error occured while uploading notes. See console (CTRL+Shift+I) for details. ${error}`,
 					0
 				)
 			}

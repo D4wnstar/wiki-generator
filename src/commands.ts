@@ -23,13 +23,6 @@ import { createClient } from "@libsql/client"
 
 const imageExtensions = ["png", "webp", "jpg", "jpeg", "gif", "bmp", "svg"]
 
-/**
- * The main function of the plugin. Convert every publishable Markdown note in the vault
- * into HTML, convert images to webp and possibly compress them, save them in a SQLite
- * database and upload it to the website repository (unless the local export setting is true).
- * @param vault A reference to the vault
- * @param settings The plugin settings
- */
 export async function uploadNotes(
 	vault: Vault,
 	settings: WikiGeneratorSettings,
@@ -38,88 +31,157 @@ export async function uploadNotes(
 	// Warn the user in case they don't have a deploy hook
 	if (!settings.localExport && settings.deployHook.length === 0) {
 		new Notice(
-			"Deploy hook is not set. Notes will be uploaded, but website will not update."
+			"Deploy hook is not set. Notes will be uploaded, but website will not update. Check settings.",
+			10000
 		)
 	}
 
 	console.log("-".repeat(10), "[WIKI GENERATOR UPLOAD START]", "-".repeat(10))
-	if (reset) {
-		new Notice("Clearing and reuploading notes. This might take a while...")
-	} else {
-		new Notice("Uploading notes. This might take a while...")
-	}
+
+	const { fragment, updateProgress } = createProgressBarFragment()
+	const notice = new Notice(fragment, 0)
 
 	// Initialize common database interface
 	const adapter = await initializeAdapter(settings, vault)
 
-	if (reset) {
-		console.log("Dropping all content tables...")
-		await adapter.clearContent()
-	}
+	try {
+		if (reset) {
+			updateProgress(5, "Clearing existing content...")
+			console.log("Dropping all content tables...")
+			await adapter.clearContent()
+		}
 
-	console.log("Running migrations...")
-	await adapter.runMigrations()
+		updateProgress(10, "Running database migrations...")
+		console.log("Running migrations...")
+		await adapter.runMigrations()
 
-	console.log("Collecting images...")
-	const images = await collectMedia(adapter, vault)
+		updateProgress(20, "Collecting images...")
+		console.log("Collecting images...")
+		const images = await collectMedia(adapter, vault)
 
-	console.log("Collecting notes...")
-	const { files, hashesToDelete } = await collectNotes(adapter, vault)
+		updateProgress(35, "Collecting notes...")
+		console.log("Collecting notes...")
+		const { files, hashesToDelete } = await collectNotes(adapter, vault)
 
-	console.log("Processing notes...")
-	const pages = await processNotes(files, images.nameToPath, vault)
-	const uploadedNotes = pages.size
+		updateProgress(50, "Processing notes...")
+		console.log("Processing notes...")
+		const pages = await processNotes(files, images.nameToPath, vault)
+		const uploadedNotes = pages.size
 
-	console.log("Inserting images...")
-	const insertedImagePaths = await insertMedia(
-		images.files,
-		images.hashesToDelete,
-		adapter,
-		vault
-	)
-	const uploadedImages = insertedImagePaths.length
-
-	console.log("Inserting notes...")
-	const imagePathsInDb = [...insertedImagePaths, ...images.existingPaths]
-	await insertNotes(pages, hashesToDelete, imagePathsInDb, adapter)
-
-	console.log("Updating settings...")
-	await adapter.updateSettings(settings)
-
-	if (settings.localExport && !settings.ignoreUsers) {
-		// If exporting locally, clone user accounts from the website
-		console.log("Cloning user accounts from Turso...")
-		const users = await getUsersFromRemote(settings.dbUrl, settings.dbToken)
-		await adapter.insertUsers(users)
-	}
-
-	if (settings.localExport) {
-		console.log("Exporting database...")
-		await adapter.export(vault)
-		new Notice(
-			`Database exported to plugin folder! Pushed ${uploadedNotes} notes and ${uploadedImages} images.`
+		updateProgress(65, "Uploading images...")
+		console.log("Inserting images...")
+		const insertedImagePaths = await insertMedia(
+			images.files,
+			images.hashesToDelete,
+			adapter,
+			vault
 		)
-	} else {
-		new Notice(
-			`Uploaded ${uploadedNotes} notes and ${uploadedImages} images.`
+		const uploadedImages = insertedImagePaths.length
+
+		updateProgress(80, "Uploading notes...")
+		console.log("Inserting notes...")
+		const imagePathsInDb = [...insertedImagePaths, ...images.existingPaths]
+		await insertNotes(pages, hashesToDelete, imagePathsInDb, adapter)
+
+		updateProgress(90, "Updating settings...")
+		console.log("Updating settings...")
+		await adapter.updateSettings(settings)
+
+		if (settings.localExport && !settings.ignoreUsers) {
+			updateProgress(95, "Cloning user accounts...")
+			console.log("Cloning user accounts from Turso...")
+			const users = await getUsersFromRemote(
+				settings.dbUrl,
+				settings.dbToken
+			)
+			await adapter.insertUsers(users)
+		}
+
+		if (settings.localExport) {
+			updateProgress(98, "Exporting database...")
+			console.log("Exporting database...")
+			await adapter.export(vault)
+			updateProgress(
+				100,
+				`Exported ${uploadedNotes} notes and ${uploadedImages} images!`
+			)
+		} else {
+			// Ping Vercel so it rebuilds the site, but only if something changed
+			if (
+				settings.deployHook &&
+				(uploadedImages > 0 || uploadedNotes > 0)
+			) {
+				console.log("Sending POST request to deploy hook")
+				await request({
+					url: settings.deployHook,
+					method: "POST",
+				}).catch((error) => {
+					console.error("Failed to ping deploy hook:", error)
+				})
+			}
+
+			updateProgress(
+				100,
+				`Uploaded ${uploadedNotes} notes and ${uploadedImages} images!`
+			)
+		}
+		setTimeout(() => notice.hide(), 3000)
+
+		console.log(`Successfully uploaded ${uploadedNotes} notes`)
+	} finally {
+		try {
+			await adapter.close()
+		} catch (error) {
+			console.error("Failed to clean up adapter:", error)
+		}
+		console.log(
+			"-".repeat(10),
+			"[WIKI GENERATOR UPLOAD END]",
+			"-".repeat(10)
 		)
 	}
+}
 
-	// Cleanup
-	await adapter.close()
+/**
+ * Create a `DocumentFragment` representing a progress bar meant to be used in an
+ * Obsidian notice with infinite duration. Hide the notice with its `.hide()` method
+ * once you're the progress bar is at 100%.
+ * @returns A `DocumentFragment` of the loading bar and a function to update it
+ */
+function createProgressBarFragment(): {
+	fragment: DocumentFragment
+	updateProgress: (percent: number, text: string) => void
+} {
+	const fragment = new DocumentFragment()
+	const progressBarSlot = document.createElement("div")
+	progressBarSlot.style.width = "100%"
+	progressBarSlot.style.height = "4px"
+	progressBarSlot.style.backgroundColor = "var(--background-secondary)"
+	progressBarSlot.style.borderRadius = "10px"
+	progressBarSlot.style.overflow = "hidden"
 
-	// Ping Vercel so it rebuilds the site, but only if something changed
-	if (
-		!settings.localExport &&
-		settings.deployHook &&
-		(uploadedImages > 0 || uploadedNotes > 0)
-	) {
-		console.log("Sending POST request to deploy hook")
-		request({ url: settings.deployHook, method: "POST" })
+	const progressBar = document.createElement("div")
+	progressBar.style.width = "0%"
+	progressBar.style.height = "100%"
+	progressBar.style.backgroundColor = "var(--interactive-accent)"
+	progressBar.style.transition = "width 0.3s ease"
+
+	const progressText = document.createElement("div")
+	progressText.style.marginTop = "4px"
+	progressText.style.marginBottom = "8px"
+	progressText.style.textAlign = "center"
+	progressText.textContent = "Starting upload..."
+
+	progressBarSlot.appendChild(progressBar)
+	fragment.appendChild(progressText)
+	fragment.appendChild(progressBarSlot)
+
+	const updateProgress = (percent: number, text: string) => {
+		progressBar.style.width = `${percent}%`
+		progressText.textContent = text
 	}
 
-	console.log(`Successfully uploaded ${uploadedNotes} notes`)
-	console.log("-".repeat(10), "[WIKI GENERATOR UPLOAD END]", "-".repeat(10))
+	return { fragment, updateProgress }
 }
 
 async function collectMedia(adapter: DatabaseAdapter, vault: Vault) {
