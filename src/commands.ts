@@ -61,7 +61,7 @@ export async function uploadNotes(
 
 		updateProgress(35, "Collecting notes...")
 		console.log("Collecting notes...")
-		const { files, hashesToDelete } = await collectNotes(adapter, vault)
+		const files = await collectNotes(adapter, vault)
 
 		updateProgress(50, "Processing notes...")
 		console.log("Processing notes...")
@@ -72,7 +72,6 @@ export async function uploadNotes(
 		console.log("Inserting images...")
 		const insertedImagePaths = await insertMedia(
 			images.files,
-			images.hashesToDelete,
 			adapter,
 			vault
 		)
@@ -81,7 +80,7 @@ export async function uploadNotes(
 		updateProgress(80, "Uploading notes...")
 		console.log("Inserting notes...")
 		const imagePathsInDb = [...insertedImagePaths, ...images.existingPaths]
-		await insertNotes(pages, hashesToDelete, imagePathsInDb, adapter)
+		await insertNotes(pages, imagePathsInDb, adapter)
 
 		updateProgress(90, "Updating settings...")
 		console.log("Updating settings...")
@@ -212,29 +211,23 @@ async function collectMedia(adapter: DatabaseAdapter, vault: Vault) {
 				.createHash("sha256")
 				.update(new Uint8Array(buf))
 				.digest("hex")
-			const type = file.extension === "svg" ? "svg" : "raster"
 
 			const maybeExistingHash = existingImageHashes.get(file.path)
 			if (!maybeExistingHash || hash !== maybeExistingHash) {
 				// If the file doesn't exist or it changed, insert/overwrite it
+				const type = file.extension === "svg" ? "svg" : "raster"
 				images.push({ file, hash, type })
-			} else {
-				// If it exists and it's identical to last time, don't bother reprocessing it
-				existingImageHashes.delete(file.path)
 			}
+			// If it exists and it's identical to last time, don't bother reprocessing it
 		} else {
 			// Unsupported filetypes are skipped
 			continue
 		}
 	}
 
-	// What's left is what needs to be deleted
-	const imageHashesToDelete: string[] = [...existingImageHashes.values()]
-
 	return {
 		files: images,
 		nameToPath: imageNameToPath,
-		hashesToDelete: imageHashesToDelete,
 		existingPaths: existingImagePaths,
 	}
 }
@@ -259,26 +252,21 @@ async function collectNotes(adapter: DatabaseAdapter, vault: Vault) {
 		if (!maybeExistingHash || hash !== maybeExistingHash) {
 			// If the note doesn't exist or it changed, insert/overwrite it
 			files.push({ file, hash })
-		} else {
-			// If it exists and it's identical to last time, don't bother reprocessing it
-			existingHashes.delete(file.path)
 		}
+		// If it exists and it's identical to last time, don't bother reprocessing it
 	}
-	// What's left is what needs to be deleted
-	const hashesToDelete: string[] = [...existingHashes.values()]
 
-	return { files, hashesToDelete }
+	return files
 }
 
 async function insertMedia(
 	images: { file: TFile; hash: string; type: "raster" | "svg" }[],
-	imageHashesToDelete: string[],
 	adapter: DatabaseAdapter,
 	vault: Vault
 ) {
 	// Push the media to the database
-	console.log(`Deleting ${imageHashesToDelete.length} outdated images...`)
-	await adapter.deleteImagesByHashes(imageHashesToDelete)
+	console.log(`Deleting ${images.length} outdated images...`)
+	await adapter.deleteImagesByHashes(images.map((img) => img.hash))
 
 	const imagesToInsert = await Promise.all(
 		images.map(async ({ file, hash, type }) => {
@@ -328,13 +316,14 @@ async function processNotes(
 
 async function insertNotes(
 	pages: Pages,
-	hashesToDelete: string[],
 	imagePathsInDb: string[],
 	adapter: DatabaseAdapter
 ) {
 	// Finally push the notes and media to the database
-	console.log(`Deleting ${hashesToDelete.length} outdated notes`)
-	await adapter.deleteNotesByHashes(hashesToDelete)
+	console.log(`Deleting ${pages.size} outdated notes`)
+	await adapter.deleteNotesByHashes([
+		...pages.values().map((page) => page.note.hash),
+	])
 
 	// Validate foreign key references before insertion
 	validateForeignKeys(pages, imagePathsInDb)
