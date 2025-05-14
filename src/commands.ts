@@ -206,7 +206,21 @@ async function collectMedia(adapter: DatabaseAdapter, vault: Vault) {
 			// Ignore anything that's never mentioned in a markdown file
 			if (!imageRefs.has(file.name)) continue
 			// Calculate the hash to ignore images that have not changed since last upload
-			const buf = await vault.readBinary(file)
+			let buf: ArrayBuffer
+			try {
+				if (file.stat.size === 0) {
+					console.warn(`Skipping empty file: ${file.path}`)
+					continue
+				}
+				buf = await vault.readBinary(file)
+				if (buf.byteLength === 0) {
+					throw new Error("File read returned empty buffer")
+				}
+			} catch (error) {
+				console.error(`Failed to read file ${file.path}:`, error)
+				continue
+			}
+
 			const hash = crypto
 				.createHash("sha256")
 				.update(new Uint8Array(buf))
@@ -242,7 +256,21 @@ async function collectNotes(adapter: DatabaseAdapter, vault: Vault) {
 
 	const files: { file: TFile; hash: string }[] = []
 	for (const file of vault.getMarkdownFiles()) {
-		const buf = await vault.readBinary(file)
+		let buf: ArrayBuffer
+		try {
+			if (file.stat.size === 0) {
+				console.warn(`Skipping empty note: ${file.path}`)
+				continue
+			}
+			buf = await vault.readBinary(file)
+			if (buf.byteLength === 0) {
+				throw new Error("Note read returned empty buffer")
+			}
+		} catch (error) {
+			console.error(`Failed to read note ${file.path}:`, error)
+			continue
+		}
+
 		const hash = crypto
 			.createHash("sha256")
 			.update(new Uint8Array(buf))
