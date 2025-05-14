@@ -14,9 +14,11 @@ interface WorkingContentChunk extends ContentChunk {
 }
 
 abstract class Block {
-	protected static getRegex(name: string): RegExp {
+	static blockName: string
+
+	protected static getRegex(): RegExp {
 		return new RegExp(
-			`^:::\\s*${name}(?:\\((.*?)\\))?\\n(.*?)\\n:::`,
+			`^:::\\s*${this.blockName}(?:\\((.*?)\\))?\\n(.*?)\\n:::`,
 			"gms"
 		)
 		// Group 1 is args, if any. Group 2 is block content.
@@ -40,7 +42,9 @@ abstract class Block {
 	// TypeScript won't complain about not implementing parse methods on subclasses because they
 	// are static methods, but they should be on all of them (can't put abstract + static)
 
-	// Removes content and returns additional data
+	/**
+	 * Removes content and returns additional data.
+	 */
 	static extract?: (
 		md: string,
 		args?: Record<string, any>
@@ -50,7 +54,9 @@ abstract class Block {
 		} & Record<string, unknown>
 	>
 
-	// Modifies content in-place by splitting into chunks with different data
+	/**
+	 * Modifies content in-place by splitting into chunks with different data.
+	 */
 	static applyOnChunks?: (
 		chunks: WorkingContentChunk[],
 		args?: Record<string, any>
@@ -59,16 +65,25 @@ abstract class Block {
 			chunks: WorkingContentChunk[]
 		} & Record<string, unknown>
 	>
+
+	/**
+	 * Delete any block of this kind from the given string without parsing it.
+	 */
+	static delete: (md: string) => string
 }
 
 class HiddenBlock extends Block {
+	static blockName = "hidden"
+
 	static async extract(md: string) {
-		const regex = this.getRegex("hidden")
+		const regex = this.getRegex()
 		return { md: md.replaceAll(regex, "") }
 	}
 }
 
 class DetailsBlock extends Block {
+	static blockName = "details"
+
 	/**
 	 * Parse the contents of a :::details::: block.
 	 * @param md The markdown to process
@@ -81,7 +96,7 @@ class DetailsBlock extends Block {
 	): Promise<{ md: string; details: Detail[] }> {
 		// Convert only the first details block and leave all others untouched
 		// so we remove the global flag. TODO: Maybe merge them all instead?
-		const regex = new RegExp(this.getRegex("details"), "ms")
+		const regex = new RegExp(this.getRegex(), "ms")
 		const match = md.match(regex)
 		if (!match) return { md, details: [] }
 
@@ -138,6 +153,8 @@ class DetailsBlock extends Block {
 }
 
 class ImageBlock extends Block {
+	static blockName = "image"
+
 	/**
 	 * Parse the contents of an :::image::: block, but only if it has the "sidebar" argument.
 	 * Inline images are handled by `applyOnChunks`.
@@ -153,7 +170,7 @@ class ImageBlock extends Block {
 			imageNameToPath: Map<string, string>
 		}
 	) {
-		const regex = this.getRegex("image")
+		const regex = this.getRegex()
 		const matches = [
 			...md.matchAll(regex).filter((match) =>
 				// Ignore anything that's not marked sidebar
@@ -207,7 +224,7 @@ class ImageBlock extends Block {
 			imageNameToPath: Map<string, string>
 		}
 	) {
-		const imageRegex = this.getRegex("image")
+		const imageRegex = this.getRegex()
 		const outChunks = []
 		for (const chunk of chunks) {
 			if (chunk.locked) {
@@ -292,11 +309,18 @@ class ImageBlock extends Block {
 
 		return { image_name, image_path, caption }
 	}
+
+	static delete(md: string) {
+		const regex = this.getRegex()
+		return md.replaceAll(regex, "")
+	}
 }
 
 class SecretBlock extends Block {
+	static blockName = "secret"
+
 	static async applyOnChunks(chunks: WorkingContentChunk[]) {
-		const secretRegex = this.getRegex("secret")
+		const secretRegex = this.getRegex()
 		const outChunks = []
 		for (const chunk of chunks) {
 			if (chunk.locked) {

@@ -283,34 +283,40 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 	}
 
 	async runMigrations(): Promise<void> {
-		this.db.run("BEGIN TRANSACTION;")
-		for (const table of tables) {
-			try {
-				const currentSchema = await getTableSchema(
-					this.db,
-					table.name,
-					this.remote
-				)
-				if (
-					currentSchema.length > 0 &&
-					schemaChanged(currentSchema, table.schema)
-				) {
-					console.log(
-						`Schema changed on ${table.name}. Recreating table...`
+		try {
+			this.db.run("BEGIN TRANSACTION;")
+			for (const table of tables) {
+				try {
+					const currentSchema = await getTableSchema(
+						this.db,
+						table.name,
+						this.remote
 					)
-					this.db.run(`DROP TABLE ${table.name}`)
+					if (
+						currentSchema.length > 0 &&
+						schemaChanged(currentSchema, table.schema)
+					) {
+						console.log(
+							`Schema changed on ${table.name}. Recreating table...`
+						)
+						this.db.run(`DROP TABLE ${table.name}`)
+					}
+				} catch (e) {
+					console.error("ERROR", e)
+					// Table likely doesn't exist
 				}
-			} catch (e) {
-				console.log("ERROR", e)
-				// Table likely doesn't exist
+				this.db.run(table.schema)
 			}
-			this.db.run(table.schema)
-		}
 
-		for (const indexQuery of indexes) {
-			this.db.run(indexQuery)
+			for (const indexQuery of indexes) {
+				this.db.run(indexQuery)
+			}
+			this.db.run("COMMIT;")
+		} catch (error) {
+			this.db.run("ROLLBACK;")
+			console.error("Migration failed:", error)
+			throw new Error("Database migration failed.")
 		}
-		this.db.run("COMMIT;")
 	}
 
 	async insertUsers(users: User[]) {
@@ -547,18 +553,20 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 		}[]
 	): Promise<void> {
 		for (const { path, alt, hash, buf, svg_text } of images) {
-			await this.db.execute({
-				sql: insertImage,
-				args: [
-					path,
-					buf,
-					svg_text,
-					alt,
-					hash,
-					Math.floor(Date.now() / 1000),
-					1,
-				],
-			})
+			await withRetry(async () => {
+				await this.db.execute({
+					sql: insertImage,
+					args: [
+						path,
+						buf,
+						svg_text,
+						alt,
+						hash,
+						Math.floor(Date.now() / 1000),
+						1,
+					],
+				})
+			}, 3)
 		}
 	}
 
@@ -602,72 +610,78 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 	}
 
 	async pushPages(pages: Pages): Promise<void> {
-		const noteQueries = []
-		const noteContentsQueries = []
-		const detailsQueries = []
-		const sidebarImagesQueries = []
+		await withRetry(async () => {
+			const noteQueries = []
+			const noteContentsQueries = []
+			const detailsQueries = []
+			const sidebarImagesQueries = []
 
-		for (const [notePath, page] of pages.entries()) {
-			noteQueries.push({
-				sql: insertNotes,
-				args: [
-					notePath,
-					page.note.title,
-					page.note.alt_title,
-					page.note.search_terms,
-					page.note.slug,
-					page.note.frontpage,
-					page.note.lead,
-					page.note.allowed_users,
-					page.note.hash,
-					page.note.last_updated,
-					page.note.can_prerender,
-				],
-			})
-
-			for (const [idx, chunk] of page.chunks.entries()) {
-				noteContentsQueries.push({
-					sql: insertNoteContents,
+			for (const [notePath, page] of pages.entries()) {
+				noteQueries.push({
+					sql: insertNotes,
 					args: [
 						notePath,
-						// Use whatever order the chunks were passed in
-						idx,
-						chunk.text,
-						chunk.allowed_users,
-						chunk.image_path,
-						chunk.note_transclusion_path,
+						page.note.title,
+						page.note.alt_title,
+						page.note.search_terms,
+						page.note.slug,
+						page.note.frontpage,
+						page.note.lead,
+						page.note.allowed_users,
+						page.note.hash,
+						page.note.last_updated,
+						page.note.can_prerender,
 					],
 				})
+
+				for (const [idx, chunk] of page.chunks.entries()) {
+					noteContentsQueries.push({
+						sql: insertNoteContents,
+						args: [
+							notePath,
+							idx,
+							chunk.text,
+							chunk.allowed_users,
+							chunk.image_path,
+							chunk.note_transclusion_path,
+						],
+					})
+				}
+
+				for (const detail of page.details) {
+					detailsQueries.push({
+						sql: insertDetails,
+						args: [
+							notePath,
+							detail.order,
+							detail.key,
+							detail.value,
+						],
+					})
+				}
+
+				for (const img of page.sidebarImages) {
+					sidebarImagesQueries.push({
+						sql: insertSidebarImages,
+						args: [
+							notePath,
+							img.order,
+							img.image_name,
+							img.image_path,
+							img.caption,
+						],
+					})
+				}
 			}
 
-			for (const detail of page.details) {
-				detailsQueries.push({
-					sql: insertDetails,
-					args: [notePath, detail.order, detail.key, detail.value],
-				})
-			}
-
-			for (const img of page.sidebarImages) {
-				sidebarImagesQueries.push({
-					sql: insertSidebarImages,
-					args: [
-						notePath,
-						img.order,
-						img.image_name,
-						img.image_path,
-						img.caption,
-					],
-				})
-			}
-		}
-
-		const queries = [
-			...noteQueries,
-			...noteContentsQueries,
-			...detailsQueries,
-			...sidebarImagesQueries,
-		]
-		await this.db.batch(queries)
+			const queries = [
+				...noteQueries,
+				...noteContentsQueries,
+				...detailsQueries,
+				...sidebarImagesQueries,
+			]
+			await this.db.batch(queries)
+		}, 3)
 	}
 
 	async updateSettings(settings: WikiGeneratorSettings): Promise<void> {
@@ -681,13 +695,15 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 	}
 
 	async clearContent(): Promise<void> {
-		await this.db.batch([
-			deleteNoteContents,
-			deleteDetails,
-			deleteSidebarImages,
-			deleteImages,
-			deleteNotes,
-		])
+		await withRetry(async () => {
+			await this.db.batch([
+				deleteNoteContents,
+				deleteDetails,
+				deleteSidebarImages,
+				deleteImages,
+				deleteNotes,
+			])
+		}, 3)
 	}
 
 	async export(_vault: Vault): Promise<void> {
@@ -715,4 +731,35 @@ export async function getUsersFromRemote(
 
 	//@ts-expect-error
 	return res.rows as User[]
+}
+
+/**
+ * Helper function to retry an async operation with exponential backoff
+ * @param fn The async function to retry
+ * @param maxRetries Maximum number of retry attempts
+ * @returns Promise that resolves when fn succeeds or all retries are exhausted
+ */
+async function withRetry<T>(
+	fn: () => Promise<T>,
+	maxRetries: number
+): Promise<T> {
+	let retries = maxRetries
+	while (retries > 0) {
+		try {
+			return await fn()
+		} catch (error) {
+			retries -= 1
+			if (retries === 0) {
+				console.error(
+					`Failed to complete operation within ${maxRetries} attempts. Error: ${error}`
+				)
+				throw error
+			}
+			// Exponential backoff before retry
+			await new Promise((resolve) =>
+				setTimeout(resolve, 1000 * (maxRetries - retries + 1))
+			)
+		}
+	}
+	throw new Error("Retry logic failed - should never reach here")
 }

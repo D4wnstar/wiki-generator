@@ -1,4 +1,4 @@
-import { TFile, Vault } from "obsidian"
+import { Notice, TFile, Vault } from "obsidian"
 import { ensureUniqueSlug, replaceAllAsync, slugPath } from "src/utils"
 import { Processor, unified } from "unified"
 import { handleCustomSyntax } from "./custom-blocks"
@@ -88,73 +88,91 @@ export async function makePagesFromFiles(
 	// and the full path is reconstructed and tracked manually
 	const previousSlugs: Set<string> = new Set()
 
+	const failedPages: { path: string; error: Error }[] = []
+
 	for (const { file, hash } of files) {
-		const title = file.basename
-		const path = file.path
-		const slug = ensureUniqueSlug(slugPath(file.path), previousSlugs)
-		previousSlugs.add(slug)
+		try {
+			const title = file.basename
+			const path = file.path
+			const slug = ensureUniqueSlug(slugPath(file.path), previousSlugs)
+			previousSlugs.add(slug)
 
-		let content = await vault.cachedRead(file)
+			let content = await vault.cachedRead(file)
 
-		// Grab the frontmatter first because we need some properties
-		const fmVfile = await frontmatterProcessor.process(content)
-		const frontmatter = fmVfile.data.matter as Frontmatter
+			// Grab the frontmatter first because we need some properties
+			const fmVfile = await frontmatterProcessor.process(content)
+			const frontmatter = fmVfile.data.matter as Frontmatter
 
-		// Skip pages that shouldn't be published (wiki-publish is either false or undefined)
-		if (!frontmatter["wiki-publish"]) continue
+			// Skip pages that shouldn't be published (wiki-publish is either false or undefined)
+			if (!frontmatter["wiki-publish"]) continue
 
-		// Parse and replace custom :::blocks::: and other non-standard syntax
-		// Codeblocks are removed and added back later to keep them unmodified
-		content = await processDisplayLatex(content, latexProcessor)
-		const { md, inlineCode, codeBlocks } = removeCodeblocks(content)
-		const { md: md2, footnotes } = await removeFootnotes(md, processor)
-		const { wChunks, details, sidebarImages } = await handleCustomSyntax(
-			md2,
-			file.name,
-			processor,
-			imageNameToPath,
-			noteNameToPath
-		)
-		let chunks = addFootnotesBack(wChunks.chunks, footnotes)
-		chunks = addCodeblocksBack(chunks, inlineCode, codeBlocks)
+			// Parse and replace custom :::blocks::: and other non-standard syntax
+			// Codeblocks are removed and added back later to keep them unmodified
+			content = await processDisplayLatex(content, latexProcessor)
+			const { md, inlineCode, codeBlocks } = removeCodeblocks(content)
+			const { md: md2, footnotes } = await removeFootnotes(md, processor)
+			const { wChunks, details, sidebarImages } =
+				await handleCustomSyntax(
+					md2,
+					file.name,
+					processor,
+					imageNameToPath,
+					noteNameToPath
+				)
+			let chunks = addFootnotesBack(wChunks.chunks, footnotes)
+			chunks = addCodeblocksBack(chunks, inlineCode, codeBlocks)
 
-		// Convert the markdown of each chunk separately
-		for (const chunk of chunks) {
-			if (!chunk.text) continue
-			chunk.text = String(await processor.process(chunk.text))
+			// Convert the markdown of each chunk separately
+			for (const chunk of chunks) {
+				if (!chunk.text) continue
+				chunk.text = String(await processor.process(chunk.text))
+			}
+
+			// Save the current title/slug pair for later use
+			titleToPath.set(title.toLowerCase(), slug)
+
+			// Get aliases as search terms
+			const alt_title = frontmatter["wiki-title"] ?? null
+			const aliases = frontmatter["aliases"]?.join("; ") as
+				| string
+				| undefined
+			let search_terms = title
+			search_terms += alt_title ? `; ${alt_title}` : ""
+			search_terms += aliases ? `; ${aliases}` : ""
+
+			// A page can be prerendered if it does not depend on user permission
+			const allowed_users =
+				frontmatter["wiki-allowed-users"]?.join("; ") ?? null
+			const requiresAuth =
+				allowed_users !== null ||
+				chunks.some((chunk) => chunk.allowed_users !== null)
+
+			const note: Note = {
+				title,
+				alt_title,
+				search_terms,
+				path,
+				slug: slug,
+				frontpage: frontmatter["wiki-home"] ?? 0,
+				lead: "", // Currently unused, needed for popups once they are reimplemented
+				allowed_users,
+				hash,
+				last_updated: lastUpdated,
+				can_prerender: Number(!requiresAuth),
+			}
+			pages.set(path, { note, chunks, details, sidebarImages })
+		} catch (error) {
+			failedPages.push({ path: file.path, error })
+			continue
 		}
+	}
 
-		// Save the current title/slug pair for later use
-		titleToPath.set(title.toLowerCase(), slug)
-
-		// Get aliases as search terms
-		const alt_title = frontmatter["wiki-title"] ?? null
-		const aliases = frontmatter["aliases"]?.join("; ") as string | undefined
-		let search_terms = title
-		search_terms += alt_title ? `; ${alt_title}` : ""
-		search_terms += aliases ? `; ${aliases}` : ""
-
-		// A page can be prerendered if it does not depend on user permission
-		const allowed_users =
-			frontmatter["wiki-allowed-users"]?.join("; ") ?? null
-		const requiresAuth =
-			allowed_users !== null ||
-			chunks.some((chunk) => chunk.allowed_users !== null)
-
-		const note: Note = {
-			title,
-			alt_title,
-			search_terms,
-			path,
-			slug: slug,
-			frontpage: frontmatter["wiki-home"] ?? 0,
-			lead: "", // Currently unused, needed for popups once they are reimplemented
-			allowed_users,
-			hash,
-			last_updated: lastUpdated,
-			can_prerender: Number(!requiresAuth),
+	if (failedPages.length > 0) {
+		console.warn(`${failedPages.length} pages failed to process:`)
+		new Notice(`${failedPages.length} pages failed to process:`)
+		for (const { path, error } of failedPages) {
+			console.warn(`- ${path}: ${error.message}`)
 		}
-		pages.set(path, { note, chunks, details, sidebarImages })
 	}
 
 	return { pages, titleToPath }
