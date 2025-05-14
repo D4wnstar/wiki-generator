@@ -31,7 +31,7 @@ export async function uploadNotes(
 	// Warn the user in case they don't have a deploy hook
 	if (!settings.localExport && settings.deployHook.length === 0) {
 		new Notice(
-			"Deploy hook is not set. Notes will be uploaded, but website will not update. Check settings.",
+			"Deploy hook is not set. Notes will be uploaded, but website will not update. Make one in your Vercel dashboard and copy it in the settings.",
 			10000
 		)
 	}
@@ -221,9 +221,11 @@ async function collectMedia(adapter: DatabaseAdapter, vault: Vault) {
 				continue
 			}
 
+			// Recreate the buffer to avoid strip platform-specific artifacts which change hashes across platforms
+			const cleanBuffer = new Uint8Array(buf).buffer
 			const hash = crypto
 				.createHash("sha256")
-				.update(new Uint8Array(buf))
+				.update(new Uint8Array(cleanBuffer))
 				.digest("hex")
 
 			const maybeExistingHash = existingImageHashes.get(file.path)
@@ -256,25 +258,21 @@ async function collectNotes(adapter: DatabaseAdapter, vault: Vault) {
 
 	const files: { file: TFile; hash: string }[] = []
 	for (const file of vault.getMarkdownFiles()) {
-		let buf: ArrayBuffer
+		let content: string
 		try {
 			if (file.stat.size === 0) {
 				console.warn(`Skipping empty note: ${file.path}`)
 				continue
 			}
-			buf = await vault.readBinary(file)
-			if (buf.byteLength === 0) {
-				throw new Error("Note read returned empty buffer")
-			}
+			content = await vault.cachedRead(file)
+			// Normalize line endings to prevent cross-platform mismatches
+			content = content.replace(/\r\n/g, "\n")
 		} catch (error) {
 			console.error(`Failed to read note ${file.path}:`, error)
 			continue
 		}
 
-		const hash = crypto
-			.createHash("sha256")
-			.update(new Uint8Array(buf))
-			.digest("hex")
+		const hash = crypto.createHash("sha256").update(content).digest("hex")
 
 		const maybeExistingHash = existingHashes.get(file.path)
 		if (!maybeExistingHash || hash !== maybeExistingHash) {
