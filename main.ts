@@ -1,5 +1,10 @@
 import { Notice, Plugin, TFile, TFolder } from "obsidian"
-import { massAddPublish, massSetPublishState, uploadNotes } from "src/commands"
+import {
+	massAddPublish,
+	massSetPublishState,
+	pingDeployHook,
+	uploadNotes,
+} from "src/commands"
 import { addWikiPublishToNewFile } from "src/events"
 import { checkForTemplateUpdates } from "src/repository"
 import {
@@ -8,7 +13,7 @@ import {
 	WikiGeneratorSettings,
 	addFolderContextMenu,
 } from "src/settings"
-import { PropertyModal, UserListModal } from "src/modals"
+import { BlockModal, PropertyModal, UserListModal } from "src/modals"
 import { getUsersFromRemote } from "src/database/operations"
 
 export default class WikiGeneratorPlugin extends Plugin {
@@ -118,6 +123,13 @@ export default class WikiGeneratorPlugin extends Plugin {
 				new PropertyModal(this.app, editor).open(),
 		})
 
+		this.addCommand({
+			id: "add-block",
+			name: "Add a Block",
+			editorCallback: (editor, _view) =>
+				new BlockModal(this.app, editor).open(),
+		})
+
 		// Get a list of registered users
 		this.addCommand({
 			id: "get-user-list",
@@ -129,6 +141,12 @@ export default class WikiGeneratorPlugin extends Plugin {
 				)
 				new UserListModal(this.app, users).open()
 			},
+		})
+
+		this.addCommand({
+			id: "ping-deploy-hook",
+			name: "Redeploy website",
+			callback: async () => await pingDeployHook(settings),
 		})
 
 		this.addSettingTab(new WikiGeneratorSettingTab(this.app, this))

@@ -559,3 +559,20 @@ export async function resetDatabase(
 		await adapter.close()
 	}
 }
+
+export async function pingDeployHook(settings: WikiGeneratorSettings) {
+	if (settings.deployHook) {
+		new Notice(
+			"Redeploying website. Check Vercel dashboard for further details."
+		)
+		await request({
+			url: settings.deployHook,
+			method: "POST",
+		}).catch((error) => {
+			console.error("Failed to ping deploy hook:", error)
+			new Notice(`Failed to ping deploy hook: ${error}`, 0)
+		})
+	} else {
+		new Notice("No deploy hook is set. Please add one in the settings.")
+	}
+}
