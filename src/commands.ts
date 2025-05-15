@@ -46,37 +46,42 @@ export async function uploadNotes(
 	const notice = new Notice(fragment, 0)
 
 	// Initialize common database interface
-	const adapter = await initializeAdapter(settings, vault)
+	const database = await initializeAdapter(settings, vault)
 
 	try {
 		if (reset) {
 			updateProgress(5, "Clearing existing content...")
 			console.log("Dropping all content tables...")
-			await adapter.clearContent()
+			await database.clearContent()
 		}
 
 		updateProgress(10, "Running database migrations...")
 		console.log("Running migrations...")
-		await adapter.runMigrations()
+		await database.runMigrations()
 
 		updateProgress(20, "Collecting images...")
 		console.log("Collecting images...")
-		const images = await collectMedia(adapter, vault)
+		const images = await collectMedia(database, vault)
 
 		updateProgress(35, "Collecting notes...")
 		console.log("Collecting notes...")
-		const files = await collectNotes(adapter, vault)
+		const notes = await collectNotes(database, vault)
 
 		updateProgress(50, "Processing notes...")
 		console.log("Processing notes...")
-		const pages = await processNotes(files, images.nameToPath, vault)
-		const uploadedNotes = pages.size
+		const pagesToInsert = await processNotes(
+			notes.toInsert,
+			images.nameToPath,
+			vault
+		)
+		const uploadedNotes = pagesToInsert.size
 
 		updateProgress(65, "Uploading images...")
 		console.log("Inserting images...")
 		const insertedImagePaths = await insertMedia(
-			images.files,
-			adapter,
+			images.toInsert,
+			images.toDelete,
+			database,
 			vault
 		)
 		const uploadedImages = insertedImagePaths.length
@@ -84,11 +89,16 @@ export async function uploadNotes(
 		updateProgress(80, "Uploading notes...")
 		console.log("Inserting notes...")
 		const imagePathsInDb = [...insertedImagePaths, ...images.existingPaths]
-		await insertNotes(pages, imagePathsInDb, adapter)
+		await insertNotes(
+			pagesToInsert,
+			notes.toDelete,
+			imagePathsInDb,
+			database
+		)
 
 		updateProgress(90, "Updating settings...")
 		console.log("Updating settings...")
-		await adapter.updateSettings(settings)
+		await database.updateSettings(settings)
 
 		if (settings.localExport && !settings.ignoreUsers) {
 			updateProgress(95, "Cloning user accounts...")
@@ -97,13 +107,13 @@ export async function uploadNotes(
 				settings.dbUrl,
 				settings.dbToken
 			)
-			await adapter.insertUsers(users)
+			await database.insertUsers(users)
 		}
 
 		if (settings.localExport) {
 			updateProgress(98, "Exporting database...")
 			console.log("Exporting database...")
-			await adapter.export(vault)
+			await database.export(vault)
 			updateProgress(
 				100,
 				`Exported ${uploadedNotes} notes and ${uploadedImages} images!`
@@ -133,7 +143,7 @@ export async function uploadNotes(
 	} finally {
 		setTimeout(() => notice.hide(), 3000)
 		try {
-			await adapter.close()
+			await database.close()
 		} catch (error) {
 			console.error("Failed to clean up adapter:", error)
 		}
@@ -145,28 +155,36 @@ export async function uploadNotes(
 	}
 }
 
-async function collectMedia(adapter: DatabaseAdapter, vault: Vault) {
+async function collectMedia(database: DatabaseAdapter, vault: Vault) {
 	// Get all images in the database
-	const existingImageHashes = new Map<string, string>()
-	const existingImagePaths = []
-	for (const image of await adapter.getImageData()) {
+	const remoteImageHashes = new Map<string, string>()
+	const remoteImagePaths = []
+	for (const image of await database.getImageData()) {
 		// In theory these should exist, but due to schema changes double checking is good
 		if (!image.path || !image.hash) continue
-		existingImageHashes.set(image.path, image.hash)
-		existingImagePaths.push(image.path)
+		remoteImageHashes.set(image.path, image.hash)
+		remoteImagePaths.push(image.path)
 	}
 
 	// First get all referenced images from markdown files
 	const imageRefs = await getReferencedImages(vault)
 
 	// Collect only referenced images that have changed
-	const images: { file: TFile; hash: string; type: "raster" | "svg" }[] = []
+	const imagesToInsert: {
+		file: TFile
+		hash: string
+		type: "raster" | "svg"
+	}[] = []
+	const imagesToDelete: { path: string }[] = []
 	const imageNameToPath: Map<string, string> = new Map()
 	for (const file of vault.getFiles()) {
 		if (imageExtensions.includes(file.extension)) {
 			imageNameToPath.set(file.name, file.path)
-			// Ignore anything that's never mentioned in a markdown file
-			if (!imageRefs.has(file.name)) continue
+			// Ignore and delete anything that's never mentioned in a markdown file
+			if (!imageRefs.has(file.name)) {
+				imagesToDelete.push({ path: file.path })
+				continue
+			}
 			// Calculate the hash to ignore images that have not changed since last upload
 			let buf: ArrayBuffer
 			try {
@@ -190,11 +208,11 @@ async function collectMedia(adapter: DatabaseAdapter, vault: Vault) {
 				.update(new Uint8Array(cleanBuffer))
 				.digest("hex")
 
-			const maybeExistingHash = existingImageHashes.get(file.path)
+			const maybeExistingHash = remoteImageHashes.get(file.path)
+			// If the file doesn't exist or it changed, insert/overwrite it
 			if (!maybeExistingHash || hash !== maybeExistingHash) {
-				// If the file doesn't exist or it changed, insert/overwrite it
 				const type = file.extension === "svg" ? "svg" : "raster"
-				images.push({ file, hash, type })
+				imagesToInsert.push({ file, hash, type })
 			}
 			// If it exists and it's identical to last time, don't bother reprocessing it
 		} else {
@@ -202,24 +220,30 @@ async function collectMedia(adapter: DatabaseAdapter, vault: Vault) {
 			continue
 		}
 	}
+	console.debug("Images to insert:", imagesToInsert)
+	console.debug("Images to delete:", imagesToDelete)
 
 	return {
-		files: images,
+		toInsert: imagesToInsert,
+		toDelete: imagesToDelete,
 		nameToPath: imageNameToPath,
-		existingPaths: existingImagePaths,
+		existingPaths: remoteImagePaths,
 	}
 }
 
-async function collectNotes(adapter: DatabaseAdapter, vault: Vault) {
+async function collectNotes(database: DatabaseAdapter, vault: Vault) {
 	// Fetch all markdown files and filter out ones that are unchanged since the last upload
-	const existingHashes = new Map<string, string>()
-	const remoteNotes = await adapter.getNotes()
+	const remoteHashes = new Map<string, string>()
+	const remoteNotes = await database.getNotes()
 	for (const note of remoteNotes) {
-		existingHashes.set(note.path, note.hash)
+		remoteHashes.set(note.path, note.hash)
 	}
+	const localPaths: Set<string> = new Set()
 
-	const files: { file: TFile; hash: string }[] = []
+	const notesToInsert: { file: TFile; hash: string }[] = []
 	for (const file of vault.getMarkdownFiles()) {
+		localPaths.add(file.path)
+
 		let content: string
 		try {
 			if (file.stat.size === 0) {
@@ -236,28 +260,40 @@ async function collectNotes(adapter: DatabaseAdapter, vault: Vault) {
 
 		const hash = crypto.createHash("sha256").update(content).digest("hex")
 
-		const maybeExistingHash = existingHashes.get(file.path)
+		const maybeExistingHash = remoteHashes.get(file.path)
 		if (!maybeExistingHash || hash !== maybeExistingHash) {
 			// If the note doesn't exist or it changed, insert/overwrite it
-			files.push({ file, hash })
+			notesToInsert.push({ file, hash })
 		}
 		// If it exists and it's identical to last time, don't bother reprocessing it
 	}
 
-	return files
+	// Delete notes that exist in remote but not in local
+	const remotePaths = new Set(remoteHashes.keys())
+	const notesToDelete = remotePaths.difference(localPaths)
+
+	console.debug("Collected notes to insert:", notesToInsert)
+	console.debug("Collected notes to delete:", notesToDelete)
+
+	return {
+		toInsert: notesToInsert,
+		toDelete: [...notesToDelete].map((path) => ({ path })),
+	}
 }
 
 async function insertMedia(
-	images: { file: TFile; hash: string; type: "raster" | "svg" }[],
-	adapter: DatabaseAdapter,
+	imagesToInsert: { file: TFile; hash: string; type: "raster" | "svg" }[],
+	imagesToDelete: { path: string }[],
+	database: DatabaseAdapter,
 	vault: Vault
 ) {
 	// Push the media to the database
-	console.log(`Deleting ${images.length} outdated images...`)
-	await adapter.deleteImagesByHashes(images.map((img) => img.hash))
+	console.log(`Deleting ${imagesToDelete.length} outdated images...`)
+	console.debug("Outdated images:", imagesToDelete)
+	await database.deleteImagesByPath(imagesToDelete.map((img) => img.path))
 
-	const imagesToInsert = await Promise.all(
-		images.map(async ({ file, hash, type }) => {
+	const imageRows = await Promise.all(
+		imagesToInsert.map(async ({ file, hash, type }) => {
 			return {
 				path: file.path.replace(/\.md$/, ""),
 				alt: file.name,
@@ -272,14 +308,15 @@ async function insertMedia(
 			}
 		})
 	)
-	console.log(`Inserting ${imagesToInsert.length} images...`)
-	await adapter.insertImages(imagesToInsert)
+	console.log(`Inserting ${imageRows.length} images...`)
+	console.debug("New/updated images:", imageRows)
+	await database.insertImages(imageRows)
 
-	return imagesToInsert.map((img) => img.path)
+	return imageRows.map((img) => img.path)
 }
 
 async function processNotes(
-	files: any,
+	files: { file: TFile; hash: string }[],
 	imageNameToPath: Map<string, string>,
 	vault: Vault
 ) {
@@ -303,20 +340,21 @@ async function processNotes(
 }
 
 async function insertNotes(
-	pages: Pages,
+	pagesToInsert: Pages,
+	pagesToDelete: { path: string }[],
 	imagePathsInDb: string[],
-	adapter: DatabaseAdapter
+	database: DatabaseAdapter
 ) {
 	// Finally push the notes and media to the database
-	console.log(`Deleting ${pages.size} outdated notes`)
-	await adapter.deleteNotesByHashes([
-		...pages.values().map((page) => page.note.hash),
-	])
+	console.log(`Deleting ${pagesToDelete.length} outdated notes`)
+	console.debug("Outdated notes:", pagesToDelete)
+	await database.deleteNotesByPath(pagesToDelete.map((page) => page.path))
 
 	// Validate foreign key references before insertion
-	validateForeignKeys(pages, imagePathsInDb)
-	console.log(`Inserting ${pages.size} notes...`)
-	await adapter.pushPages(pages)
+	validateForeignKeys(pagesToInsert, imagePathsInDb)
+	console.log(`Inserting ${pagesToInsert.size} notes...`)
+	console.debug("New/updated notes:", pagesToInsert)
+	await database.pushPages(pagesToInsert)
 }
 
 /**

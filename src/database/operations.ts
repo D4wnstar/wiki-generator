@@ -116,7 +116,7 @@ const deleteSidebarImages = `DROP TABLE IF EXISTS sidebar_images;`
 // const deleteUsers = `DROP TABLE IF EXISTS users;`
 
 const insertNotes = `
-INSERT INTO notes (
+INSERT OR REPLACE INTO notes (
 	path,
 	title,
 	alt_title,
@@ -164,7 +164,7 @@ INSERT INTO wiki_settings (
 ) VALUES (?, ?);`
 
 const insertImage = `
-INSERT INTO images (
+INSERT OR REPLACE INTO images (
 	path,
 	blob,
 	svg_text,
@@ -348,13 +348,18 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 		}
 	}
 
-	async deleteImagesByHashes(hashes: string[]): Promise<void> {
-		if (hashes.length === 0) return
-		const placeholders = hashes.map(() => "?").join(",")
-		this.db.run(
-			`DELETE FROM images WHERE hash IN (${placeholders})`,
-			hashes
-		)
+	async deleteImagesByPath(paths: string[]): Promise<void> {
+		if (paths.length === 0) return
+		this.db.run("BEGIN TRANSACTION;")
+		try {
+			for (const path of paths) {
+				this.db.run(`DELETE FROM images WHERE path = ?`, [path])
+			}
+			this.db.run("COMMIT;")
+		} catch (e) {
+			console.error(`Error when deleting images: ${e}`)
+			this.db.run("ROLLBACK;")
+		}
 	}
 
 	async getImageData(): Promise<ImageData[]> {
@@ -390,10 +395,18 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 		)
 	}
 
-	async deleteNotesByHashes(hashes: string[]): Promise<void> {
-		if (hashes.length === 0) return
-		const placeholders = hashes.map(() => "?").join(",")
-		this.db.run(`DELETE FROM notes WHERE hash IN (${placeholders})`, hashes)
+	async deleteNotesByPath(paths: string[]): Promise<void> {
+		if (paths.length === 0) return
+		this.db.run("BEGIN TRANSACTION;")
+		try {
+			for (const path of paths) {
+				this.db.run(`DELETE FROM notes WHERE path = ?`, [path])
+			}
+			this.db.run("COMMIT;")
+		} catch (e) {
+			console.error(`Error when deleting notes: ${e}`)
+			this.db.run("ROLLBACK;")
+		}
 	}
 
 	async pushPages(pages: Pages): Promise<void> {
@@ -570,13 +583,13 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 		}
 	}
 
-	async deleteImagesByHashes(hashes: string[]): Promise<void> {
-		if (hashes.length === 0) return
-		const placeholders = hashes.map(() => "?").join(",")
-		await this.db.execute({
-			sql: `DELETE FROM images WHERE hash IN (${placeholders})`,
-			args: hashes,
-		})
+	async deleteImagesByPath(paths: string[]): Promise<void> {
+		if (paths.length === 0) return
+		const queries = paths.map((path) => ({
+			sql: `DELETE FROM images WHERE path = ?`,
+			args: [path],
+		}))
+		await this.db.batch(queries)
 	}
 
 	async insertUsers(users: User[]) {
@@ -600,13 +613,13 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 		return res.rows
 	}
 
-	async deleteNotesByHashes(hashes: string[]): Promise<void> {
-		if (hashes.length === 0) return
-		const placeholders = hashes.map(() => "?").join(",")
-		await this.db.execute({
-			sql: `DELETE FROM notes WHERE hash IN (${placeholders})`,
-			args: hashes,
-		})
+	async deleteNotesByPath(paths: string[]): Promise<void> {
+		if (paths.length === 0) return
+		const queries = paths.map((path) => ({
+			sql: `DELETE FROM notes WHERE path = ?`,
+			args: [path],
+		}))
+		await this.db.batch(queries)
 	}
 
 	async pushPages(pages: Pages): Promise<void> {

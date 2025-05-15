@@ -88,11 +88,11 @@ export interface DatabaseAdapter {
 			svg_text: string | null
 		}[]
 	): Promise<void>
-	deleteImagesByHashes(hashes: string[]): Promise<void>
+	deleteImagesByPath(paths: string[]): Promise<void>
 	getNotes(): Promise<Note[]>
 	pushPages(pages: Pages): Promise<void>
 	updateSettings(settings: WikiGeneratorSettings): Promise<void>
-	deleteNotesByHashes(hashes: string[]): Promise<void>
+	deleteNotesByPath(paths: string[]): Promise<void>
 	clearContent(): Promise<void>
 	export(vault: Vault): Promise<void>
 	close(): Promise<void>
