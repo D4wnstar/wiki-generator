@@ -315,3 +315,45 @@ export function replacePropertiesFromEditor(editor: Editor, newProps: string) {
 	// Finally, replace all characters between the start and the final line
 	editor.replaceRange(newProps, startPos, endPos)
 }
+
+/**
+ * Create a `DocumentFragment` representing a progress bar meant to be used in an
+ * Obsidian notice with infinite duration. Hide the notice with its `.hide()` method
+ * once the progress bar is at 100%.
+ * @returns A `DocumentFragment` of the loading bar and a function to update it
+ */
+export function createProgressBarFragment(): {
+	fragment: DocumentFragment
+	updateProgress: (percent: number, text: string) => void
+} {
+	const fragment = new DocumentFragment()
+	const progressBarSlot = document.createElement("div")
+	progressBarSlot.style.width = "100%"
+	progressBarSlot.style.height = "4px"
+	progressBarSlot.style.backgroundColor = "var(--background-secondary)"
+	progressBarSlot.style.borderRadius = "10px"
+	progressBarSlot.style.overflow = "hidden"
+
+	const progressBar = document.createElement("div")
+	progressBar.style.width = "0%"
+	progressBar.style.height = "100%"
+	progressBar.style.backgroundColor = "var(--interactive-accent)"
+	progressBar.style.transition = "width 0.3s ease"
+
+	const progressText = document.createElement("div")
+	progressText.style.marginTop = "4px"
+	progressText.style.marginBottom = "8px"
+	progressText.style.textAlign = "center"
+	progressText.textContent = "Starting upload..."
+
+	progressBarSlot.appendChild(progressBar)
+	fragment.appendChild(progressText)
+	fragment.appendChild(progressBarSlot)
+
+	const updateProgress = (percent: number, text: string) => {
+		progressBar.style.width = `${percent}%`
+		progressText.textContent = text
+	}
+
+	return { fragment, updateProgress }
+}

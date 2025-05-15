@@ -1,6 +1,10 @@
 import { Notice, request, TFile, Vault } from "obsidian"
 import { WikiGeneratorSettings } from "./settings"
-import { getPublishableFiles, imageToArrayBuffer } from "./utils"
+import {
+	createProgressBarFragment,
+	getPublishableFiles,
+	imageToArrayBuffer,
+} from "./utils"
 import { unified } from "unified"
 import { createLocalDatabase, initializeAdapter } from "./database/init"
 import {
@@ -124,10 +128,10 @@ export async function uploadNotes(
 				`Uploaded ${uploadedNotes} notes and ${uploadedImages} images!`
 			)
 		}
-		setTimeout(() => notice.hide(), 3000)
 
 		console.log(`Successfully uploaded ${uploadedNotes} notes`)
 	} finally {
+		setTimeout(() => notice.hide(), 3000)
 		try {
 			await adapter.close()
 		} catch (error) {
@@ -139,48 +143,6 @@ export async function uploadNotes(
 			"-".repeat(10)
 		)
 	}
-}
-
-/**
- * Create a `DocumentFragment` representing a progress bar meant to be used in an
- * Obsidian notice with infinite duration. Hide the notice with its `.hide()` method
- * once you're the progress bar is at 100%.
- * @returns A `DocumentFragment` of the loading bar and a function to update it
- */
-function createProgressBarFragment(): {
-	fragment: DocumentFragment
-	updateProgress: (percent: number, text: string) => void
-} {
-	const fragment = new DocumentFragment()
-	const progressBarSlot = document.createElement("div")
-	progressBarSlot.style.width = "100%"
-	progressBarSlot.style.height = "4px"
-	progressBarSlot.style.backgroundColor = "var(--background-secondary)"
-	progressBarSlot.style.borderRadius = "10px"
-	progressBarSlot.style.overflow = "hidden"
-
-	const progressBar = document.createElement("div")
-	progressBar.style.width = "0%"
-	progressBar.style.height = "100%"
-	progressBar.style.backgroundColor = "var(--interactive-accent)"
-	progressBar.style.transition = "width 0.3s ease"
-
-	const progressText = document.createElement("div")
-	progressText.style.marginTop = "4px"
-	progressText.style.marginBottom = "8px"
-	progressText.style.textAlign = "center"
-	progressText.textContent = "Starting upload..."
-
-	progressBarSlot.appendChild(progressBar)
-	fragment.appendChild(progressText)
-	fragment.appendChild(progressBarSlot)
-
-	const updateProgress = (percent: number, text: string) => {
-		progressBar.style.width = `${percent}%`
-		progressText.textContent = text
-	}
-
-	return { fragment, updateProgress }
 }
 
 async function collectMedia(adapter: DatabaseAdapter, vault: Vault) {
