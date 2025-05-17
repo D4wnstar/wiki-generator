@@ -11,6 +11,7 @@ import {
 } from "obsidian"
 import { checkForTemplateUpdates, pullWebsiteUpdates } from "./repository"
 import { resetDatabase } from "./commands"
+import { isWebsiteUpToDate } from "./utils"
 
 export interface WikiGeneratorSettings {
 	firstUpload: boolean
@@ -111,14 +112,11 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			.setName("Public folders")
 			.setDesc(folderDesc)
 			.addButton((button) => {
-				button
-					.setButtonText("Add folder")
-					.setCta()
-					.onClick(async () => {
-						settings.publicFolders.push("")
-						await this.plugin.saveSettings()
-						this.display()
-					})
+				button.setButtonText("Add folder").onClick(async () => {
+					settings.publicFolders.push("")
+					await this.plugin.saveSettings()
+					this.display()
+				})
 			})
 
 		settings.publicFolders.forEach((folder, index) => {
@@ -154,14 +152,11 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 				"Like public folders, but in reverse. Anything in a private folder will be ignored by restricted commands and settings. Useful if you want to publish everything in your vault except notes from a few folders, or if you want to remove a subfolder from a public folder."
 			)
 			.addButton((button) => {
-				button
-					.setButtonText("Add folder")
-					.setCta()
-					.onClick(async () => {
-						settings.privateFolders.push("")
-						await this.plugin.saveSettings()
-						this.display()
-					})
+				button.setButtonText("Add folder").onClick(async () => {
+					settings.privateFolders.push("")
+					await this.plugin.saveSettings()
+					this.display()
+				})
 			})
 
 		settings.privateFolders.forEach((folder, index) => {
@@ -234,22 +229,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			.addButton((button) => {
 				button
 					.setButtonText("Check for updates")
-					.setCta()
-					.onClick(async () => {
-						const updates = await checkForTemplateUpdates(
-							settings.githubUsername,
-							settings.githubRepoName,
-							undefined,
-							settings.githubRepoToken
-						)
-						if (!updates) {
-							new Notice("Your website is already up to date!")
-						} else {
-							new Notice(
-								"There is an update available for your website. Update it from the settings tab."
-							)
-						}
-					})
+					.onClick(async () => await isWebsiteUpToDate(settings))
 			})
 
 		new Setting(containerEl)
@@ -272,35 +252,32 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 				"Update your website to synchronize with all new template additions. This may take some time. Please don't close Obsidian while updating. Make sure you also update this plugin whenever you update your website to avoid inconsistencies."
 			)
 			.addButton((button) => {
-				button
-					.setButtonText("Update website")
-					.setCta()
-					.onClick(async () => {
-						if (
-							settings.githubRepoToken &&
-							settings.githubUsername &&
-							settings.githubRepoName
-						) {
-							new Notice("Updating your website...")
-							const prUrl = await pullWebsiteUpdates(
-								settings.githubRepoToken,
-								settings.githubUsername,
-								settings.githubRepoName,
-								settings.githubAutoapplyUpdates
-							)
-							if (prUrl) {
-								new Notice(
-									"A new pull request has been opened in your website's repository. You must merge it for the update to apply."
-								)
-							} else {
-								new Notice("Your website is now up to date.")
-							}
-						} else {
+				button.setButtonText("Update website").onClick(async () => {
+					if (
+						settings.githubRepoToken &&
+						settings.githubUsername &&
+						settings.githubRepoName
+					) {
+						new Notice("Updating your website...")
+						const prUrl = await pullWebsiteUpdates(
+							settings.githubRepoToken,
+							settings.githubUsername,
+							settings.githubRepoName,
+							settings.githubAutoapplyUpdates
+						)
+						if (prUrl) {
 							new Notice(
-								"Please set your GitHub username, repository and token."
+								"A new pull request has been opened in your website's repository. You must merge it for the update to apply."
 							)
+						} else {
+							new Notice("Your website is now up to date.")
 						}
-					})
+					} else {
+						new Notice(
+							"Please set your GitHub username, repository and token."
+						)
+					}
+				})
 			})
 
 		const autoapplyUpdateDesc = document.createDocumentFragment()

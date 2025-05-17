@@ -1,9 +1,9 @@
-import { Notice, Plugin, TFile, TFolder } from "obsidian"
+import { Notice, Plugin, TFile } from "obsidian"
 import {
 	massAddPublish,
 	massSetPublishState,
 	pingDeployHook,
-	uploadNotes,
+	syncNotes,
 } from "src/commands"
 import { addWikiPublishToNewFile } from "src/events"
 import { checkForTemplateUpdates } from "src/repository"
@@ -15,6 +15,7 @@ import {
 } from "src/settings"
 import { BlockModal, PropertyModal, UserListModal } from "src/modals"
 import { getUsersFromRemote } from "src/database/operations"
+import { isWebsiteUpToDate } from "src/utils"
 
 export default class WikiGeneratorPlugin extends Plugin {
 	settings: WikiGeneratorSettings
@@ -22,7 +23,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings()
 
-		// Define shorthands for common variables
+		// Shorthands for common variables
 		const settings = this.settings
 		const workspace = this.app.workspace
 
@@ -33,16 +34,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 			settings.githubRepoToken &&
 			settings.githubCheckUpdatesOnStartup
 		) {
-			const websiteUpdates = await checkForTemplateUpdates(
-				settings.githubUsername,
-				settings.githubRepoName,
-				undefined,
-				settings.githubRepoToken
-			)
-			if (websiteUpdates)
-				new Notice(
-					"There is an update available for your website. Update it from the settings tab."
-				)
+			await isWebsiteUpToDate(settings, 10000)
 		}
 
 		// Automatically add the wiki-publish: true property on file creation
@@ -50,11 +42,14 @@ export default class WikiGeneratorPlugin extends Plugin {
 		workspace.onLayoutReady(() => {
 			this.registerEvent(
 				this.app.vault.on("create", (file) => {
-					// Ignore folders being created or if this feature is disabled
-					if (file instanceof TFolder || !settings.autopublishNotes) {
+					// Ignore non-files being created or if this feature is disabled
+					if (
+						!(file instanceof TFile) ||
+						!settings.autopublishNotes
+					) {
 						return
 					}
-					addWikiPublishToNewFile(file as TFile, settings, workspace)
+					addWikiPublishToNewFile(file, settings, workspace)
 				})
 			)
 		})
@@ -66,9 +61,9 @@ export default class WikiGeneratorPlugin extends Plugin {
 			)
 		)
 
-		const upload = async (reset: boolean) => {
+		const sync = async (reset: boolean) => {
 			try {
-				await uploadNotes(this.app.vault, settings, reset)
+				await syncNotes(this.app.vault, settings, reset)
 			} catch (error) {
 				console.error("An error occured while uploading notes.", error)
 				new Notice(
@@ -79,21 +74,23 @@ export default class WikiGeneratorPlugin extends Plugin {
 		}
 
 		// Add a ribbon icon to upload notes
-		this.addRibbonIcon("cloud-upload", "Upload notes", async () =>
-			upload(false)
+		this.addRibbonIcon(
+			"cloud-upload",
+			"Sync notes",
+			async () => await sync(false)
 		)
 
 		// And a command for the same thing
 		this.addCommand({
-			id: "upload-notes",
-			name: "Upload notes",
-			callback: async () => upload(false),
+			id: "sync-notes",
+			name: "Sync notes",
+			callback: async () => await sync(false),
 		})
 
 		this.addCommand({
-			id: "upload-notes-reset",
-			name: "Clear database, then upload notes",
-			callback: async () => upload(true),
+			id: "sync-notes-reset",
+			name: "Clear database, then sync notes",
+			callback: async () => await sync(true),
 		})
 
 		// Commands to make setting properties easier

@@ -77,7 +77,9 @@ export type User = {
 export interface DatabaseAdapter {
 	remote: boolean
 	runMigrations(): Promise<void>
+
 	insertUsers(users: User[]): Promise<void>
+
 	getImageData(): Promise<ImageData[]>
 	insertImages(
 		images: {
@@ -87,12 +89,14 @@ export interface DatabaseAdapter {
 			buf: ArrayBuffer | null
 			svg_text: string | null
 		}[]
-	): Promise<void>
-	deleteImagesByPath(paths: string[]): Promise<void>
+	): Promise<string[]>
+	deleteImagesByPath(paths: string[]): Promise<number>
+
 	getNotes(): Promise<Note[]>
-	pushPages(pages: Pages): Promise<void>
+	insertPages(pages: Pages): Promise<number>
+	deleteNotesByPath(paths: string[]): Promise<number>
+
 	updateSettings(settings: WikiGeneratorSettings): Promise<void>
-	deleteNotesByPath(paths: string[]): Promise<void>
 	clearContent(): Promise<void>
 	export(vault: Vault): Promise<void>
 	close(): Promise<void>

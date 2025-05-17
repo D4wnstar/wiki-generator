@@ -107,15 +107,15 @@ const indexes = [
 	createNoteContentsAllowedUsersIndex,
 ]
 
-const deleteNotes = `DROP TABLE IF EXISTS notes;`
-const deleteImages = `DROP TABLE IF EXISTS images;`
-const deleteNoteContents = `DROP TABLE IF EXISTS note_contents;`
-const deleteDetails = `DROP TABLE IF EXISTS details;`
-const deleteSidebarImages = `DROP TABLE IF EXISTS sidebar_images;`
-// const deleteWikiSettings = `DROP TABLE IF EXISTS wiki_settings;`
-// const deleteUsers = `DROP TABLE IF EXISTS users;`
+const deleteTableNotes = `DROP TABLE IF EXISTS notes;`
+const deleteTableImages = `DROP TABLE IF EXISTS images;`
+const deleteTableNoteContents = `DROP TABLE IF EXISTS note_contents;`
+const deleteTableDetails = `DROP TABLE IF EXISTS details;`
+const deleteTableSidebarImages = `DROP TABLE IF EXISTS sidebar_images;`
+// const deleteTableWikiSettings = `DROP TABLE IF EXISTS wiki_settings;`
+// const deleteTableUsers = `DROP TABLE IF EXISTS users;`
 
-const insertNotes = `
+const insertNotes = `\
 INSERT OR REPLACE INTO notes (
 	path,
 	title,
@@ -128,9 +128,9 @@ INSERT OR REPLACE INTO notes (
 	hash,
 	last_updated,
 	can_prerender
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING path;`
 
-const insertNoteContents = `
+const insertNoteContents = `\
 INSERT INTO note_contents (
 	note_path,
 	chunk_id,
@@ -140,7 +140,7 @@ INSERT INTO note_contents (
 	note_transclusion_path
 ) VALUES (?, ?, ?, ?, ?, ?);`
 
-const insertDetails = `
+const insertDetails = `\
 INSERT INTO details (
 	note_path,
 	"order",
@@ -148,7 +148,7 @@ INSERT INTO details (
 	detail_content
 ) VALUES (?, ?, ?, ?);`
 
-const insertSidebarImages = `
+const insertSidebarImages = `\
 INSERT INTO sidebar_images (
 	note_path,
 	"order",
@@ -157,13 +157,13 @@ INSERT INTO sidebar_images (
 	caption
 ) VALUES (?, ?, ?, ?, ?);`
 
-const insertWikiSettings = `
+const insertWikiSettings = `\
 INSERT INTO wiki_settings (
 	title,
 	allow_logins
 ) VALUES (?, ?);`
 
-const insertImage = `
+const insertImage = `\
 INSERT OR REPLACE INTO images (
 	path,
 	blob,
@@ -174,7 +174,7 @@ INSERT OR REPLACE INTO images (
 	compressed
 ) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING path;`
 
-const insertUser = `
+const insertUser = `\
 INSERT OR REPLACE INTO users (
 	id,
 	username,
@@ -182,6 +182,9 @@ INSERT OR REPLACE INTO users (
 ) VALUES (?, ?, ?);`
 
 const selectImageData = `SELECT path, hash FROM images;`
+
+const deleteNotesByPath = `DELETE FROM notes WHERE path = ? RETURNING path`
+const deleteImagesByPath = `DELETE FROM images WHERE path = ? RETURNING path`
 
 /**
  * Get the schema for a table using `PRAGMA table_info`
@@ -333,32 +336,54 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 			buf: ArrayBuffer | null
 			svg_text: string | null
 		}[]
-	): Promise<void> {
-		for (const { path, alt, hash, buf, svg_text } of images) {
-			const U8Arr = buf ? new Uint8Array(buf) : null
-			this.db.exec(insertImage, [
-				path,
-				U8Arr,
-				svg_text,
-				alt,
-				hash,
-				Math.floor(Date.now() / 1000),
-				1,
-			])
+	): Promise<string[]> {
+		const insertedPaths: string[] = []
+		this.db.run("BEGIN TRANSACTION;")
+		try {
+			for (const { path, alt, hash, buf, svg_text } of images) {
+				const U8Arr = buf ? new Uint8Array(buf) : null
+				const res = this.db.exec(insertImage, [
+					path,
+					U8Arr,
+					svg_text,
+					alt,
+					hash,
+					Math.floor(Date.now() / 1000),
+					1,
+				])
+				// res: [
+				//  	{ columns: ['path'], values: [['a/b/c'], ['b/c/d'], ...] }
+				// ]
+				if (res[0]?.values) {
+					insertedPaths.push(
+						...res[0].values.map((row) => row[0] as string)
+					)
+				}
+			}
+			this.db.run("COMMIT;")
+			return insertedPaths
+		} catch (e) {
+			console.error(`Error when inserting images: ${e}`)
+			this.db.run("ROLLBACK;")
+			return []
 		}
 	}
 
-	async deleteImagesByPath(paths: string[]): Promise<void> {
-		if (paths.length === 0) return
+	async deleteImagesByPath(paths: string[]): Promise<number> {
+		if (paths.length === 0) return 0
+		let totalDeleted = 0
 		this.db.run("BEGIN TRANSACTION;")
 		try {
 			for (const path of paths) {
-				this.db.run(`DELETE FROM images WHERE path = ?`, [path])
+				const res = this.db.exec(deleteImagesByPath, [path])
+				if (res[0]?.values) totalDeleted += res[0].values.length
 			}
 			this.db.run("COMMIT;")
+			return totalDeleted
 		} catch (e) {
 			console.error(`Error when deleting images: ${e}`)
 			this.db.run("ROLLBACK;")
+			return 0
 		}
 	}
 
@@ -395,21 +420,26 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 		)
 	}
 
-	async deleteNotesByPath(paths: string[]): Promise<void> {
-		if (paths.length === 0) return
+	async deleteNotesByPath(paths: string[]): Promise<number> {
+		if (paths.length === 0) return 0
+		let totalDeleted = 0
 		this.db.run("BEGIN TRANSACTION;")
 		try {
 			for (const path of paths) {
-				this.db.run(`DELETE FROM notes WHERE path = ?`, [path])
+				const res = this.db.exec(deleteNotesByPath, [path])
+				if (res[0]?.values) totalDeleted += res[0].values.length
 			}
 			this.db.run("COMMIT;")
+			return totalDeleted
 		} catch (e) {
 			console.error(`Error when deleting notes: ${e}`)
 			this.db.run("ROLLBACK;")
+			return 0
 		}
 	}
 
-	async pushPages(pages: Pages): Promise<void> {
+	async insertPages(pages: Pages): Promise<number> {
+		let inserted = 0
 		const noteQueries = []
 		const noteContentsQueries = []
 		const detailsQueries = []
@@ -471,19 +501,30 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 
 		// Execute all inserts in a transaction
 		this.db.run("BEGIN TRANSACTION;")
-		for (const query of noteQueries) {
-			this.db.run(query.sql, query.args)
+		try {
+			for (const query of noteQueries) {
+				const res = this.db.exec(query.sql, query.args)
+				if (res[0]?.values) inserted += res[0].values.length
+			}
+			for (const query of noteContentsQueries) {
+				const res = this.db.exec(query.sql, query.args)
+				if (res[0]?.values) inserted += res[0].values.length
+			}
+			for (const query of detailsQueries) {
+				const res = this.db.exec(query.sql, query.args)
+				if (res[0]?.values) inserted += res[0].values.length
+			}
+			for (const query of sidebarImagesQueries) {
+				const res = this.db.exec(query.sql, query.args)
+				if (res[0]?.values) inserted += res[0].values.length
+			}
+			this.db.run("COMMIT;")
+			return inserted
+		} catch (e) {
+			console.error(`Error when inserting pages: ${e}`)
+			this.db.run("ROLLBACK;")
+			return 0
 		}
-		for (const query of noteContentsQueries) {
-			this.db.run(query.sql, query.args)
-		}
-		for (const query of detailsQueries) {
-			this.db.run(query.sql, query.args)
-		}
-		for (const query of sidebarImagesQueries) {
-			this.db.run(query.sql, query.args)
-		}
-		this.db.run("COMMIT;")
 	}
 
 	async updateSettings(settings: WikiGeneratorSettings): Promise<void> {
@@ -498,11 +539,11 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 
 	async clearContent(): Promise<void> {
 		this.db.run("BEGIN TRANSACTION;")
-		this.db.run(deleteNoteContents)
-		this.db.run(deleteDetails)
-		this.db.run(deleteSidebarImages)
-		this.db.run(deleteImages)
-		this.db.run(deleteNotes)
+		this.db.run(deleteTableNoteContents)
+		this.db.run(deleteTableDetails)
+		this.db.run(deleteTableSidebarImages)
+		this.db.run(deleteTableImages)
+		this.db.run(deleteTableNotes)
 		this.db.run("COMMIT;")
 	}
 
@@ -564,10 +605,11 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 			buf: ArrayBuffer
 			svg_text: string | null
 		}[]
-	): Promise<void> {
+	): Promise<string[]> {
+		const insertedPaths: string[] = []
 		for (const { path, alt, hash, buf, svg_text } of images) {
 			await withRetry(async () => {
-				await this.db.execute({
+				const result = await this.db.execute({
 					sql: insertImage,
 					args: [
 						path,
@@ -579,17 +621,22 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 						1,
 					],
 				})
+				insertedPaths.push(
+					...result.rows.map((row) => row.path as string)
+				)
 			}, 3)
 		}
+		return insertedPaths
 	}
 
-	async deleteImagesByPath(paths: string[]): Promise<void> {
-		if (paths.length === 0) return
+	async deleteImagesByPath(paths: string[]): Promise<number> {
+		if (paths.length === 0) return 0
 		const queries = paths.map((path) => ({
-			sql: `DELETE FROM images WHERE path = ?`,
+			sql: deleteImagesByPath,
 			args: [path],
 		}))
-		await this.db.batch(queries)
+		const results = await this.db.batch(queries)
+		return results.reduce((sum, res) => sum + (res.rowsAffected ?? 0), 0)
 	}
 
 	async insertUsers(users: User[]) {
@@ -613,17 +660,18 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 		return res.rows
 	}
 
-	async deleteNotesByPath(paths: string[]): Promise<void> {
-		if (paths.length === 0) return
+	async deleteNotesByPath(paths: string[]): Promise<number> {
+		if (paths.length === 0) return 0
 		const queries = paths.map((path) => ({
-			sql: `DELETE FROM notes WHERE path = ?`,
+			sql: deleteNotesByPath,
 			args: [path],
 		}))
-		await this.db.batch(queries)
+		const results = await this.db.batch(queries)
+		return results.reduce((sum, res) => sum + (res.rowsAffected ?? 0), 0)
 	}
 
-	async pushPages(pages: Pages): Promise<void> {
-		await withRetry(async () => {
+	async insertPages(pages: Pages): Promise<number> {
+		return await withRetry(async () => {
 			const noteQueries = []
 			const noteContentsQueries = []
 			const detailsQueries = []
@@ -693,7 +741,11 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 				...detailsQueries,
 				...sidebarImagesQueries,
 			]
-			await this.db.batch(queries)
+			const results = await this.db.batch(queries)
+			return results.reduce(
+				(sum, res) => sum + (res.rowsAffected ?? 0),
+				0
+			)
 		}, 3)
 	}
 
@@ -710,17 +762,17 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 	async clearContent(): Promise<void> {
 		await withRetry(async () => {
 			await this.db.batch([
-				deleteNoteContents,
-				deleteDetails,
-				deleteSidebarImages,
-				deleteImages,
-				deleteNotes,
+				deleteTableNoteContents,
+				deleteTableDetails,
+				deleteTableSidebarImages,
+				deleteTableImages,
+				deleteTableNotes,
 			])
 		}, 3)
 	}
 
 	async export(_vault: Vault): Promise<void> {
-		console.warn(
+		throw new Error(
 			"Tried to export remote database. Only the local database can be exported. This should not happen."
 		)
 	}

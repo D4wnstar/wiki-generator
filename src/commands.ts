@@ -27,7 +27,17 @@ import { createClient } from "@libsql/client"
 
 const imageExtensions = ["png", "webp", "jpg", "jpeg", "gif", "bmp", "svg"]
 
-export async function uploadNotes(
+/**
+ * The central command of the plugin. Will traverse the entire vault, collecting all
+ * notes and other files that can be inserted in the vault, determine which need to be
+ * inserted or removed to keep the database synchronized, process each file depending on
+ * its type and proceed with all the necessary database operations. If set, it will
+ * also ping the Vercel deploy hook to inform the website to rebuild all static assets.
+ * @param vault A reference to the vault
+ * @param settings The plugin settings
+ * @param reset Whether the database should be reset before uploading
+ */
+export async function syncNotes(
 	vault: Vault,
 	settings: WikiGeneratorSettings,
 	reset = false
@@ -40,7 +50,7 @@ export async function uploadNotes(
 		)
 	}
 
-	console.log("-".repeat(10), "[WIKI GENERATOR UPLOAD START]", "-".repeat(10))
+	console.log("-".repeat(5), "[WIKI GENERATOR UPLOAD START]", "-".repeat(5))
 
 	const { fragment, updateProgress } = createProgressBarFragment()
 	const notice = new Notice(fragment, 0)
@@ -55,13 +65,13 @@ export async function uploadNotes(
 			await database.clearContent()
 		}
 
-		updateProgress(10, "Running database migrations...")
+		updateProgress(10, "Updating database...")
 		console.log("Running migrations...")
 		await database.runMigrations()
 
-		updateProgress(20, "Collecting images...")
-		console.log("Collecting images...")
-		const images = await collectMedia(database, vault)
+		updateProgress(20, "Collecting files...")
+		console.log("Collecting files...")
+		const files = await collectFiles(database, vault)
 
 		updateProgress(35, "Collecting notes...")
 		console.log("Collecting notes...")
@@ -70,26 +80,25 @@ export async function uploadNotes(
 		updateProgress(50, "Processing notes...")
 		console.log("Processing notes...")
 		const pagesToInsert = await processNotes(
-			notes.toInsert,
-			images.nameToPath,
+			notes.toProcess,
+			files.imageNameToPath,
 			vault
 		)
-		const uploadedNotes = pagesToInsert.size
 
-		updateProgress(65, "Uploading images...")
-		console.log("Inserting images...")
-		const insertedImagePaths = await insertMedia(
-			images.toInsert,
-			images.toDelete,
+		updateProgress(65, "Syncing files...")
+		const fileSync = await syncFiles(
+			files.imagesToInsert,
+			files.imagesToDelete,
 			database,
 			vault
 		)
-		const uploadedImages = insertedImagePaths.length
 
-		updateProgress(80, "Uploading notes...")
-		console.log("Inserting notes...")
-		const imagePathsInDb = [...insertedImagePaths, ...images.existingPaths]
-		await insertNotes(
+		updateProgress(80, "Syncing notes...")
+		const imagePathsInDb = [
+			...fileSync.insertedImagePaths,
+			...files.existingImagePaths,
+		]
+		const pageSync = await syncPages(
 			pagesToInsert,
 			notes.toDelete,
 			imagePathsInDb,
@@ -110,20 +119,16 @@ export async function uploadNotes(
 			await database.insertUsers(users)
 		}
 
+		const { notice, changesMade } = makeEndResultNotice(pageSync, fileSync)
+
 		if (settings.localExport) {
 			updateProgress(98, "Exporting database...")
 			console.log("Exporting database...")
 			await database.export(vault)
-			updateProgress(
-				100,
-				`Exported ${uploadedNotes} notes and ${uploadedImages} images!`
-			)
+			updateProgress(100, notice)
 		} else {
 			// Ping Vercel so it rebuilds the site, but only if something changed
-			if (
-				settings.deployHook &&
-				(uploadedImages > 0 || uploadedNotes > 0)
-			) {
+			if (settings.deployHook && changesMade) {
 				console.log("Sending POST request to deploy hook")
 				await request({
 					url: settings.deployHook,
@@ -133,29 +138,22 @@ export async function uploadNotes(
 				})
 			}
 
-			updateProgress(
-				100,
-				`Uploaded ${uploadedNotes} notes and ${uploadedImages} images!`
-			)
+			updateProgress(100, notice)
 		}
 
-		console.log(`Successfully uploaded ${uploadedNotes} notes`)
+		console.log(notice)
 	} finally {
-		setTimeout(() => notice.hide(), 3000)
+		setTimeout(() => notice.hide(), 5000)
 		try {
 			await database.close()
 		} catch (error) {
 			console.error("Failed to clean up adapter:", error)
 		}
-		console.log(
-			"-".repeat(10),
-			"[WIKI GENERATOR UPLOAD END]",
-			"-".repeat(10)
-		)
+		console.log("-".repeat(5), "[WIKI GENERATOR UPLOAD END]", "-".repeat(5))
 	}
 }
 
-async function collectMedia(database: DatabaseAdapter, vault: Vault) {
+async function collectFiles(database: DatabaseAdapter, vault: Vault) {
 	// Get all images in the database
 	const remoteImageHashes = new Map<string, string>()
 	const remoteImagePaths = []
@@ -221,13 +219,13 @@ async function collectMedia(database: DatabaseAdapter, vault: Vault) {
 		}
 	}
 	console.debug("Images to insert:", imagesToInsert)
-	console.debug("Images to delete:", imagesToDelete)
+	console.debug("Unreferenced images:", imagesToDelete)
 
 	return {
-		toInsert: imagesToInsert,
-		toDelete: imagesToDelete,
-		nameToPath: imageNameToPath,
-		existingPaths: remoteImagePaths,
+		imagesToInsert,
+		imagesToDelete,
+		imageNameToPath,
+		existingImagePaths: remoteImagePaths,
 	}
 }
 
@@ -240,7 +238,7 @@ async function collectNotes(database: DatabaseAdapter, vault: Vault) {
 	}
 	const localPaths: Set<string> = new Set()
 
-	const notesToInsert: { file: TFile; hash: string }[] = []
+	const notesToProcess: { file: TFile; hash: string }[] = []
 	for (const file of vault.getMarkdownFiles()) {
 		localPaths.add(file.path)
 
@@ -263,7 +261,7 @@ async function collectNotes(database: DatabaseAdapter, vault: Vault) {
 		const maybeExistingHash = remoteHashes.get(file.path)
 		if (!maybeExistingHash || hash !== maybeExistingHash) {
 			// If the note doesn't exist or it changed, insert/overwrite it
-			notesToInsert.push({ file, hash })
+			notesToProcess.push({ file, hash })
 		}
 		// If it exists and it's identical to last time, don't bother reprocessing it
 	}
@@ -272,25 +270,34 @@ async function collectNotes(database: DatabaseAdapter, vault: Vault) {
 	const remotePaths = new Set(remoteHashes.keys())
 	const notesToDelete = remotePaths.difference(localPaths)
 
-	console.debug("Collected notes to insert:", notesToInsert)
-	console.debug("Collected notes to delete:", notesToDelete)
+	console.debug("Notes to process:", notesToProcess)
+	console.debug("Notes to delete:", notesToDelete)
 
 	return {
-		toInsert: notesToInsert,
+		toProcess: notesToProcess,
 		toDelete: [...notesToDelete].map((path) => ({ path })),
 	}
 }
 
-async function insertMedia(
+export interface FileSyncResult {
+	insertedImagePaths: string[]
+	insertedImages: number
+	deletedImages: number
+}
+
+async function syncFiles(
 	imagesToInsert: { file: TFile; hash: string; type: "raster" | "svg" }[],
 	imagesToDelete: { path: string }[],
 	database: DatabaseAdapter,
 	vault: Vault
-) {
+): Promise<FileSyncResult> {
 	// Push the media to the database
-	console.log(`Deleting ${imagesToDelete.length} outdated images...`)
-	console.debug("Outdated images:", imagesToDelete)
-	await database.deleteImagesByPath(imagesToDelete.map((img) => img.path))
+	console.log(`Deleting unreferenced images...`)
+	console.debug("Unreferenced images:", imagesToDelete)
+	const deletedImages = await database.deleteImagesByPath(
+		imagesToDelete.map((img) => img.path)
+	)
+	console.log(`Deleted ${deletedImages} images`)
 
 	const imageRows = await Promise.all(
 		imagesToInsert.map(async ({ file, hash, type }) => {
@@ -308,11 +315,16 @@ async function insertMedia(
 			}
 		})
 	)
-	console.log(`Inserting ${imageRows.length} images...`)
+	console.log(`Inserting new or updated images...`)
 	console.debug("New/updated images:", imageRows)
-	await database.insertImages(imageRows)
+	const insertedImagePaths = await database.insertImages(imageRows)
+	console.log(`Inserted ${insertedImagePaths.length} images`)
 
-	return imageRows.map((img) => img.path)
+	return {
+		insertedImagePaths,
+		insertedImages: insertedImagePaths.length,
+		deletedImages,
+	}
 }
 
 async function processNotes(
@@ -335,26 +347,38 @@ async function processNotes(
 
 	console.log("Converting wikilinks...")
 	const pagesWithLinks = await convertWikilinks(pages, postprocessor)
+	console.debug("Pages to insert:", pagesWithLinks)
 
 	return pagesWithLinks
 }
 
-async function insertNotes(
+export interface PageSyncResult {
+	insertedNotes: number
+	deletedNotes: number
+}
+
+async function syncPages(
 	pagesToInsert: Pages,
 	pagesToDelete: { path: string }[],
 	imagePathsInDb: string[],
 	database: DatabaseAdapter
-) {
+): Promise<PageSyncResult> {
 	// Finally push the notes and media to the database
-	console.log(`Deleting ${pagesToDelete.length} outdated notes`)
+	console.log(`Deleting outdated notes...`)
 	console.debug("Outdated notes:", pagesToDelete)
-	await database.deleteNotesByPath(pagesToDelete.map((page) => page.path))
+	const deletedNotes = await database.deleteNotesByPath(
+		pagesToDelete.map((page) => page.path)
+	)
+	console.log(`Deleted ${deletedNotes} notes`)
 
 	// Validate foreign key references before insertion
 	validateForeignKeys(pagesToInsert, imagePathsInDb)
-	console.log(`Inserting ${pagesToInsert.size} notes...`)
+	console.log(`Inserting new or updated notes...`)
 	console.debug("New/updated notes:", pagesToInsert)
-	await database.pushPages(pagesToInsert)
+	const insertedPages = await database.insertPages(pagesToInsert)
+	console.log(`Inserted ${insertedPages} pages`)
+
+	return { insertedNotes: insertedPages, deletedNotes }
 }
 
 /**
@@ -448,6 +472,31 @@ function validateForeignKeys(pages: Pages, imagePathsInDb: string[]) {
 			"Cannot proceed with database insertion due to missing foreign key references. Press CTRL+SHIFT+I for more info."
 		)
 	}
+}
+
+function makeEndResultNotice(
+	pageSync: PageSyncResult,
+	fileSync: FileSyncResult
+) {
+	const changesMade =
+		pageSync.insertedNotes > 0 ||
+		pageSync.deletedNotes > 0 ||
+		fileSync.insertedImages > 0 ||
+		fileSync.deletedImages > 0
+
+	let notice = changesMade
+		? "Done! Database synced."
+		: "Done! No changes were necessary."
+	if (pageSync.insertedNotes > 0)
+		notice += `\n- Updated ${pageSync.insertedNotes} notes.`
+	if (pageSync.deletedNotes > 0)
+		notice += `\n- Deleted ${pageSync.insertedNotes} outdated notes.`
+	if (fileSync.insertedImages > 0)
+		notice += `\n- Updated ${fileSync.insertedImages} images.`
+	if (fileSync.deletedImages > 0)
+		notice += `\n- Deleted ${fileSync.deletedImages} outdated images.`
+
+	return { notice, changesMade }
 }
 
 /**
@@ -554,22 +603,29 @@ export async function resetDatabase(
 		console.error(`Error when clearing database: ${e}`)
 		new Notice(`Error when clearing database: ${e}`)
 	} finally {
-		await adapter.close()
+		try {
+			await adapter.close()
+		} catch (e) {
+			console.error(`Error when closing adapter: ${e}`)
+		}
 	}
 }
 
 export async function pingDeployHook(settings: WikiGeneratorSettings) {
 	if (settings.deployHook) {
-		new Notice(
-			"Redeploying website. Check Vercel dashboard for further details."
-		)
 		await request({
 			url: settings.deployHook,
 			method: "POST",
-		}).catch((error) => {
-			console.error("Failed to ping deploy hook:", error)
-			new Notice(`Failed to ping deploy hook: ${error}`, 0)
 		})
+			.then(() => {
+				new Notice(
+					"Redeploying website. Check Vercel dashboard for further details."
+				)
+			})
+			.catch((error) => {
+				console.error("Failed to ping deploy hook:", error)
+				new Notice(`Failed to redeploy website: ${error}`, 0)
+			})
 	} else {
 		new Notice("No deploy hook is set. Please add one in the settings.")
 	}

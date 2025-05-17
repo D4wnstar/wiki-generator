@@ -385,60 +385,46 @@ async function handleBranchSplit(
 export async function checkForTemplateUpdates(
 	username: string,
 	repo: string,
-	octokit: Octokit | undefined = undefined,
-	token: string | undefined = undefined
+	token: string
 ) {
-	if (!octokit) {
-		if (!token)
-			throw new Error(
-				"Got no authentication token when creating the octokit client"
-			)
-		octokit = new Octokit({
-			auth: token,
-		})
-	}
+	const octokit = new Octokit({
+		auth: token,
+	})
 
-	try {
-		// Fetch most recent user commit on main branch
-		const latestUserCommitRes = await octokit.request(
-			"GET /repos/{owner}/{repo}/commits/{ref}",
-			{
-				owner: username,
-				repo,
-				ref: "HEAD",
-				headers: {
-					"X-GitHub-Api-Version": "2022-11-28",
-				},
-			}
-		)
-		const lastUpdated = latestUserCommitRes.data.commit.committer?.date
-		console.log("User repo was last updated on:", lastUpdated)
-
-		// Fetch all template commits since the user last updated their repo
-		const templateCommitsRes = await octokit.request(
-			"GET /repos/{owner}/{repo}/commits",
-			{
-				owner: templateOwner,
-				repo: templateRepo,
-				since: lastUpdated,
-				headers: {
-					"X-GitHub-Api-Version": "2022-11-28",
-				},
-			}
-		)
-
-		if (templateCommitsRes.data.length === 0) {
-			return undefined
-		} else {
-			return {
-				latestUserCommit: latestUserCommitRes.data,
-				newTemplateCommits: templateCommitsRes.data,
-			}
+	// Fetch most recent user commit on main branch
+	const latestUserCommitRes = await octokit.request(
+		"GET /repos/{owner}/{repo}/commits/{ref}",
+		{
+			owner: username,
+			repo,
+			ref: "HEAD",
+			headers: {
+				"X-GitHub-Api-Version": "2022-11-28",
+			},
 		}
-	} catch (error) {
-		console.error(
-			`Error! Status: ${error.status}. Error message: ${error.response.data.message}`
-		)
-		new Notice(`There was an error while checking for template updates.`)
+	)
+	const lastUpdated = latestUserCommitRes.data.commit.committer?.date
+	console.log("User repo was last updated on:", lastUpdated)
+
+	// Fetch all template commits since the user last updated their repo
+	const templateCommitsRes = await octokit.request(
+		"GET /repos/{owner}/{repo}/commits",
+		{
+			owner: templateOwner,
+			repo: templateRepo,
+			since: lastUpdated,
+			headers: {
+				"X-GitHub-Api-Version": "2022-11-28",
+			},
+		}
+	)
+
+	if (templateCommitsRes.data.length === 0) {
+		return undefined
+	} else {
+		return {
+			latestUserCommit: latestUserCommitRes.data,
+			newTemplateCommits: templateCommitsRes.data,
+		}
 	}
 }

@@ -1,6 +1,7 @@
-import { Editor, TFile, TFolder, Vault, normalizePath } from "obsidian"
+import { Editor, Notice, TFile, TFolder, Vault, normalizePath } from "obsidian"
 import { WikiGeneratorSettings } from "./settings"
 import { slug } from "github-slugger"
+import { checkForTemplateUpdates } from "./repository"
 
 interface ImageOptions {
 	downscale?: boolean
@@ -327,6 +328,17 @@ export function createProgressBarFragment(): {
 	updateProgress: (percent: number, text: string) => void
 } {
 	const fragment = new DocumentFragment()
+
+	// Add pulse animation styles
+	const style = document.createElement("style")
+	style.textContent = `
+		@keyframes wiki-gen-pulse {
+			0% { opacity: 1.0; }
+			50% { opacity: 0.7; }
+			100% { opacity: 1.0; }
+		}
+	`
+
 	const progressBarSlot = document.createElement("div")
 	progressBarSlot.style.width = "100%"
 	progressBarSlot.style.height = "4px"
@@ -339,14 +351,16 @@ export function createProgressBarFragment(): {
 	progressBar.style.height = "100%"
 	progressBar.style.backgroundColor = "var(--interactive-accent)"
 	progressBar.style.transition = "width 0.3s ease"
+	progressBar.style.animation = "wiki-gen-pulse 2.5s ease-in-out infinite"
 
 	const progressText = document.createElement("div")
 	progressText.style.marginTop = "4px"
 	progressText.style.marginBottom = "8px"
-	progressText.style.textAlign = "center"
+	progressText.style.textAlign = "left"
 	progressText.textContent = "Starting upload..."
 
 	progressBarSlot.appendChild(progressBar)
+	fragment.appendChild(style)
 	fragment.appendChild(progressText)
 	fragment.appendChild(progressBarSlot)
 
@@ -356,4 +370,49 @@ export function createProgressBarFragment(): {
 	}
 
 	return { fragment, updateProgress }
+}
+
+/**
+ * Check if the website is up to date and show an notice with the result.
+ * @param settings The plugin settings
+ * @param noticeDuration The duration of the notice. Default 3 seconds
+ */
+export async function isWebsiteUpToDate(
+	settings: WikiGeneratorSettings,
+	noticeDuration = 3000
+) {
+	if (!settings.githubUsername) {
+		new Notice("The GitHub username is not set.", noticeDuration)
+		return
+	} else if (!settings.githubRepoName) {
+		new Notice("The GitHub repository name is not set.", noticeDuration)
+		return
+	} else if (!settings.githubRepoToken) {
+		new Notice("The GitHub repository token is not set.", noticeDuration)
+		return
+	}
+
+	try {
+		const updates = await checkForTemplateUpdates(
+			settings.githubUsername,
+			settings.githubRepoName,
+			settings.githubRepoToken
+		)
+		if (!updates) {
+			new Notice("Your website is already up to date!", noticeDuration)
+		} else {
+			new Notice(
+				"There is an update available for your website. Update it from the settings tab.",
+				noticeDuration
+			)
+		}
+	} catch (error) {
+		console.error(
+			`Error ${error.status} when checking website updates: ${error.response.data.message}`
+		)
+		new Notice(
+			`There was an error while checking website updates: ${error.response.data.message}`,
+			noticeDuration
+		)
+	}
 }
