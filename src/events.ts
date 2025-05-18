@@ -1,14 +1,16 @@
-import { MarkdownView, TFile, Workspace } from "obsidian"
+import { FileManager, MarkdownView, TFile, Workspace } from "obsidian"
 import { WikiGeneratorSettings } from "./settings"
+import { isFilePublic } from "./utils"
 
-export function addWikiPublishToNewFile(
-	file: TFile,
-	s: WikiGeneratorSettings,
-	workspace: Workspace
+export async function addWikiPublishToNewFile(
+	newFile: TFile,
+	settings: WikiGeneratorSettings,
+	workspace: Workspace,
+	fileManager: FileManager
 ) {
 	// Timeout is here to let the workspace update before getting the view
 	// Half a second seems to make it play well enough with Templater
-	setTimeout(() => {
+	setTimeout(async () => {
 		const view = workspace.getActiveViewOfType(MarkdownView)
 
 		// Check that an editor is selected
@@ -20,26 +22,13 @@ export function addWikiPublishToNewFile(
 			// This prevents frontmatter being added when a file is created elsewhere
 			// such as when dragging and dropping a file or when pulling from GitHub
 			// with the Obsidian git plugin
-			if (!filepath || filepath !== file.path) return
-
-			// Check if the file is in a public or private folder
-			const isInPublishedFolder = s.publicFolders.some((publicPath) =>
-				filepath.startsWith(publicPath)
-			)
-
-			const isInPrivateFolder = s.privateFolders.some((privatePath) =>
-				filepath.startsWith(privatePath)
-			)
+			if (!filepath || filepath !== newFile.path) return
 
 			// Only add frontmatter if folders aren't restricted or we're in a valid folder
-			if (
-				!s.restrictFolders ||
-				(isInPublishedFolder && !isInPrivateFolder)
-			) {
-				view.editor.replaceRange(
-					"---\nwiki-publish: true\n---\n",
-					view.editor.getCursor()
-				)
+			if (isFilePublic(newFile.path, settings)) {
+				await fileManager.processFrontMatter(newFile, (matter) => {
+					matter["wiki-publish"] = true
+				})
 			}
 		}
 	}, 500)

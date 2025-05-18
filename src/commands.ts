@@ -1,10 +1,6 @@
-import { Notice, request, TFile, Vault } from "obsidian"
+import { App, Notice, request, TFile, Vault } from "obsidian"
 import { WikiGeneratorSettings } from "./settings"
-import {
-	createProgressBarFragment,
-	getPublishableFiles,
-	imageToArrayBuffer,
-} from "./utils"
+import { createProgressBarFragment, getPublishableFiles } from "./utils"
 import { unified } from "unified"
 import { createLocalDatabase, initializeAdapter } from "./database/init"
 import {
@@ -21,9 +17,10 @@ import { DatabaseAdapter, Pages } from "./database/types"
 import rehypeParse from "rehype-parse"
 import rehypeWikilinks from "./unified/rehype-wikilinks"
 import rehypeStringify from "rehype-stringify"
-import { propsRegex, wikilinkRegex } from "./notes/regexes"
+import { wikilinkRegex } from "./notes/regexes"
 import * as crypto from "crypto"
 import { createClient } from "@libsql/client"
+import { imageToArrayBuffer } from "./files/images"
 
 const imageExtensions = ["png", "webp", "jpg", "jpeg", "gif", "bmp", "svg"]
 
@@ -109,7 +106,7 @@ export async function syncNotes(
 		console.log("Updating settings...")
 		await database.updateSettings(settings)
 
-		if (settings.localExport && !settings.ignoreUsers) {
+		if (settings.localExport && settings.cloneRemoteUsers) {
 			updateProgress(95, "Cloning user accounts...")
 			console.log("Cloning user accounts from Turso...")
 			const users = await getUsersFromRemote(
@@ -501,48 +498,23 @@ function makeEndResultNotice(
 
 /**
  * Add or set `wiki-publish: true` in all publishable files.
- * @param value The boolean value to set `wiki-publish` to
  * @param settings The plugin settings
- * @param vault A reference to the vault
+ * @param app A reference to the app
  */
-export function massAddPublish(
-	value: boolean,
+export async function massAddPublish(
 	settings: WikiGeneratorSettings,
-	vault: Vault
+	app: App
 ) {
-	const notes = getPublishableFiles(settings, vault)
+	const notes = getPublishableFiles(settings, app.vault)
 	new Notice(`Adding 'wiki-publish' to all public notes`)
 	for (const note of notes) {
-		try {
-			vault.process(note, (noteText) => {
-				// Ignore Excalidraw files
-				if (noteText.includes("excalidraw-plugin:")) return noteText
-
-				// Isolate properties
-				const props = noteText.match(propsRegex)
-				if (props) {
-					// Check if a publish property is already there
-					const publish = props[1].match(
-						/(wiki|dg)-publish: (true|false)/
-					)
-					// If it is, leave it as is
-					if (publish) return noteText
-					// Otherwise add a new property
-					noteText = noteText.replace(
-						propsRegex,
-						`---\nwiki-publish: ${value}\n$1\n---`
-					)
-				} else {
-					// If there are no properties, prepend a new publish one
-					noteText = `---\nwiki-publish: ${value}\n---\n` + noteText
-				}
-
-				return noteText
-			})
-		} catch (e) {
-			console.error(`Error when add wiki-publish to ${note.name}: ${e}`)
-			new Notice(`Error when add wiki-publish to ${note.name}: ${e}`)
-		}
+		const contents = await app.vault.cachedRead(note)
+		if (contents.includes("excalidraw-plugin:")) continue
+		app.fileManager.processFrontMatter(note, (matter) => {
+			if (!matter["wiki-publish"]) {
+				matter["wiki-publish"] = true
+			}
+		})
 	}
 }
 
@@ -551,24 +523,17 @@ export function massAddPublish(
  * property to files that do not have it. Use `massAddPublish` for that.
  * @param value The boolean value to set `wiki-publish` to
  * @param settings The plugin settings
- * @param vault A reference to the vault
+ * @param app A reference to the app
  */
-export function massSetPublishState(
+export async function massSetPublishState(
 	value: boolean,
 	settings: WikiGeneratorSettings,
-	vault: Vault
+	app: App
 ) {
-	const notes = getPublishableFiles(settings, vault)
-	const regex = RegExp(
-		`^---\\n(.*?)wiki-publish: ${!value}(.*?)\\n---\\n`,
-		"s"
-	)
+	const notes = getPublishableFiles(settings, app.vault)
 	for (const note of notes) {
-		vault.process(note, (noteText) => {
-			return noteText.replace(
-				regex,
-				`---\n$1wiki-publish: ${value}$2\n---\n`
-			)
+		await app.fileManager.processFrontMatter(note, (matter) => {
+			matter["wiki-publish"] = value
 		})
 	}
 }
@@ -611,6 +576,10 @@ export async function resetDatabase(
 	}
 }
 
+/**
+ * Ping the Vercel deploy hook to trigger a new deployment.
+ * @param settings The plugin settings
+ */
 export async function pingDeployHook(settings: WikiGeneratorSettings) {
 	if (settings.deployHook) {
 		await request({

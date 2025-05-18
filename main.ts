@@ -40,7 +40,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 		// if the user allows it in the settings
 		workspace.onLayoutReady(() => {
 			this.registerEvent(
-				this.app.vault.on("create", (file) => {
+				this.app.vault.on("create", async (file) => {
 					// Ignore non-files being created or if this feature is disabled
 					if (
 						!(file instanceof TFile) ||
@@ -48,7 +48,12 @@ export default class WikiGeneratorPlugin extends Plugin {
 					) {
 						return
 					}
-					addWikiPublishToNewFile(file, settings, workspace)
+					await addWikiPublishToNewFile(
+						file,
+						settings,
+						workspace,
+						this.app.fileManager
+					)
 				})
 			)
 		})
@@ -96,32 +101,33 @@ export default class WikiGeneratorPlugin extends Plugin {
 		this.addCommand({
 			id: "mass-add-publish",
 			name: "Add 'wiki-publish' to everything (restricted)",
-			callback: () => massAddPublish(true, settings, this.app.vault),
+			callback: async () => await massAddPublish(settings, this.app),
 		})
 
 		this.addCommand({
 			id: "mass-set-publish-true",
 			name: "Set 'wiki-publish' to true on everything (restricted)",
-			callback: () => massSetPublishState(true, settings, this.app.vault),
+			callback: async () =>
+				await massSetPublishState(true, settings, this.app),
 		})
 
 		this.addCommand({
 			id: "mass-set-publish-false",
 			name: "Set 'wiki-publish' to false on everything (restricted)",
-			callback: () =>
-				massSetPublishState(false, settings, this.app.vault),
+			callback: async () =>
+				await massSetPublishState(false, settings, this.app),
 		})
 
 		this.addCommand({
 			id: "add-update-wiki-property",
-			name: "Add or update Wiki property",
+			name: "Add a property",
 			editorCallback: (editor, _view) =>
 				new PropertyModal(this.app, editor).open(),
 		})
 
 		this.addCommand({
 			id: "add-block",
-			name: "Add a Block",
+			name: "Add a block",
 			editorCallback: (editor, _view) =>
 				new BlockModal(this.app, editor).open(),
 		})

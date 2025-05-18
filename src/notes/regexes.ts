@@ -1,10 +1,2 @@
-export const hiddenRegex = /^:::hidden\n.*?\n:::/gms
-export const detailsRegex = /^:::details\n(.*?)\n:::/ms
-export const imageRegex = /^:::image(\(fullres\))?\n(.*?)\n:::/gms
-export const secretRegex = /^:::secret\s*\((.*?)\)\n(.*?)\n:::/gms
-export const secretRegexNoGroups = /^:::secret\s*\(.*?\)\n.*?\n:::/gms
-export const wikilinkRegexNoGroups = /!?\[\[.*?(?:#\^?.*?)?(?:\|.*?)?\]\]/g
 export const wikilinkRegex = /(!)?\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/g
 export const transclusionRegex = /!\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/g
-export const transclusionRegexNoGroups = /!\[\[.*?(?:#\^?.*?)?(?:\|.*?)?\]\]/g
-export const propsRegex = /^---\n+(.*?)\n+---/s

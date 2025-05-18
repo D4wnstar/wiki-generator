@@ -6,14 +6,13 @@ import {
 	FuzzySuggestModal,
 	MarkdownView,
 } from "obsidian"
-import { getPropertiesFromEditor, replacePropertiesFromEditor } from "./utils"
 import { User } from "./database/types"
 
 interface Property {
 	name: string
 	description: string
 	valueType: string
-	defaultValue: string
+	defaultValue: any
 }
 
 const BUILTIN_PROPS: Property[] = [
@@ -22,14 +21,14 @@ const BUILTIN_PROPS: Property[] = [
 		description:
 			"If true, this page will be uploaded. If false or unset, it won't.",
 		valueType: "true/false",
-		defaultValue: "true",
+		defaultValue: true,
 	},
 	{
 		name: "wiki-home",
 		description:
 			"Set this note as the front page. Can only be true on one note.",
 		valueType: "true/false",
-		defaultValue: "true",
+		defaultValue: true,
 	},
 	{
 		name: "wiki-title",
@@ -43,7 +42,7 @@ const BUILTIN_PROPS: Property[] = [
 		description:
 			'A list of users who are allowed see this page. It will be hidden to everyone else. You can use the "Get registered users" command to get an updated list of registered users.',
 		valueType: "a list of usernames. Press Enter to separate them",
-		defaultValue: "[]",
+		defaultValue: [],
 	},
 ]
 
@@ -75,21 +74,17 @@ export class PropertyModal extends SuggestModal<Property> {
 		})
 	}
 
-	onChooseSuggestion(
-		selectedProp: Property,
-		_evt: MouseEvent | KeyboardEvent
-	) {
-		const props = getPropertiesFromEditor(this.editor)
-		props.set(selectedProp.name, selectedProp.defaultValue)
-		let newProps = "---\n"
-		for (const [k, v] of props.entries()) {
-			newProps += `${k}: ${v}\n`
+	onChooseSuggestion(prop: Property, _evt: MouseEvent | KeyboardEvent) {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView)
+		if (view && view.file) {
+			// Add the property with the default value if it does not already exist
+			this.app.fileManager.processFrontMatter(view.file, (matter) => {
+				if (!matter[prop.name]) matter[prop.name] = prop.defaultValue
+			})
+			new Notice(`Added ${prop.name}`)
+		} else {
+			new Notice("Could not get active file.")
 		}
-		newProps += "---"
-
-		replacePropertiesFromEditor(this.editor, newProps)
-
-		new Notice(`Added ${selectedProp.name}`)
 	}
 }
 

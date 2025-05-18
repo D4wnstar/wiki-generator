@@ -3,11 +3,7 @@ import { Root } from "hast"
 import { partition } from "src/utils"
 import { Processor } from "unified"
 import { Detail, SidebarImage, ContentChunk } from "../database/types"
-import {
-	secretRegexNoGroups,
-	transclusionRegex,
-	transclusionRegexNoGroups,
-} from "./regexes"
+import { transclusionRegex } from "./regexes"
 
 interface WorkingContentChunk extends ContentChunk {
 	locked: boolean
@@ -329,7 +325,7 @@ class SecretBlock extends Block {
 			}
 
 			// Partition by secrets while replacing each block with its contents
-			const splits = partition(chunk.text, secretRegexNoGroups)
+			const splits = partition(chunk.text, secretRegex)
 			if (splits.length === 1) {
 				outChunks.push(chunk)
 				continue
@@ -383,7 +379,7 @@ class WikilinkTransclusion {
 				continue
 			}
 
-			const splits = partition(chunk.text, transclusionRegexNoGroups)
+			const splits = partition(chunk.text, transclusionRegex)
 			if (splits.length === 1) {
 				outChunks.push(chunk)
 				continue

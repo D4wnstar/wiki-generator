@@ -22,7 +22,7 @@ export interface WikiGeneratorSettings {
 	publicFolders: string[]
 	privateFolders: string[]
 	localExport: boolean
-	ignoreUsers: boolean
+	cloneRemoteUsers: boolean
 	githubUsername: string
 	githubRepoName: string
 	githubRepoToken: string
@@ -46,7 +46,7 @@ export const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 	publicFolders: [],
 	privateFolders: [],
 	localExport: false,
-	ignoreUsers: false,
+	cloneRemoteUsers: false,
 	githubUsername: "",
 	githubRepoName: "",
 	githubRepoToken: "",
@@ -72,10 +72,13 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 
 		containerEl.empty()
 
-		new Setting(containerEl).setName("Vault").setHeading()
+		new Setting(containerEl)
+			.setName("Vault")
+			.setHeading()
+			.setDesc("These settings change your experience here in Obsidian.")
 
 		new Setting(containerEl)
-			.setName("Autopublish new notes")
+			.setName("Add wiki-publish to new notes")
 			.setDesc(
 				"Automatically add the 'wiki-publish' property to new notes. Restricted."
 			)
@@ -91,7 +94,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Restrict folders")
 			.setDesc(
-				"Apply folder restrictions. Set the folders below. Any command or setting marked as 'restricted' will respect these."
+				`Apply folder restrictions. Set the folders below. Any command or setting marked as 'restricted' will respect these. For example, if you use the "Add wiki-publish to everything (restricted)" command, by default every note in your vault will have the wiki-publish property added to it. However, if this setting is on and you have a single folder called "Recipes" set as public, only notes inside of "Recipes" will have wiki-publish added to them.`
 			)
 			.addToggle((toggle) => {
 				toggle
@@ -226,7 +229,10 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					})
 			})
 
-		new Setting(containerEl).setName("Website").setHeading()
+		new Setting(containerEl)
+			.setName("Website")
+			.setHeading()
+			.setDesc("These settings allow you to control your website.")
 
 		new Setting(containerEl)
 			.setName("Check for website updates")
@@ -313,10 +319,30 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			})
 
 		new Setting(containerEl)
+			.setName("Deploy hook")
+			.setDesc(
+				"The link to use to tell the website to update. Create one in your Vercel settings."
+			)
+			.addText((text) => {
+				text.setPlaceholder("Copy the URL")
+					.setValue(settings.deployHook)
+					.onChange(async (value) => {
+						settings.deployHook = value
+						// If the user is setting up a deploy hook, that means they set up the website
+						// so initialize last updated state if unset
+						if (settings.lastTemplateUpdate === "") {
+							const now = new Date()
+							settings.lastTemplateUpdate = now.toISOString()
+						}
+						await this.plugin.saveSettings()
+					})
+			})
+
+		new Setting(containerEl)
 			.setName("Database")
 			.setHeading()
 			.setDesc(
-				"This is where your notes, images and users will be stored."
+				"These settings affect your database, which is where your notes, files, settings and users will be stored."
 			)
 
 		new Setting(containerEl)
@@ -357,7 +383,9 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("GitHub")
 			.setHeading()
-			.setDesc("This is where your website's code will be stored.")
+			.setDesc(
+				"These settings affect your GitHub repository, which is where your website's code is stored."
+			)
 
 		new Setting(containerEl)
 			.setName("GitHub username")
@@ -386,7 +414,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("GitHub repository token")
 			.setDesc(
-				"The token required to access your website's GitHub repository."
+				"The token required to access your website's GitHub repository. Do not share this."
 			)
 			.addText((text) => {
 				text.setPlaceholder(
@@ -400,36 +428,16 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			})
 
 		new Setting(containerEl)
-			.setName("Website")
+			.setName("Developer")
 			.setHeading()
-			.setDesc("Option regarding the website.")
-
-		new Setting(containerEl)
-			.setName("Deploy hook")
 			.setDesc(
-				"The link to use to tell the website to update. Create one in your Vercel settings."
+				"These settings are used for the development of this plugin, but you may find them useful if you want to run a local database instead of using Turso."
 			)
-			.addText((text) => {
-				text.setPlaceholder("Copy the URL")
-					.setValue(settings.deployHook)
-					.onChange(async (value) => {
-						settings.deployHook = value
-						// If the user is setting up a deploy hook, that means they set up the website
-						// so initialize last updated state if unset
-						if (settings.lastTemplateUpdate === "") {
-							const now = new Date()
-							settings.lastTemplateUpdate = now.toISOString()
-						}
-						await this.plugin.saveSettings()
-					})
-			})
-
-		new Setting(containerEl).setName("Developer").setHeading()
 
 		new Setting(containerEl)
 			.setName("Local export")
 			.setDesc(
-				"Export your notes to a local SQLite file instead of pushing to Turso. Useful for testing or if you need to manually interact with the database. The database will be exported to this plugin's folder in the vault, under .obsidian."
+				"Export your notes to a local SQLite file instead of pushing to Turso. Useful for testing or if you need to manually interact with the database. The database will be exported to this plugin's folder in the vault, under .obsidian/plugins/wiki-generator."
 			)
 			.addToggle(async (toggle) => {
 				toggle
@@ -441,15 +449,15 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			})
 
 		new Setting(containerEl)
-			.setName("Ignore existing users")
+			.setName("Clone remote users")
 			.setDesc(
-				"Run the uploading procedure without fetching existing user profiles. Will delete all profiles. Useful for debugging or for fully local usage."
+				"When syncing notes, also clone users from the remote Turso repository to the local database. Requires having a Turso database up and running and will only take effect if exporting to a local database. Will overwrite all local users."
 			)
 			.addToggle(async (toggle) => {
 				toggle
-					.setValue(settings.ignoreUsers)
+					.setValue(settings.cloneRemoteUsers)
 					.onChange(async (value) => {
-						settings.ignoreUsers = value
+						settings.cloneRemoteUsers = value
 						await this.plugin.saveSettings()
 					})
 			})
