@@ -2,8 +2,8 @@ import { Notice } from "obsidian"
 import { Octokit } from "octokit"
 import { createProgressBarFragment } from "./utils"
 
-const templateOwner = "D4wnstar"
-const templateRepo = "wiki-generator-template"
+const TEMPLATE_OWNER = "D4wnstar"
+const TEMPLATE_REPO = "wiki-generator-template"
 const EXCLUDED_FILES = ["README.md", "package-lock.json"]
 
 /**
@@ -40,8 +40,8 @@ export async function pullWebsiteUpdates(
 		const templateTreeRes = await octokit.request(
 			"GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
 			{
-				owner: templateOwner,
-				repo: templateRepo,
+				owner: TEMPLATE_OWNER,
+				repo: TEMPLATE_REPO,
 				tree_sha: "main",
 				recursive: "true",
 				headers: {
@@ -95,8 +95,8 @@ export async function pullWebsiteUpdates(
 				const templateFileRes = await octokit.request(
 					"GET /repos/{owner}/{repo}/contents/{path}",
 					{
-						owner: templateOwner,
-						repo: templateRepo,
+						owner: TEMPLATE_OWNER,
+						repo: TEMPLATE_REPO,
 						path: filepath,
 						headers: {
 							"X-GitHub-Api-Version": "2022-11-28",
@@ -319,8 +319,8 @@ async function handleBranchSplit(
 	const latestMainCommitOnTemplate = await octokit.request(
 		"GET /repos/{owner}/{repo}/git/ref/{ref}",
 		{
-			owner: templateOwner,
-			repo: templateRepo,
+			owner: TEMPLATE_OWNER,
+			repo: TEMPLATE_REPO,
 			ref: "heads/main",
 			headers: {
 				"X-GitHub-Api-Version": "2022-11-28",
@@ -367,7 +367,7 @@ async function handleBranchSplit(
 		owner: username,
 		repo: repo,
 		title: `Sync template to ${latestTemplateShaShort}`,
-		body: `Sync with template commit ${templateOwner}/${templateRepo}@${latestTemplateSha}.`,
+		body: `Sync with template commit ${TEMPLATE_OWNER}/${TEMPLATE_REPO}@${latestTemplateSha}.`,
 		head: branchName,
 		base: "main",
 		headers: {
@@ -383,48 +383,32 @@ async function handleBranchSplit(
 }
 
 export async function checkForTemplateUpdates(
-	username: string,
-	repo: string,
-	token: string
+	token: string,
+	lastUpdated: string
 ) {
+	if (lastUpdated === "") {
+		throw new Error(
+			"Unknown time of last update. Editing the deploy hook setting might fix this."
+		)
+	}
+	console.debug("User repo was last updated on:", lastUpdated)
 	const octokit = new Octokit({
 		auth: token,
 	})
 
-	// Fetch most recent user commit on main branch
-	const latestUserCommitRes = await octokit.request(
-		"GET /repos/{owner}/{repo}/commits/{ref}",
-		{
-			owner: username,
-			repo,
-			ref: "HEAD",
-			headers: {
-				"X-GitHub-Api-Version": "2022-11-28",
-			},
-		}
-	)
-	const lastUpdated = latestUserCommitRes.data.commit.committer?.date
-	console.log("User repo was last updated on:", lastUpdated)
-
-	// Fetch all template commits since the user last updated their repo
+	// Fetch all template commits since the user last updated their repo through the plugin
 	const templateCommitsRes = await octokit.request(
 		"GET /repos/{owner}/{repo}/commits",
 		{
-			owner: templateOwner,
-			repo: templateRepo,
+			owner: TEMPLATE_OWNER,
+			repo: TEMPLATE_REPO,
 			since: lastUpdated,
 			headers: {
 				"X-GitHub-Api-Version": "2022-11-28",
 			},
 		}
 	)
+	console.debug("Commits since last update:", templateCommitsRes.data)
 
-	if (templateCommitsRes.data.length === 0) {
-		return undefined
-	} else {
-		return {
-			latestUserCommit: latestUserCommitRes.data,
-			newTemplateCommits: templateCommitsRes.data,
-		}
-	}
+	return templateCommitsRes.data
 }

@@ -6,7 +6,6 @@ import {
 	syncNotes,
 } from "src/commands"
 import { addWikiPublishToNewFile } from "src/events"
-import { checkForTemplateUpdates } from "src/repository"
 import {
 	DEFAULT_SETTINGS,
 	WikiGeneratorSettingTab,
@@ -34,7 +33,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 			settings.githubRepoToken &&
 			settings.githubCheckUpdatesOnStartup
 		) {
-			await isWebsiteUpToDate(settings, 10000)
+			await isWebsiteUpToDate(settings, 10000, true)
 		}
 
 		// Automatically add the wiki-publish: true property on file creation

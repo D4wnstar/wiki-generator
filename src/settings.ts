@@ -9,7 +9,7 @@ import {
 	TAbstractFile,
 	TFolder,
 } from "obsidian"
-import { checkForTemplateUpdates, pullWebsiteUpdates } from "./repository"
+import { pullWebsiteUpdates } from "./repository"
 import { resetDatabase } from "./commands"
 import { isWebsiteUpToDate } from "./utils"
 
@@ -28,6 +28,10 @@ export interface WikiGeneratorSettings {
 	githubRepoToken: string
 	githubAutoapplyUpdates: boolean
 	githubCheckUpdatesOnStartup: boolean
+	/**
+	 * Must be ISO 8601 format
+	 */
+	lastTemplateUpdate: string
 	deployHook: string
 	dbUrl: string
 	dbToken: string
@@ -48,6 +52,7 @@ export const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 	githubRepoToken: "",
 	githubAutoapplyUpdates: true,
 	githubCheckUpdatesOnStartup: false,
+	lastTemplateUpdate: "",
 	dbUrl: "",
 	dbToken: "",
 	deployHook: "",
@@ -99,14 +104,16 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 
 		const folderDesc = document.createDocumentFragment()
 		folderDesc.append(
-			"Restricted commands and settings will only access files from these folders. Anything outside will be ignored. Having no public folders set means that all files are public. Note that this has no bearing on which notes the upload command grabs: that is exclusively determined by the value of 'wiki-publish'",
-			folderDesc.createEl("br"),
-			folderDesc.createEl("br"),
-			"You must provide the full path to the folder, separated by forward slashes. For example:",
+			"Restricted commands and settings will only access files from these folders. Anything outside will be ignored. Very useful if you only want a part of your vault to be published. No public folders means your entire vault is public. Note that this has no bearing on which notes are synced: that is exclusively determined by the value of 'wiki-publish'. This is only used for commands with the 'restricted' identifier.",
+			folderDesc.createEl("p", {
+				text: "You must provide the full path to the folder, separated by forward slashes. For example:",
+			}),
 			folderDesc.createEl("code", {
 				text: "University/Course Notes/Stellar Evolution",
 			}),
-			". You can also add a folder by right clicking it in the file browser. Remember to update these if you change the names of the folder as it won't be done automatically!"
+			folderDesc.createEl("p", {
+				text: "You can also add a folder by right clicking it in the file browser. Remember to update these anytime your rename your folders!",
+			})
 		)
 		new Setting(containerEl)
 			.setName("Public folders")
@@ -190,7 +197,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			.setName("Wiki")
 			.setHeading()
 			.setDesc(
-				"These settings will be sent to the website when you upload your notes."
+				"These settings affect the look and functionality of your wiki. They will be synced alongside your notes."
 			)
 
 		new Setting(containerEl)
@@ -249,7 +256,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Update website repository")
 			.setDesc(
-				"Update your website to synchronize with all new template additions. This may take some time. Please don't close Obsidian while updating. Make sure you also update this plugin whenever you update your website to avoid inconsistencies."
+				"Update your website to synchronize with all new template additions. This may take some time. Please don't close Obsidian while updating. Always update this plugin when you update the website, otherwise it might break."
 			)
 			.addButton((button) => {
 				button.setButtonText("Update website").onClick(async () => {
@@ -265,6 +272,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 							settings.githubRepoName,
 							settings.githubAutoapplyUpdates
 						)
+
 						if (prUrl) {
 							new Notice(
 								"A new pull request has been opened in your website's repository. You must merge it for the update to apply."
@@ -272,6 +280,9 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 						} else {
 							new Notice("Your website is now up to date.")
 						}
+
+						const now = new Date()
+						settings.lastTemplateUpdate = now.toISOString()
 					} else {
 						new Notice(
 							"Please set your GitHub username, repository and token."
@@ -403,6 +414,12 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					.setValue(settings.deployHook)
 					.onChange(async (value) => {
 						settings.deployHook = value
+						// If the user is setting up a deploy hook, that means they set up the website
+						// so initialize last updated state if unset
+						if (settings.lastTemplateUpdate === "") {
+							const now = new Date()
+							settings.lastTemplateUpdate = now.toISOString()
+						}
 						await this.plugin.saveSettings()
 					})
 			})

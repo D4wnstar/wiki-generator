@@ -379,7 +379,8 @@ export function createProgressBarFragment(): {
  */
 export async function isWebsiteUpToDate(
 	settings: WikiGeneratorSettings,
-	noticeDuration = 3000
+	noticeDuration = 3000,
+	quiet = false
 ) {
 	if (!settings.githubUsername) {
 		new Notice("The GitHub username is not set.", noticeDuration)
@@ -394,12 +395,16 @@ export async function isWebsiteUpToDate(
 
 	try {
 		const updates = await checkForTemplateUpdates(
-			settings.githubUsername,
-			settings.githubRepoName,
-			settings.githubRepoToken
+			settings.githubRepoToken,
+			settings.lastTemplateUpdate
 		)
-		if (!updates) {
-			new Notice("Your website is already up to date!", noticeDuration)
+		if (updates.length === 0) {
+			if (!quiet) {
+				new Notice(
+					"Your website is already up to date!",
+					noticeDuration
+				)
+			}
 		} else {
 			new Notice(
 				"There is an update available for your website. Update it from the settings tab.",
@@ -407,12 +412,13 @@ export async function isWebsiteUpToDate(
 			)
 		}
 	} catch (error) {
+		const msg = error.response?.data?.message ?? error.message
 		console.error(
-			`Error ${error.status} when checking website updates: ${error.response.data.message}`
+			`Error ${error.status} when checking website updates: ${msg}`
 		)
 		new Notice(
-			`There was an error while checking website updates: ${error.response.data.message}`,
-			noticeDuration
+			`There was an error while checking website updates: ${msg}`,
+			noticeDuration * 2
 		)
 	}
 }
