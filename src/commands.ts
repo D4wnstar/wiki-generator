@@ -602,6 +602,31 @@ async function collectFilesFromString(
 }
 
 /**
+ * Update the settings in the database without having to sync notes.
+ * Will not trigger a deployment.
+ * @param vault A reference to the vault
+ * @param settings THe plugin settings
+ */
+export async function updateWikiSettings(
+	vault: Vault,
+	settings: WikiGeneratorSettings
+) {
+	const database = await initializeAdapter(settings, vault)
+	try {
+		await database.updateSettings(settings)
+		if (settings.localExport) await database.export(vault)
+		new Notice(
+			"Successfully updated settings. Use the 'Redeploy website' command to notify the website.",
+			5000
+		)
+	} catch (error) {
+		console.error(`Error when updating settings: ${error}`)
+		new Notice(`Error when updating settings: ${error}`)
+		await database.close()
+	}
+}
+
+/**
  * Add or set `wiki-publish: true` in all publishable files.
  * @param settings The plugin settings
  * @param app A reference to the app

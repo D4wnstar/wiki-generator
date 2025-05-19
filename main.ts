@@ -5,6 +5,7 @@ import {
 	pingDeployHook,
 	syncIndividualNote,
 	syncNotes,
+	updateWikiSettings,
 } from "src/commands"
 import { addWikiPublishToNewFile } from "src/events"
 import {
@@ -123,20 +124,20 @@ export default class WikiGeneratorPlugin extends Plugin {
 		// Commands to make setting properties easier
 		this.addCommand({
 			id: "mass-add-publish",
-			name: "Add 'wiki-publish' to everything (restricted)",
+			name: "Add wiki-publish to everything (restricted)",
 			callback: async () => await massAddPublish(settings, this.app),
 		})
 
 		this.addCommand({
 			id: "mass-set-publish-true",
-			name: "Set 'wiki-publish' to true on everything (restricted)",
+			name: "Set wiki-publish to true on everything (restricted)",
 			callback: async () =>
 				await massSetPublishState(true, settings, this.app),
 		})
 
 		this.addCommand({
 			id: "mass-set-publish-false",
-			name: "Set 'wiki-publish' to false on everything (restricted)",
+			name: "Set wiki-publish to false on everything (restricted)",
 			callback: async () =>
 				await massSetPublishState(false, settings, this.app),
 		})
@@ -172,6 +173,13 @@ export default class WikiGeneratorPlugin extends Plugin {
 			id: "ping-deploy-hook",
 			name: "Redeploy website",
 			callback: async () => await pingDeployHook(settings),
+		})
+
+		this.addCommand({
+			id: "update-wiki-settings",
+			name: "Update wiki settings",
+			callback: async () =>
+				await updateWikiSettings(this.app.vault, settings),
 		})
 
 		this.addSettingTab(new WikiGeneratorSettingTab(this.app, this))

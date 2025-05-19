@@ -82,7 +82,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Add wiki-publish to new notes")
 			.setDesc(
-				"Automatically add the 'wiki-publish' property to new notes. Restricted."
+				"Automatically add the wiki-publish property to new notes. Restricted."
 			)
 			.addToggle((toggle) => {
 				toggle
@@ -109,7 +109,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 
 		const folderDesc = document.createDocumentFragment()
 		folderDesc.append(
-			"Restricted commands and settings will only access files from these folders. Anything outside will be ignored. Very useful if you only want a part of your vault to be published. No public folders means your entire vault is public. Note that this has no bearing on which notes are synced: that is exclusively determined by the value of 'wiki-publish'. This is only used for commands with the 'restricted' identifier.",
+			"Restricted commands and settings will only access files from these folders. Anything outside will be ignored. Very useful if you only want a part of your vault to be published. No public folders means your entire vault is public. Note that this has no bearing on which notes are synced: that is exclusively determined by the value of wiki-publish. This is only used for commands with the 'restricted' identifier.",
 			folderDesc.createEl("p", {
 				text: "You must provide the full path to the folder, separated by forward slashes. For example:",
 			}),
@@ -202,7 +202,7 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 			.setName("Wiki")
 			.setHeading()
 			.setDesc(
-				"These settings affect the look and functionality of your wiki. They will be synced alongside your notes."
+				"These settings affect the look and functionality of your wiki. They will be synced alongside your notes. Alternatively, use the 'Update wiki settings' command to update them manually."
 			)
 
 		new Setting(containerEl)
