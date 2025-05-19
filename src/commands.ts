@@ -162,7 +162,7 @@ async function collectFiles(database: DatabaseAdapter, vault: Vault) {
 	}
 
 	// First get all referenced images from markdown files
-	const imageRefs = await getReferencedImages(vault)
+	const imageRefs = await getImageReferencesInVault(vault)
 
 	// Collect only referenced images that have changed
 	const imagesToInsert: {
@@ -383,35 +383,42 @@ async function syncPages(
  * @param vault The vault instance
  * @returns Set of referenced image filenames
  */
-async function getReferencedImages(vault: Vault): Promise<Set<string>> {
+async function getImageReferencesInVault(vault: Vault): Promise<Set<string>> {
 	const files = vault.getMarkdownFiles()
-	const refs = new Set<string>()
+	let refs = new Set<string>()
 
 	for (const file of files) {
 		try {
-			// Scan all wikilinks for image filenames
+			// Scan each file for image filenames
 			const content = await vault.cachedRead(file)
-			for (const match of content.matchAll(wikilinkRegex)) {
-				const filename = match[2]
-				const extension = filename.match(/(?<=\.)[\w\d]+$/g)?.[0]
-
-				if (extension && imageExtensions.includes(extension)) {
-					refs.add(filename)
-				} else if (extension === "excalidraw") {
-					refs.add(filename + ".svg")
-				} else if (!extension && match[1] /* is transclusion */) {
-					// Since Excalidraw files are (very annoyingly) just markdown, it's
-					// pretty much impossible to reliably distinguish Excalidraw transclusions from
-					// generic note transclusions. As such, we optimistically assume any transclusion
-					// without an extension is actually an Excalidraw file and add it to the refs.
-					// Worst case scenario we add a bit too many images.
-					refs.add(filename.replace(/\.md$/, "") + ".svg")
-				}
-			}
+			refs = refs.union(getImageReferencesInString(content))
 		} catch (error) {
 			console.error(`Error reading ${file.path}:`, error)
 		}
 	}
+	return refs
+}
+
+function getImageReferencesInString(text: string): Set<string> {
+	const refs = new Set<string>()
+	for (const match of text.matchAll(wikilinkRegex)) {
+		const filename = match[2]
+		const extension = filename.match(/(?<=\.)[\w\d]+$/g)?.[0]
+
+		if (extension && imageExtensions.includes(extension)) {
+			refs.add(filename)
+		} else if (extension === "excalidraw") {
+			refs.add(filename + ".svg")
+		} else if (!extension && match[1] /* is transclusion */) {
+			// Since Excalidraw files are (very annoyingly) just markdown, it's
+			// pretty much impossible to reliably distinguish Excalidraw transclusions from
+			// generic note transclusions. As such, we optimistically assume any transclusion
+			// without an extension is actually an Excalidraw file and add it to the refs.
+			// Worst case scenario we add a bit too many images.
+			refs.add(filename.replace(/\.md$/, "") + ".svg")
+		}
+	}
+
 	return refs
 }
 
@@ -502,6 +509,96 @@ function makeEndResultNotice(
 	}
 
 	return { notice, changesMade }
+}
+
+/**
+ * Like `syncNotes`, except instead of syncing a diff of the entire vault, it forces the
+ * sync of the note this command is ran on. Otherwise essentially identical to `syncNotes`.
+ * This will also upload any files referenced in this note. It will not delete anything and
+ * will not trigger a deployment.
+ * @param note The file of the note to upload
+ * @param vault A reference to the vault
+ * @param settings The plugin settings
+ */
+export async function syncIndividualNote(
+	note: TFile,
+	vault: Vault,
+	settings: WikiGeneratorSettings
+) {
+	console.log("-".repeat(5), "[WIKI GENERATOR UPLOAD START]", "-".repeat(5))
+	const database = await initializeAdapter(settings, vault)
+	try {
+		const content = (await vault.cachedRead(note)).replace(/\r\n/g, "\n")
+		const hash = crypto.createHash("sha256").update(content).digest("hex")
+
+		const files = await collectFilesFromString(content, database, vault)
+		const pageToInsert = await processNotes(
+			[{ file: note, hash }],
+			files.imageNameToPath,
+			vault
+		)
+		const fileSync = await syncFiles(
+			files.imagesToInsert,
+			[],
+			database,
+			vault
+		)
+		const imagePathsInDb = [
+			...fileSync.insertedImagePaths,
+			...files.existingImagePaths,
+		]
+		await syncPages(pageToInsert, [], imagePathsInDb, database)
+
+		if (settings.localExport) await database.export(vault)
+
+		new Notice(
+			"Successfully synced note. Use the 'Redeploy website' command to notify the website.",
+			5000
+		)
+	} finally {
+		try {
+			await database.close()
+		} catch (error) {
+			console.error("Failed to clean up adapter:", error)
+		}
+		console.log("-".repeat(5), "[WIKI GENERATOR UPLOAD END]", "-".repeat(5))
+	}
+}
+
+async function collectFilesFromString(
+	text: string,
+	database: DatabaseAdapter,
+	vault: Vault
+) {
+	const imageRefs = getImageReferencesInString(text)
+	const imageNameToPath = new Map<string, string>()
+	const imagesToInsert: {
+		file: TFile
+		hash: string
+		type: "raster" | "svg"
+	}[] = []
+	for (const file of vault.getFiles()) {
+		if (!imageExtensions.includes(file.extension)) continue
+		if (!imageRefs.has(file.name)) continue
+		imageNameToPath.set(file.name, file.path)
+		// Recreate the buffer to avoid strip platform-specific artifacts which change hashes across platforms
+		const buf = new Uint8Array(await vault.readBinary(file)).buffer
+		const hash = crypto
+			.createHash("sha256")
+			.update(new Uint8Array(buf))
+			.digest("hex")
+		const type = file.extension === "svg" ? "svg" : "raster"
+		imagesToInsert.push({ file, hash, type })
+	}
+
+	const existingImagePaths = (await database.getImageData()).map(
+		(img) => img.path
+	)
+	return {
+		imagesToInsert,
+		imageNameToPath,
+		existingImagePaths,
+	}
 }
 
 /**

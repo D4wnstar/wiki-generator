@@ -3,6 +3,7 @@ import {
 	massAddPublish,
 	massSetPublishState,
 	pingDeployHook,
+	syncIndividualNote,
 	syncNotes,
 } from "src/commands"
 import { addWikiPublishToNewFile } from "src/events"
@@ -22,9 +23,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings()
 
-		// Shorthands for common variables
 		const settings = this.settings
-		const workspace = this.app.workspace
 
 		// Check for website updates on startup
 		if (
@@ -38,7 +37,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 
 		// Automatically add the wiki-publish: true property on file creation
 		// if the user allows it in the settings
-		workspace.onLayoutReady(() => {
+		this.app.workspace.onLayoutReady(() => {
 			this.registerEvent(
 				this.app.vault.on("create", async (file) => {
 					// Ignore non-files being created or if this feature is disabled
@@ -51,7 +50,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 					await addWikiPublishToNewFile(
 						file,
 						settings,
-						workspace,
+						this.app.workspace,
 						this.app.fileManager
 					)
 				})
@@ -69,9 +68,9 @@ export default class WikiGeneratorPlugin extends Plugin {
 			try {
 				await syncNotes(this.app.vault, settings, reset)
 			} catch (error) {
-				console.error("An error occured while uploading notes.", error)
+				console.error("An error occured while syncing notes.", error)
 				new Notice(
-					`An error occured while uploading notes. See console (CTRL+Shift+I) for details. ${error}`,
+					`An error occured while syncing notes. See console (CTRL+Shift+I) for details. ${error}`,
 					0
 				)
 			}
@@ -95,6 +94,30 @@ export default class WikiGeneratorPlugin extends Plugin {
 			id: "sync-notes-reset",
 			name: "Clear database, then sync notes",
 			callback: async () => await sync(true),
+		})
+
+		this.addCommand({
+			id: "sync-individual-note",
+			name: "Sync this note",
+			editorCallback: async (_editor, view) => {
+				if (!view.file) return
+				try {
+					await syncIndividualNote(
+						view.file,
+						this.app.vault,
+						settings
+					)
+				} catch (error) {
+					console.error(
+						"An error occured while syncing this note.",
+						error
+					)
+					new Notice(
+						`An error occured while syncing this note. See console (CTRL+Shift+I) for details. ${error}`,
+						0
+					)
+				}
+			},
 		})
 
 		// Commands to make setting properties easier
