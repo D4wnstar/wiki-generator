@@ -22,7 +22,7 @@ import * as crypto from "crypto"
 import { createClient } from "@libsql/client"
 import { imageToArrayBuffer } from "./files/images"
 
-const imageExtensions = ["png", "webp", "jpg", "jpeg", "gif", "bmp", "svg"]
+const IMAGE_EXTENSIONS = ["png", "webp", "jpg", "jpeg", "gif", "bmp", "svg"]
 
 /**
  * The central command of the plugin. Will traverse the entire vault, collecting all
@@ -76,29 +76,26 @@ export async function syncNotes(
 
 		updateProgress(50, "Processing notes...")
 		console.log("Processing notes...")
-		const pagesToInsert = await processNotes(
+		const pages = await processNotes(
 			notes.toProcess,
-			files.imageNameToPath,
+			notes.outdated,
+			files.images.nameToPath,
 			vault
 		)
 
 		updateProgress(65, "Syncing files...")
 		const fileSync = await syncFiles(
-			files.imagesToInsert,
-			files.imagesToDelete,
+			files.images.toInsert,
+			files.images.toDelete,
 			database,
 			vault
 		)
 
 		updateProgress(80, "Syncing notes...")
-		const imagePathsInDb = [
-			...fileSync.insertedImagePaths,
-			...files.existingImagePaths,
-		]
 		const pageSync = await syncPages(
-			pagesToInsert,
-			notes.toDelete,
-			imagePathsInDb,
+			pages.toInsert,
+			pages.toDelete,
+			fileSync.images.pathsInDb,
 			database
 		)
 
@@ -153,12 +150,10 @@ export async function syncNotes(
 async function collectFiles(database: DatabaseAdapter, vault: Vault) {
 	// Get all images in the database
 	const remoteImageHashes = new Map<string, string>()
-	const remoteImagePaths = []
 	for (const image of await database.getImageData()) {
 		// In theory these should exist, but due to schema changes double checking is good
 		if (!image.path || !image.hash) continue
 		remoteImageHashes.set(image.path, image.hash)
-		remoteImagePaths.push(image.path)
 	}
 
 	// First get all referenced images from markdown files
@@ -170,14 +165,14 @@ async function collectFiles(database: DatabaseAdapter, vault: Vault) {
 		hash: string
 		type: "raster" | "svg"
 	}[] = []
-	const imagesToDelete: { path: string }[] = []
+	const imagesToDelete: Set<string> = new Set()
 	const imageNameToPath: Map<string, string> = new Map()
 	for (const file of vault.getFiles()) {
-		if (imageExtensions.includes(file.extension)) {
+		if (IMAGE_EXTENSIONS.includes(file.extension)) {
 			imageNameToPath.set(file.name, file.path)
 			// Ignore and delete anything that's never mentioned in a markdown file
 			if (!imageRefs.has(file.name)) {
-				imagesToDelete.push({ path: file.path })
+				imagesToDelete.add(file.path)
 				continue
 			}
 			// Calculate the hash to ignore images that have not changed since last upload
@@ -219,10 +214,11 @@ async function collectFiles(database: DatabaseAdapter, vault: Vault) {
 	console.debug("Unreferenced images:", imagesToDelete)
 
 	return {
-		imagesToInsert,
-		imagesToDelete,
-		imageNameToPath,
-		existingImagePaths: remoteImagePaths,
+		images: {
+			toInsert: imagesToInsert,
+			toDelete: imagesToDelete,
+			nameToPath: imageNameToPath,
+		},
 	}
 }
 
@@ -263,37 +259,37 @@ async function collectNotes(database: DatabaseAdapter, vault: Vault) {
 		// If it exists and it's identical to last time, don't bother reprocessing it
 	}
 
-	// Delete notes that exist in remote but not in local
+	// Notes that exist in remote but not in local are outdated and should be deleted
 	const remotePaths = new Set(remoteHashes.keys())
-	const notesToDelete = remotePaths.difference(localPaths)
+	const outdatedNotes = remotePaths.difference(localPaths)
 
 	console.debug("Notes to process:", notesToProcess)
-	console.debug("Notes to delete:", notesToDelete)
+	console.debug("Outdated notes:", outdatedNotes)
 
 	return {
 		toProcess: notesToProcess,
-		toDelete: [...notesToDelete].map((path) => ({ path })),
+		outdated: outdatedNotes,
 	}
 }
 
 export interface FileSyncResult {
-	insertedImagePaths: string[]
-	insertedImages: number
-	deletedImages: number
+	images: {
+		pathsInDb: string[]
+		inserted: number
+		deleted: number
+	}
 }
 
 async function syncFiles(
 	imagesToInsert: { file: TFile; hash: string; type: "raster" | "svg" }[],
-	imagesToDelete: { path: string }[],
+	imagesToDelete: Set<string>,
 	database: DatabaseAdapter,
 	vault: Vault
 ): Promise<FileSyncResult> {
 	// Push the media to the database
 	console.log(`Deleting unreferenced images...`)
 	console.debug("Unreferenced images:", imagesToDelete)
-	const deletedImages = await database.deleteImagesByPath(
-		imagesToDelete.map((img) => img.path)
-	)
+	const deletedImages = await database.deleteImagesByPath([...imagesToDelete])
 	console.log(`Deleted ${deletedImages} images`)
 
 	const imageRows = await Promise.all(
@@ -317,20 +313,28 @@ async function syncFiles(
 	const insertedImagePaths = await database.insertImages(imageRows)
 	console.log(`Inserted ${insertedImagePaths.length} images`)
 
+	// Get an updated list of image paths in the database after insertion
+	const imagePathsInDb = (await database.getImageData()).map(
+		(img) => img.path
+	)
+
 	return {
-		insertedImagePaths,
-		insertedImages: insertedImagePaths.length,
-		deletedImages,
+		images: {
+			pathsInDb: imagePathsInDb,
+			inserted: insertedImagePaths.length,
+			deleted: deletedImages,
+		},
 	}
 }
 
 async function processNotes(
 	files: { file: TFile; hash: string }[],
+	outdatedNotePaths: Set<string>,
 	imageNameToPath: Map<string, string>,
 	vault: Vault
 ) {
-	// Convert them into rich data structures
-	const { pages, titleToPath } = await makePagesFromFiles(
+	// Convert notes into rich data structures
+	const { pages, titleToPath, unpublishedNotes } = await makePagesFromFiles(
 		files,
 		imageNameToPath,
 		vault
@@ -346,7 +350,10 @@ async function processNotes(
 	const pagesWithLinks = await convertWikilinks(pages, postprocessor)
 	console.debug("Pages to insert:", pagesWithLinks)
 
-	return pagesWithLinks
+	return {
+		toInsert: pagesWithLinks,
+		toDelete: outdatedNotePaths.union(unpublishedNotes),
+	}
 }
 
 export interface PageSyncResult {
@@ -356,16 +363,14 @@ export interface PageSyncResult {
 
 async function syncPages(
 	pagesToInsert: Pages,
-	pagesToDelete: { path: string }[],
+	pagesToDelete: Set<string>,
 	imagePathsInDb: string[],
 	database: DatabaseAdapter
 ): Promise<PageSyncResult> {
 	// Finally push the notes and media to the database
 	console.log(`Deleting outdated notes...`)
 	console.debug("Outdated notes:", pagesToDelete)
-	const deletedNotes = await database.deleteNotesByPath(
-		pagesToDelete.map((page) => page.path)
-	)
+	const deletedNotes = await database.deleteNotesByPath([...pagesToDelete])
 	console.log(`Deleted ${deletedNotes} notes`)
 
 	// Validate foreign key references before insertion
@@ -405,7 +410,7 @@ function getImageReferencesInString(text: string): Set<string> {
 		const filename = match[2]
 		const extension = filename.match(/(?<=\.)[\w\d]+$/g)?.[0]
 
-		if (extension && imageExtensions.includes(extension)) {
+		if (extension && IMAGE_EXTENSIONS.includes(extension)) {
 			refs.add(filename)
 		} else if (extension === "excalidraw") {
 			refs.add(filename + ".svg")
@@ -485,8 +490,8 @@ function makeEndResultNotice(
 	const changesMade =
 		pageSync.insertedNotes > 0 ||
 		pageSync.deletedNotes > 0 ||
-		fileSync.insertedImages > 0 ||
-		fileSync.deletedImages > 0
+		fileSync.images.inserted > 0 ||
+		fileSync.images.deleted > 0
 
 	let notice = changesMade
 		? "Done! Database synced."
@@ -499,13 +504,13 @@ function makeEndResultNotice(
 		const s = pageSync.deletedNotes > 1 ? "s" : ""
 		notice += `\n- Deleted ${pageSync.deletedNotes} outdated note${s}.`
 	}
-	if (fileSync.insertedImages > 0) {
-		const s = fileSync.insertedImages > 1 ? "s" : ""
-		notice += `\n- Updated ${fileSync.insertedImages} image${s}.`
+	if (fileSync.images.inserted > 0) {
+		const s = fileSync.images.inserted > 1 ? "s" : ""
+		notice += `\n- Updated ${fileSync.images.inserted} image${s}.`
 	}
-	if (fileSync.deletedImages > 0) {
-		const s = fileSync.deletedImages > 1 ? "s" : ""
-		notice += `\n- Deleted ${fileSync.deletedImages} outdated image${s}.`
+	if (fileSync.images.deleted > 0) {
+		const s = fileSync.images.deleted > 1 ? "s" : ""
+		notice += `\n- Deleted ${fileSync.images.deleted} outdated image${s}.`
 	}
 
 	return { notice, changesMade }
@@ -514,8 +519,8 @@ function makeEndResultNotice(
 /**
  * Like `syncNotes`, except instead of syncing a diff of the entire vault, it forces the
  * sync of the note this command is ran on. Otherwise essentially identical to `syncNotes`.
- * This will also upload any files referenced in this note. It will not delete anything and
- * will not trigger a deployment.
+ * This will also upload any files referenced in this note. It will not delete outdated files
+ * and will not trigger a deployment.
  * @param note The file of the note to upload
  * @param vault A reference to the vault
  * @param settings The plugin settings
@@ -532,27 +537,35 @@ export async function syncIndividualNote(
 		const hash = crypto.createHash("sha256").update(content).digest("hex")
 
 		const files = await collectFilesFromString(content, database, vault)
-		const pageToInsert = await processNotes(
+		const page = await processNotes(
 			[{ file: note, hash }],
-			files.imageNameToPath,
+			new Set(),
+			files.images.nameToPath,
 			vault
 		)
 		const fileSync = await syncFiles(
-			files.imagesToInsert,
-			[],
+			files.images.toInsert,
+			new Set(),
 			database,
 			vault
 		)
-		const imagePathsInDb = [
-			...fileSync.insertedImagePaths,
-			...files.existingImagePaths,
-		]
-		await syncPages(pageToInsert, [], imagePathsInDb, database)
+		await syncPages(
+			page.toInsert,
+			page.toDelete,
+			fileSync.images.pathsInDb,
+			database
+		)
 
 		if (settings.localExport) await database.export(vault)
 
+		let message = ""
+		if (page.toDelete.size > 0) {
+			message = "Successfully deleted note"
+		} else {
+			message = "Successfully updated note"
+		}
 		new Notice(
-			"Successfully synced note. Use the 'Redeploy website' command to notify the website.",
+			`${message}. Use the 'Redeploy website' command to notify the website.`,
 			5000
 		)
 	} finally {
@@ -578,7 +591,7 @@ async function collectFilesFromString(
 		type: "raster" | "svg"
 	}[] = []
 	for (const file of vault.getFiles()) {
-		if (!imageExtensions.includes(file.extension)) continue
+		if (!IMAGE_EXTENSIONS.includes(file.extension)) continue
 		if (!imageRefs.has(file.name)) continue
 		imageNameToPath.set(file.name, file.path)
 		// Recreate the buffer to avoid strip platform-specific artifacts which change hashes across platforms
@@ -595,9 +608,11 @@ async function collectFilesFromString(
 		(img) => img.path
 	)
 	return {
-		imagesToInsert,
-		imageNameToPath,
-		existingImagePaths,
+		images: {
+			toInsert: imagesToInsert,
+			nameToPath: imageNameToPath,
+			existingPaths: existingImagePaths,
+		},
 	}
 }
 

@@ -41,9 +41,10 @@ export async function makePagesFromFiles(
 	files: { file: TFile; hash: string }[],
 	imageNameToPath: Map<string, string>,
 	vault: Vault
-): Promise<{ pages: Pages; titleToPath: Map<string, string> }> {
+) {
 	const lastUpdated = Math.floor(Date.now() / 1000)
 	const pages: Pages = new Map()
+	const unpublishedNotes: Set<string> = new Set()
 	const titleToPath: Map<string, string> = new Map()
 	const noteNameToPath: Map<string, { path: string; isExcalidraw: boolean }> =
 		new Map()
@@ -103,8 +104,11 @@ export async function makePagesFromFiles(
 			const fmVfile = await frontmatterProcessor.process(content)
 			const frontmatter = fmVfile.data.matter as Frontmatter
 
-			// Skip pages that shouldn't be published (wiki-publish is either false or undefined)
-			if (!frontmatter["wiki-publish"]) continue
+			// Anything that's not public should me marked as such keep thing synced
+			if (!frontmatter["wiki-publish"]) {
+				unpublishedNotes.add(file.path)
+				continue
+			}
 
 			// Parse and replace custom :::blocks::: and other non-standard syntax
 			// Codeblocks are removed and added back later to keep them unmodified
@@ -175,7 +179,7 @@ export async function makePagesFromFiles(
 		}
 	}
 
-	return { pages, titleToPath }
+	return { pages, titleToPath, unpublishedNotes }
 }
 
 /**
