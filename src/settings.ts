@@ -33,6 +33,7 @@ export interface WikiGeneratorSettings {
 	 */
 	lastTemplateUpdate: string
 	deployHook: string
+	deployOnSync: boolean
 	dbUrl: string
 	dbToken: string
 }
@@ -56,6 +57,7 @@ export const DEFAULT_SETTINGS: WikiGeneratorSettings = {
 	dbUrl: "",
 	dbToken: "",
 	deployHook: "",
+	deployOnSync: true,
 }
 
 export class WikiGeneratorSettingTab extends PluginSettingTab {
@@ -458,6 +460,20 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					.setValue(settings.cloneRemoteUsers)
 					.onChange(async (value) => {
 						settings.cloneRemoteUsers = value
+						await this.plugin.saveSettings()
+					})
+			})
+
+		new Setting(containerEl)
+			.setName("Deploy on sync")
+			.setDesc(
+				"Whether to ping the deploy hook on a successful sync. Turning this off will prevent redeployments of the website on sync. Useful for testing the remote database without constantly redeploying. Use the 'Redeploy website' command to manually redeploy."
+			)
+			.addToggle(async (toggle) => {
+				toggle
+					.setValue(settings.deployOnSync)
+					.onChange(async (value) => {
+						settings.deployOnSync = value
 						await this.plugin.saveSettings()
 					})
 			})

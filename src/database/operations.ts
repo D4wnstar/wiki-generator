@@ -439,7 +439,6 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 	}
 
 	async insertPages(pages: Pages): Promise<number> {
-		let inserted = 0
 		const noteQueries = []
 		const noteContentsQueries = []
 		const detailsQueries = []
@@ -500,23 +499,22 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 		}
 
 		// Execute all inserts in a transaction
+		let inserted = 0
 		this.db.run("BEGIN TRANSACTION;")
 		try {
 			for (const query of noteQueries) {
 				const res = this.db.exec(query.sql, query.args)
+				// INSERT is RETURNING so the result has the same number of rows that were inserted
 				if (res[0]?.values) inserted += res[0].values.length
 			}
 			for (const query of noteContentsQueries) {
-				const res = this.db.exec(query.sql, query.args)
-				if (res[0]?.values) inserted += res[0].values.length
+				this.db.exec(query.sql, query.args)
 			}
 			for (const query of detailsQueries) {
-				const res = this.db.exec(query.sql, query.args)
-				if (res[0]?.values) inserted += res[0].values.length
+				this.db.exec(query.sql, query.args)
 			}
 			for (const query of sidebarImagesQueries) {
-				const res = this.db.exec(query.sql, query.args)
-				if (res[0]?.values) inserted += res[0].values.length
+				this.db.exec(query.sql, query.args)
 			}
 			this.db.run("COMMIT;")
 			return inserted
@@ -636,7 +634,7 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 			args: [path],
 		}))
 		const results = await this.db.batch(queries)
-		return results.reduce((sum, res) => sum + (res.rowsAffected ?? 0), 0)
+		return results.reduce((sum, res) => sum + (res.rows.length ?? 0), 0)
 	}
 
 	async insertUsers(users: User[]) {
@@ -667,7 +665,7 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 			args: [path],
 		}))
 		const results = await this.db.batch(queries)
-		return results.reduce((sum, res) => sum + (res.rowsAffected ?? 0), 0)
+		return results.reduce((sum, res) => sum + (res.rows.length ?? 0), 0)
 	}
 
 	async insertPages(pages: Pages): Promise<number> {
@@ -742,10 +740,7 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 				...sidebarImagesQueries,
 			]
 			const results = await this.db.batch(queries)
-			return results.reduce(
-				(sum, res) => sum + (res.rowsAffected ?? 0),
-				0
-			)
+			return results.reduce((sum, res) => sum + (res.rows.length ?? 0), 0)
 		}, 3)
 	}
 

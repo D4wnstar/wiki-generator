@@ -125,7 +125,7 @@ export async function syncNotes(
 			updateProgress(100, notice)
 		} else {
 			// Ping Vercel so it rebuilds the site, but only if something changed
-			if (settings.deployHook && changesMade) {
+			if (settings.deployOnSync && changesMade) {
 				console.log("Sending POST request to deploy hook")
 				await request({
 					url: settings.deployHook,
@@ -484,14 +484,22 @@ function makeEndResultNotice(
 	let notice = changesMade
 		? "Done! Database synced."
 		: "Done! No changes were necessary."
-	if (pageSync.insertedNotes > 0)
-		notice += `\n- Updated ${pageSync.insertedNotes} notes.`
-	if (pageSync.deletedNotes > 0)
-		notice += `\n- Deleted ${pageSync.insertedNotes} outdated notes.`
-	if (fileSync.insertedImages > 0)
-		notice += `\n- Updated ${fileSync.insertedImages} images.`
-	if (fileSync.deletedImages > 0)
-		notice += `\n- Deleted ${fileSync.deletedImages} outdated images.`
+	if (pageSync.insertedNotes > 0) {
+		const s = pageSync.insertedNotes > 1 ? "s" : ""
+		notice += `\n- Updated ${pageSync.insertedNotes} note${s}.`
+	}
+	if (pageSync.deletedNotes > 0) {
+		const s = pageSync.deletedNotes > 1 ? "s" : ""
+		notice += `\n- Deleted ${pageSync.deletedNotes} outdated note${s}.`
+	}
+	if (fileSync.insertedImages > 0) {
+		const s = fileSync.insertedImages > 1 ? "s" : ""
+		notice += `\n- Updated ${fileSync.insertedImages} image${s}.`
+	}
+	if (fileSync.deletedImages > 0) {
+		const s = fileSync.deletedImages > 1 ? "s" : ""
+		notice += `\n- Deleted ${fileSync.deletedImages} outdated image${s}.`
+	}
 
 	return { notice, changesMade }
 }
