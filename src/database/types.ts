@@ -13,6 +13,7 @@ export type Note = {
 	hash: string
 	last_updated: number
 	can_prerender: number // actually boolean but SQLite is jank
+	html_content: string
 }
 
 export type Frontmatter = {
@@ -35,14 +36,6 @@ export type SidebarImage = {
 	caption: string | null
 }
 
-export type ContentChunk = {
-	chunk_id: number
-	text: string
-	allowed_users: string | null
-	image_path: string | null
-	note_transclusion_path: string | null
-}
-
 export type Image = {
 	path: string
 	blob?: Uint8Array | null
@@ -58,15 +51,11 @@ export type ImageData = {
 	hash: string
 }
 
-export type Pages = Map<
-	string,
-	{
-		note: Note
-		chunks: ContentChunk[]
-		details: Detail[]
-		sidebarImages: SidebarImage[]
-	}
->
+export type Page = {
+	note: Note
+	details: Detail[]
+	sidebarImages: SidebarImage[]
+}
 
 export type User = {
 	id: number
@@ -93,7 +82,7 @@ export interface DatabaseAdapter {
 	deleteImagesByPath(paths: string[]): Promise<number>
 
 	getNotes(): Promise<Note[]>
-	insertPages(pages: Pages): Promise<number>
+	insertPages(pages: Page[]): Promise<number>
 	deleteNotesByPath(paths: string[]): Promise<number>
 
 	updateSettings(settings: WikiGeneratorSettings): Promise<void>

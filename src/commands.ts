@@ -1,22 +1,28 @@
-import { App, Notice, request, TFile, Vault } from "obsidian"
+import {
+	App,
+	Component,
+	MarkdownRenderer,
+	Notice,
+	request,
+	TFile,
+	Vault,
+} from "obsidian"
 import { WikiGeneratorSettings } from "./settings"
-import { createProgressBarFragment, getPublishableFiles } from "./utils"
-import { unified } from "unified"
+import {
+	createProgressBarFragment,
+	ensureUniqueSlug,
+	getPublishableFiles,
+	slugPath,
+} from "./utils"
 import { createLocalDatabase, initializeAdapter } from "./database/init"
 import {
 	getUsersFromRemote,
 	LocalDatabaseAdapter,
 	RemoteDatabaseAdapter,
 } from "./database/operations"
-import {
-	convertWikilinks,
-	makePagesFromFiles,
-} from "./notes/text-transformations"
-import { DatabaseAdapter, Pages } from "./database/types"
+import { createPage, postprocessHtml } from "./notes/text-transformations"
+import { DatabaseAdapter, Page } from "./database/types"
 
-import rehypeParse from "rehype-parse"
-import rehypeWikilinks from "./unified/rehype-wikilinks"
-import rehypeStringify from "rehype-stringify"
 import { wikilinkRegex } from "./notes/regexes"
 import * as crypto from "crypto"
 import { createClient } from "@libsql/client"
@@ -35,7 +41,7 @@ const IMAGE_EXTENSIONS = ["png", "webp", "jpg", "jpeg", "gif", "bmp", "svg"]
  * @param reset Whether the database should be reset before uploading
  */
 export async function syncNotes(
-	vault: Vault,
+	app: App,
 	settings: WikiGeneratorSettings,
 	reset = false
 ) {
@@ -53,7 +59,7 @@ export async function syncNotes(
 	const notice = new Notice(fragment, 0)
 
 	// Initialize common database interface
-	const database = await initializeAdapter(settings, vault)
+	const database = await initializeAdapter(settings, app.vault)
 
 	try {
 		if (reset) {
@@ -68,11 +74,11 @@ export async function syncNotes(
 
 		updateProgress(20, "Collecting files...")
 		console.log("Collecting files...")
-		const files = await collectFiles(database, vault)
+		const files = await collectFiles(database, app.vault)
 
 		updateProgress(35, "Collecting notes...")
 		console.log("Collecting notes...")
-		const notes = await collectNotes(database, vault)
+		const notes = await collectNotes(database, app.vault)
 
 		updateProgress(50, "Processing notes...")
 		console.log("Processing notes...")
@@ -80,7 +86,7 @@ export async function syncNotes(
 			notes.toProcess,
 			notes.outdated,
 			files.images.nameToPath,
-			vault
+			this.app
 		)
 
 		updateProgress(65, "Syncing files...")
@@ -88,7 +94,7 @@ export async function syncNotes(
 			files.images.toInsert,
 			files.images.toDelete,
 			database,
-			vault
+			app.vault
 		)
 
 		updateProgress(80, "Syncing notes...")
@@ -118,7 +124,7 @@ export async function syncNotes(
 		if (settings.localExport) {
 			updateProgress(98, "Exporting database...")
 			console.log("Exporting database...")
-			await database.export(vault)
+			await database.export(app.vault)
 			updateProgress(100, notice)
 		} else {
 			// Ping Vercel so it rebuilds the site, but only if something changed
@@ -261,7 +267,9 @@ async function collectNotes(database: DatabaseAdapter, vault: Vault) {
 
 	// Notes that exist in remote but not in local are outdated and should be deleted
 	const remotePaths = new Set(remoteHashes.keys())
-	const outdatedNotes = remotePaths.difference(localPaths)
+	const outdatedNotes = new Set(
+		[...remotePaths].filter((x) => !localPaths.has(x))
+	)
 
 	console.debug("Notes to process:", notesToProcess)
 	console.debug("Outdated notes:", outdatedNotes)
@@ -331,28 +339,60 @@ async function processNotes(
 	files: { file: TFile; hash: string }[],
 	outdatedNotePaths: Set<string>,
 	imageNameToPath: Map<string, string>,
-	vault: Vault
+	app: App
 ) {
-	// Convert notes into rich data structures
-	const { pages, titleToPath, unpublishedNotes } = await makePagesFromFiles(
-		files,
-		imageNameToPath,
-		vault
-	)
+	const titleToPath = new Map<string, string>()
+	const previousSlugs: Set<string> = new Set()
+	for (const file of app.vault.getMarkdownFiles()) {
+		const slug = ensureUniqueSlug(slugPath(file.path), previousSlugs)
+		previousSlugs.add(slug)
+		titleToPath.set(file.basename, slug)
+	}
+	console.debug("Title -> Path", titleToPath)
 
-	// Initialize one last processor to handle wikilink conversion
-	const postprocessor = unified()
-		.use(rehypeParse, { fragment: true })
-		.use(rehypeWikilinks, titleToPath, imageNameToPath)
-		.use(rehypeStringify, { allowDangerousHtml: true })
+	const pages: Page[] = []
+	const unpublishedNotes: Set<string> = new Set()
+	const failedPages: { path: string; error: Error }[] = []
+	for (const { file, hash } of files) {
+		try {
+			const page = await createPage(
+				file,
+				hash,
+				titleToPath,
+				imageNameToPath,
+				app
+			)
 
-	console.log("Converting wikilinks...")
-	const pagesWithLinks = await convertWikilinks(pages, postprocessor)
-	console.debug("Pages to insert:", pagesWithLinks)
+			if (page) {
+				page.note.html_content = postprocessHtml(
+					page.note.html_content,
+					titleToPath
+				)
+				pages.push(page)
+			} else {
+				unpublishedNotes.add(file.path)
+			}
+		} catch (error) {
+			failedPages.push({ path: file.path, error: error as Error })
+			continue
+		}
+	}
+
+	if (failedPages.length > 0) {
+		console.warn(`${failedPages.length} pages failed to process:`)
+		new Notice(`${failedPages.length} pages failed to process`)
+		for (const { path, error } of failedPages) {
+			console.warn(`- ${path}: ${error.message}`)
+		}
+	}
+
+	const unpublishedNotesArray = Array.from(unpublishedNotes)
+	const outdatedNotePathsArray = Array.from(outdatedNotePaths)
+	const toDeleteArray = [...outdatedNotePathsArray, ...unpublishedNotesArray]
 
 	return {
-		toInsert: pagesWithLinks,
-		toDelete: outdatedNotePaths.union(unpublishedNotes),
+		toInsert: pages,
+		toDelete: new Set(toDeleteArray),
 	}
 }
 
@@ -362,7 +402,7 @@ export interface PageSyncResult {
 }
 
 async function syncPages(
-	pagesToInsert: Pages,
+	pagesToInsert: Page[],
 	pagesToDelete: Set<string>,
 	imagePathsInDb: string[],
 	database: DatabaseAdapter
@@ -396,7 +436,8 @@ async function getImageReferencesInVault(vault: Vault): Promise<Set<string>> {
 		try {
 			// Scan each file for image filenames
 			const content = await vault.cachedRead(file)
-			refs = refs.union(getImageReferencesInString(content))
+			const newRefs = getImageReferencesInString(content)
+			refs = new Set([...refs, ...newRefs])
 		} catch (error) {
 			console.error(`Error reading ${file.path}:`, error)
 		}
@@ -437,34 +478,25 @@ function getImageReferencesInString(text: string): Set<string> {
  * @param pages The Pages to analyze
  * @param images The set of images that goes alongside the pages
  */
-function validateForeignKeys(pages: Pages, imagePathsInDb: string[]) {
+function validateForeignKeys(pages: Page[], imagePathsInDb: string[]) {
 	const missingRefs = new Map<string, string[]>()
-	for (const [notePath, page] of pages.entries()) {
-		const chunksWithIssues: string[] = []
+	for (const page of pages) {
+		const issues: string[] = []
 
-		for (const [idx, chunk] of page.chunks.entries()) {
-			if (
-				chunk.note_transclusion_path &&
-				!pages.has(chunk.note_transclusion_path)
-			) {
-				chunksWithIssues.push(
-					`Chunk ${idx}: Missing transcluded note '${chunk.note_transclusion_path}'`
+		// Check sidebar images for missing references
+		for (const img of page.sidebarImages) {
+			const imageExists = imagePathsInDb.some(
+				(path) => path === img.image_path
+			)
+			if (!imageExists) {
+				issues.push(
+					`Sidebar image '${img.image_name}' references missing image '${img.image_path}'`
 				)
-			}
-			if (chunk.image_path) {
-				const imageExists = imagePathsInDb.some(
-					(path) => path === chunk.image_path
-				)
-				if (!imageExists) {
-					chunksWithIssues.push(
-						`Chunk ${idx}: Missing image '${chunk.image_path}'`
-					)
-				}
 			}
 		}
 
-		if (chunksWithIssues.length > 0) {
-			missingRefs.set(notePath, chunksWithIssues)
+		if (issues.length > 0) {
+			missingRefs.set(page.note.path, issues)
 		}
 	}
 
@@ -541,7 +573,7 @@ export async function syncIndividualNote(
 			[{ file: note, hash }],
 			new Set(),
 			files.images.nameToPath,
-			vault
+			this.app
 		)
 		const fileSync = await syncFiles(
 			files.images.toInsert,
@@ -743,4 +775,25 @@ export async function pingDeployHook(settings: WikiGeneratorSettings) {
 	} else {
 		new Notice("No deploy hook is set. Please add one in the settings.")
 	}
+}
+
+export function md2html(md: string, app: App): Promise<string> {
+	return new Promise((resolve, reject) => {
+		// Create a temporary element to render the markdown to
+		const tempEl = document.createElement("div")
+
+		MarkdownRenderer.render(app, md, tempEl, "", new Component())
+			.then(() => {
+				// Extract the HTML content from the temporary element
+				const htmlContent = tempEl.innerHTML
+				resolve(htmlContent)
+			})
+			.catch((error) => {
+				reject(error)
+			})
+			.finally(() => {
+				// Clean up the temporary element
+				tempEl.remove()
+			})
+	})
 }
