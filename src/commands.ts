@@ -341,15 +341,20 @@ async function processNotes(
 	imageNameToPath: Map<string, string>,
 	app: App
 ) {
+	// Bind titles to paths
 	const titleToPath = new Map<string, string>()
 	const previousSlugs: Set<string> = new Set()
 	for (const file of app.vault.getMarkdownFiles()) {
 		const slug = ensureUniqueSlug(slugPath(file.path), previousSlugs)
 		previousSlugs.add(slug)
+		// Add both the normal and lowercase basename for case insensitivity
 		titleToPath.set(file.basename, slug)
+		titleToPath.set(file.basename.toLowerCase(), slug)
 	}
 	console.debug("Title -> Path", titleToPath)
+	console.debug("Image name -> Path", imageNameToPath)
 
+	// Process the notes
 	const pages: Page[] = []
 	const unpublishedNotes: Set<string> = new Set()
 	const failedPages: { path: string; error: Error }[] = []
@@ -364,23 +369,19 @@ async function processNotes(
 			)
 
 			if (page) {
-				page.note.html_content = postprocessHtml(
-					page.note.html_content,
-					titleToPath
-				)
 				pages.push(page)
 			} else {
 				unpublishedNotes.add(file.path)
 			}
 		} catch (error) {
-			failedPages.push({ path: file.path, error: error as Error })
+			failedPages.push({ path: file.path, error })
 			continue
 		}
 	}
 
 	if (failedPages.length > 0) {
-		console.warn(`${failedPages.length} pages failed to process:`)
 		new Notice(`${failedPages.length} pages failed to process`)
+		console.warn(`${failedPages.length} pages failed to process:`)
 		for (const { path, error } of failedPages) {
 			console.warn(`- ${path}: ${error.message}`)
 		}
@@ -775,25 +776,4 @@ export async function pingDeployHook(settings: WikiGeneratorSettings) {
 	} else {
 		new Notice("No deploy hook is set. Please add one in the settings.")
 	}
-}
-
-export function md2html(md: string, app: App): Promise<string> {
-	return new Promise((resolve, reject) => {
-		// Create a temporary element to render the markdown to
-		const tempEl = document.createElement("div")
-
-		MarkdownRenderer.render(app, md, tempEl, "", new Component())
-			.then(() => {
-				// Extract the HTML content from the temporary element
-				const htmlContent = tempEl.innerHTML
-				resolve(htmlContent)
-			})
-			.catch((error) => {
-				reject(error)
-			})
-			.finally(() => {
-				// Clean up the temporary element
-				tempEl.remove()
-			})
-	})
 }

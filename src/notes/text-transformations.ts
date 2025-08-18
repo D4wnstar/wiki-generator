@@ -1,8 +1,7 @@
-import { App, TFile } from "obsidian"
+import { App, Component, MarkdownRenderer, TFile } from "obsidian"
 import { slugPath } from "src/utils"
 import { handleCustomSyntax } from "./custom-blocks"
 import { Frontmatter, Note, Page } from "../database/types"
-import { md2html } from "src/commands"
 
 export async function createPage(
 	file: TFile,
@@ -22,11 +21,12 @@ export async function createPage(
 		content,
 		file.name,
 		app,
+		titleToSlug,
 		imageNameToPath
 	)
 
 	// Convert the entire markdown to HTML using Obsidian's builtin renderer
-	const html = await md2html(md, app)
+	const html = await mdToHtml(md, app, titleToSlug, imageNameToPath)
 
 	// Get aliases as search terms
 	const title = file.basename
@@ -106,22 +106,42 @@ async function extractFrontmatter(content: string): Promise<Frontmatter> {
 	return {} as Frontmatter
 }
 
+export async function mdToHtml(
+	md: string,
+	app: App,
+	titleToPath: Map<string, string>,
+	imageNameToPath: Map<string, string>
+) {
+	// Create a temporary element to render the markdown to
+	const tempEl = document.createElement("div")
+
+	try {
+		await MarkdownRenderer.render(app, md, tempEl, "", new Component())
+		return postprocessHtml(tempEl.innerHTML, titleToPath, imageNameToPath)
+	} finally {
+		tempEl.remove()
+	}
+}
+
 export function postprocessHtml(
 	html: string,
-	titleToPath: Map<string, string>
+	titleToPath: Map<string, string>,
+	imageNameToPath: Map<string, string>
 ) {
 	const parser = new DOMParser()
 	const doc = parser.parseFromString(html, "text/html")
 
-	// Process each link in reverse order to handle unwrapping correctly
+	// Change link URLs to be actual website URLs
 	const links = Array.from(doc.querySelectorAll("a")).reverse()
 	for (const link of links) {
+		link.removeAttribute("data-href")
+
 		const href = link.getAttribute("href")
 		if (!href) continue
+		if (link.className.includes("external-link")) continue
 
 		// Remove target="_blank" and data-href
 		link.removeAttribute("target")
-		link.removeAttribute("data-href")
 
 		// Leave internal links alone
 		if (href.startsWith("#")) continue
@@ -138,6 +158,10 @@ export function postprocessHtml(
 					? `/${slug}${href.substring(hashIndex)}`
 					: `/${slug}`
 			link.setAttribute("href", sub)
+		} else if (imageNameToPath.has(pageKey)) {
+			const slug = imageNameToPath.get(pageKey) as string
+			const path = encodeURIComponent(slug)
+			link.setAttribute("href", `/api/v1/image/${path}`)
 		} else {
 			// If no slug is found, unwrap the anchor tag
 			const parent = link.parentNode
@@ -146,8 +170,37 @@ export function postprocessHtml(
 			}
 			parent?.removeChild(link)
 		}
+	}
 
-		// TODO: Copy data-heading to id
+	// Handle image transclusion links
+	const imgs = Array.from(doc.querySelectorAll("img"))
+	for (const img of imgs) {
+		// The alt property contains the filename
+		const alt = img.getAttribute("alt")
+		if (!alt) continue
+		const path = imageNameToPath.get(alt)
+		if (path) {
+			const component = encodeURIComponent(path)
+			img.setAttribute("src", `/api/v1/image/${component}`)
+		} else {
+			img.removeAttribute("src")
+		}
+	}
+
+	// Move data-heading to id
+	for (const h of ["h1", "h2", "h3", "h4", "h5", "h6"]) {
+		const headers = Array.from(doc.querySelectorAll(h))
+		for (const header of headers) {
+			const id = header.getAttribute("data-heading")
+			if (id) header.setAttribute("id", id)
+			header.removeAttribute("data-heading")
+		}
+	}
+
+	// Remove copy code buttons
+	const buttons = Array.from(doc.querySelectorAll("button.copy-code-button"))
+	for (const btn of buttons) {
+		btn.remove()
 	}
 
 	return doc.body.innerHTML

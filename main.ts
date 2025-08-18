@@ -2,7 +2,6 @@ import { Notice, Plugin, TFile } from "obsidian"
 import {
 	massAddPublish,
 	massSetPublishState,
-	md2html,
 	pingDeployHook,
 	syncIndividualNote,
 	syncNotes,
@@ -181,38 +180,6 @@ export default class WikiGeneratorPlugin extends Plugin {
 			name: "Update wiki settings",
 			callback: async () =>
 				await updateWikiSettings(this.app.vault, settings),
-		})
-
-		this.addCommand({
-			id: "md2html",
-			name: "Render markdown",
-			editorCallback: async (editor, view) => {
-				if (!view.file) {
-					new Notice("No file is currently open.")
-					return
-				}
-
-				try {
-					// Get the current markdown content from the editor
-					const markdownContent = editor.getValue()
-
-					// Convert markdown to HTML using our md2html function
-					const htmlContent = await md2html(markdownContent, this.app)
-
-					// Print the HTML to the console
-					console.log("=== Rendered HTML ===")
-					console.log(htmlContent)
-					console.log("=====================")
-
-					// Show a notice to the user
-					new Notice(
-						"Markdown rendered to HTML. Check the console (Ctrl+Shift+I) to see the output."
-					)
-				} catch (error) {
-					console.error("Error rendering markdown to HTML:", error)
-					new Notice(`Error: ${error}`)
-				}
-			},
 		})
 
 		this.addSettingTab(new WikiGeneratorSettingTab(this.app, this))

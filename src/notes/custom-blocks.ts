@@ -1,7 +1,7 @@
 import { App, Notice } from "obsidian"
 import { partition } from "src/utils"
 import { Detail, SidebarImage } from "../database/types"
-import { md2html } from "src/commands"
+import { mdToHtml } from "./text-transformations"
 
 abstract class Block {
 	static blockName: string
@@ -67,7 +67,11 @@ class DetailsBlock extends Block {
 	 */
 	static async extract(
 		md: string,
-		args: { app: App }
+		args: {
+			app: App
+			titleToSlug: Map<string, string>
+			imageNameToPath: Map<string, string>
+		}
 	): Promise<{ md: string; details: Detail[] }> {
 		// Convert only the first details block and leave all others untouched
 		// so we remove the global flag. TODO: Maybe merge them all instead?
@@ -101,7 +105,14 @@ class DetailsBlock extends Block {
 				// Key-only details are valid
 				// A single dash is used as an <hr> in the frontend
 				const key =
-					split[0] === "-" ? "" : await md2html(split[0], args.app)
+					split[0] === "-"
+						? ""
+						: await mdToHtml(
+								split[0],
+								args.app,
+								args.titleToSlug,
+								args.imageNameToPath
+						  )
 				details.push({
 					order: index + 1,
 					key: key.toString(),
@@ -110,9 +121,19 @@ class DetailsBlock extends Block {
 			} else {
 				// Both key and value. Make sure to handle excess splits due to additional
 				// colons in the value, which are allowed
-				const key = await md2html(split[0], args.app)
+				const key = await mdToHtml(
+					split[0],
+					args.app,
+					args.titleToSlug,
+					args.imageNameToPath
+				)
 				const preValue = split.splice(1).reduce((a, b) => a + ": " + b)
-				const value = await md2html(preValue, args.app)
+				const value = await mdToHtml(
+					preValue,
+					args.app,
+					args.titleToSlug,
+					args.imageNameToPath
+				)
 				details.push({
 					order: index + 1,
 					key: key.toString(),
@@ -141,6 +162,7 @@ class ImageBlock extends Block {
 		args: {
 			app: App
 			imageNameToPath: Map<string, string>
+			titleToSlug: Map<string, string>
 		}
 	) {
 		const regex = this.getRegex()
@@ -167,7 +189,8 @@ class ImageBlock extends Block {
 			const { image_name, image_path, caption } = await this.processBlock(
 				contents,
 				args.app,
-				args.imageNameToPath
+				args.imageNameToPath,
+				args.titleToSlug
 			)
 
 			images.push({
@@ -194,6 +217,7 @@ class ImageBlock extends Block {
 		args: {
 			app: App
 			imageNameToPath: Map<string, string>
+			titleToSlug: Map<string, string>
 		}
 	) {
 		const imageRegex = this.getRegex()
@@ -226,7 +250,8 @@ class ImageBlock extends Block {
 			const { image_path, caption } = await this.processBlock(
 				contents,
 				args.app,
-				args.imageNameToPath
+				args.imageNameToPath,
+				args.titleToSlug
 			)
 
 			// For inline images, we just add the caption or empty string
@@ -239,7 +264,8 @@ class ImageBlock extends Block {
 	private static async processBlock(
 		contents: string,
 		app: App,
-		imageNameToPath: Map<string, string>
+		imageNameToPath: Map<string, string>,
+		titleToSlug: Map<string, string>
 	) {
 		const lines = contents.split("\n").filter((line) => line !== "")
 		if (lines.length === 0) {
@@ -263,7 +289,7 @@ class ImageBlock extends Block {
 		let caption: string | null
 		if (lines.length > 1) {
 			caption = lines.splice(1).join("\n")
-			caption = await md2html(caption, app)
+			caption = await mdToHtml(caption, app, titleToSlug, imageNameToPath)
 		} else {
 			caption = null
 		}
@@ -333,6 +359,7 @@ export async function handleCustomSyntax(
 	md: string,
 	filename: string,
 	app: App,
+	titleToSlug: Map<string, string>,
 	imageNameToPath: Map<string, string>
 ) {
 	// Remove :::hidden::: blocks and Markdown comments
@@ -342,7 +369,11 @@ export async function handleCustomSyntax(
 	// Parse and remove the first :::details::: block
 	let details: Detail[] = []
 	try {
-		const extractedDetails = await DetailsBlock.extract(md, { app })
+		const extractedDetails = await DetailsBlock.extract(md, {
+			app,
+			titleToSlug,
+			imageNameToPath,
+		})
 		md = extractedDetails.md
 		details = extractedDetails.details
 	} catch (error) {
@@ -356,6 +387,7 @@ export async function handleCustomSyntax(
 		const extractedImages = await ImageBlock.extract(md, {
 			app,
 			imageNameToPath,
+			titleToSlug,
 		})
 		md = extractedImages.md
 		images = extractedImages.images
