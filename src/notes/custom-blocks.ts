@@ -62,7 +62,6 @@ class DetailsBlock extends Block {
 	/**
 	 * Parse the contents of a :::details::: block.
 	 * @param md The markdown to process
-	 * @param app The Obsidian app instance
 	 * @returns An array of Detail objects, one for each line, and the modified markdown
 	 */
 	static async extract(
@@ -79,33 +78,25 @@ class DetailsBlock extends Block {
 		const match = md.match(regex)
 		if (!match) return { md, details: [] }
 
-		// Delete the block from the page before errors happen
+		// Delete the block from the page
 		md = md.replace(match[0], "")
 
 		const contents = match[2]
 		const details: Detail[] = []
 		const detailLines = contents.split("\n").filter((line) => line !== "")
 
-		for (const i in detailLines) {
-			const index = parseInt(i)
-			const line = detailLines[i]
-
-			// Ignore empty lines
-			if (line === "") continue
-
+		for (const [index, line] of detailLines.entries()) {
 			// Split lines into key-value pairs
 			const split = line.split(/:\s*/)
 			if (split.length === 0) {
-				// Ignore broken formatting and emit a warning
 				// Should never happen as we skip empty lines
 				throw new Error(`Improperly formatted :::details:::`)
 			}
 
 			if (split.length === 1) {
 				// Key-only details are valid
-				// A single dash is used as an <hr> in the frontend
 				const key =
-					split[0] === "-"
+					split[0] === "-" // A single dash is used as an <hr> in the frontend
 						? ""
 						: await mdToHtml(
 								split[0],
@@ -115,7 +106,7 @@ class DetailsBlock extends Block {
 						  )
 				details.push({
 					order: index + 1,
-					key: key.toString(),
+					key,
 					value: null,
 				})
 			} else {
@@ -136,8 +127,8 @@ class DetailsBlock extends Block {
 				)
 				details.push({
 					order: index + 1,
-					key: key.toString(),
-					value: value.toString(),
+					key,
+					value,
 				})
 			}
 		}
@@ -207,58 +198,21 @@ class ImageBlock extends Block {
 	/**
 	 * Parse the contents of an :::image::: block, excluding ones with the "sidebar" argument.
 	 * Sidebar images are handled by `extract`.
-	 * @param md The markdown to process
-	 * @param app The Obsidian app instance
-	 * @param imageNameToPath A Map linking image filenames into their path in the database
-	 * @returns The modified markdown
 	 */
-	static async applyOnText(
-		md: string,
-		args: {
-			app: App
-			imageNameToPath: Map<string, string>
-			titleToSlug: Map<string, string>
-		}
-	) {
-		const imageRegex = this.getRegex()
-		const splits = partition(md, imageRegex)
+	static async replace(md: string) {
+		return md.replace(this.getRegex(), (match, args, content) => {
+			// Leave sidebar content alone
+			if (args?.includes("sidebar")) return match
 
-		if (splits.length === 1) {
-			return md
-		}
-
-		let result = ""
-		for (const [idx, split] of splits.entries()) {
-			if (!split.matched) {
-				result += split.text
-				continue
-			}
-
-			const match = imageRegex.exec(split.text)
-			if (!match) {
-				result += split.text
-				continue
-			}
-
-			const blockArgs = this.parseArgs(match.at(1) ?? "")
-			if (blockArgs.includes("sidebar")) {
-				result += split.text
-				continue
-			}
-
-			const contents = match[2]
-			const { image_path, caption } = await this.processBlock(
-				contents,
-				args.app,
-				args.imageNameToPath,
-				args.titleToSlug
-			)
-
-			// For inline images, we just add the caption or empty string
-			result += caption ?? ""
-		}
-
-		return result
+			// Let the Obsidian renderer handle the ![[wikilink]] -> <img> conversion
+			// but mark the caption manually
+			// TODO: Figure out a way to put both in a <figure> for more semantic HTML
+			const lines = content.split("\n")
+			const wikilink = lines[0]
+			const caption = lines.slice(1).join("\n")
+			const captionTag = `<p class="image-caption">${caption}</p>`
+			return "\n\n" + wikilink + captionTag
+		})
 	}
 
 	private static async processBlock(
@@ -302,45 +256,18 @@ class SecretBlock extends Block {
 	static blockName = "secret"
 
 	/**
-	 * Process secret blocks by wrapping content in special markers
-	 * @param md The markdown to process
-	 * @returns The processed markdown
+	 * Process secret blocks by wrapping content in special markers.
 	 */
-	static async applyOnText(md: string) {
-		const secretRegex = this.getRegex()
-		const splits = partition(md, secretRegex)
-
-		if (splits.length === 1) {
-			return md
-		}
-
-		let result = ""
-		for (const [idx, split] of splits.entries()) {
-			if (!split.matched) {
-				result += split.text
-				continue
-			}
-
-			const match = secretRegex.exec(split.text)
-			if (!match) {
-				result += split.text
-				continue
-			}
-
-			// Get the users mentioned in the block
-			const users = match[1]
+	static async replace(md: string) {
+		return md.replace(this.getRegex(), (match, args, content) => {
+			if (!args) return match
+			const users = (args as string)
 				.split(",")
 				.map((s) => s.trim())
 				.join(";")
 
-			// Get the content of the block
-			const content = match[2]
-
-			// Wrap the content with data attributes for user restrictions
-			result += `<div class="restricted" data-allowed-users="${users}">${content}</div>`
-		}
-
-		return result
+			return `\n\n<div class="secret-block" data-allowed-users="${users}">${content}</div>\n\n`
+		})
 	}
 }
 
@@ -362,11 +289,22 @@ export async function handleCustomSyntax(
 	titleToSlug: Map<string, string>,
 	imageNameToPath: Map<string, string>
 ) {
+	// Anything in codeblocks should be ignored, so remove them and put them back later
+	const codeRegex = /^```.*\n[^]*?\n```/gm
+	const codeblocks = Array.from(md.matchAll(codeRegex)).reverse()
+	md = md.replace(codeRegex, "<__codeblock__>")
+
 	// Remove :::hidden::: blocks and Markdown comments
 	md = md.replace(/%%.*?%%/gs, "")
 	md = HiddenBlock.delete(md)
 
-	// Parse and remove the first :::details::: block
+	// Process :::secret::: blocks
+	md = await SecretBlock.replace(md)
+
+	// Process inline :::image::: blocks
+	md = await ImageBlock.replace(md)
+
+	// Extract the first :::details::: block
 	let details: Detail[] = []
 	try {
 		const extractedDetails = await DetailsBlock.extract(md, {
@@ -381,7 +319,10 @@ export async function handleCustomSyntax(
 		console.warn(`Error parsing :::details::: in ${filename}: ${error}`)
 	}
 
-	// Parse and remove :::image::: blocks
+	// Delete all the other ones
+	md = DetailsBlock.delete(md)
+
+	// Extract sidebar :::image::: blocks
 	let images: SidebarImage[] = []
 	try {
 		const extractedImages = await ImageBlock.extract(md, {
@@ -399,16 +340,10 @@ export async function handleCustomSyntax(
 	// remarkMath needs newlines to consider a math block as display
 	// The quadruple $ is because $ is the backreference character in
 	// regexes and is escaped as $$, so $$$$ -> $$
-	md = md.replace(/^\$\$(.*?)\$\$$/gms, "$$$$\n$1\n$$$$")
+	// md = md.replace(/^\$\$(.*?)\$\$$/gms, "$$$$\n$1\n$$$$")
 
-	// Process secret blocks
-	// md = await SecretBlock.applyOnText(md)
-
-	// Process image blocks (inline)
-	// md = await ImageBlock.applyOnText(md, {
-	// 	app,
-	// 	imageNameToPath,
-	// })
+	// Put the codeblocks back
+	md = md.replace(/^<__codeblock__>/gm, () => codeblocks.pop()?.[0] ?? "")
 
 	return { md, details, sidebarImages: images }
 }

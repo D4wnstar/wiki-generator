@@ -13,7 +13,7 @@ export async function createPage(
 	const content = await app.vault.cachedRead(file)
 	const frontmatter = await extractFrontmatter(content)
 
-	// Anything that's not public should me marked as such to keep thing synced
+	// Skip anything that's not published
 	if (!frontmatter["wiki-publish"]) return null
 
 	// Parse and replace custom :::blocks::: and other non-standard syntax
@@ -61,6 +61,7 @@ export async function createPage(
 	}
 }
 
+// TODO: Use the builtin frontmatter API
 /**
  * Extract frontmatter from markdown content
  * @param content The markdown content
@@ -131,6 +132,9 @@ export function postprocessHtml(
 	const parser = new DOMParser()
 	const doc = parser.parseFromString(html, "text/html")
 
+	// Remove frontmatter
+	doc.querySelectorAll("pre.frontmatter").forEach((pre) => pre.remove())
+
 	// Change link URLs to be actual website URLs
 	const links = Array.from(doc.querySelectorAll("a")).reverse()
 	for (const link of links) {
@@ -140,7 +144,7 @@ export function postprocessHtml(
 		if (!href) continue
 		if (link.className.includes("external-link")) continue
 
-		// Remove target="_blank" and data-href
+		// Remove target="_blank" from internal links
 		link.removeAttribute("target")
 
 		// Leave internal links alone
@@ -152,7 +156,7 @@ export function postprocessHtml(
 		const pageKey = hashIndex > -1 ? href.substring(0, hashIndex) : href
 
 		if (titleToPath.has(pageKey)) {
-			const slug = titleToPath.get(pageKey)
+			const slug = titleToPath.get(pageKey) as string
 			const sub =
 				hashIndex > -1
 					? `/${slug}${href.substring(hashIndex)}`
@@ -172,7 +176,7 @@ export function postprocessHtml(
 		}
 	}
 
-	// Handle image transclusion links
+	// Handle <img> sources
 	const imgs = Array.from(doc.querySelectorAll("img"))
 	for (const img of imgs) {
 		// The alt property contains the filename
@@ -187,7 +191,7 @@ export function postprocessHtml(
 		}
 	}
 
-	// Move data-heading to id
+	// Move data-heading to id on <hN>
 	for (const h of ["h1", "h2", "h3", "h4", "h5", "h6"]) {
 		const headers = Array.from(doc.querySelectorAll(h))
 		for (const header of headers) {
@@ -198,9 +202,54 @@ export function postprocessHtml(
 	}
 
 	// Remove copy code buttons
-	const buttons = Array.from(doc.querySelectorAll("button.copy-code-button"))
-	for (const btn of buttons) {
+	doc.querySelectorAll("button.copy-code-button").forEach((btn) =>
 		btn.remove()
+	)
+
+	// Default code blocks to markdown if language is unspecified (prevents unstyled code blocks)
+	const presWithCode = Array.from(doc.querySelectorAll("pre:has(> code)"))
+	for (const pre of presWithCode) {
+		if (pre.classList.length === 0) {
+			pre.className = "language-markdown"
+		}
+		const code = pre.querySelector("code")
+		if (code && code.classList.length === 0) {
+			code.className = "language-markdown"
+		}
+	}
+
+	// Text transclusions: Remove empty tags
+	doc.querySelectorAll("div.markdown-embed-title").forEach((div) =>
+		div.remove()
+	)
+	doc.querySelectorAll("p:has(> span.markdown-embed)").forEach((p) =>
+		p.remove()
+	)
+
+	// Text transclusions: Change classes
+	doc.querySelectorAll("div.markdown-preview-view").forEach(
+		(div) => (div.className = "note-transclusion")
+	)
+
+	// Disable checklist checkboxes
+	doc.querySelectorAll("input.task-list-item-checkbox").forEach((input) =>
+		input.setAttribute("disabled", "")
+	)
+
+	// Unwrap images nested in p > span > img to be top-level img elements
+	const nestedImages = Array.from(
+		doc.querySelectorAll("p > span.image-embed > img")
+	)
+	for (const img of nestedImages) {
+		const span = img.parentElement
+		const p = span?.parentElement
+
+		// If we have all the elements, move the img to be a sibling of the p
+		if (p && span) {
+			p.parentNode?.insertBefore(img, p)
+			span.remove()
+			p.remove()
+		}
 	}
 
 	return doc.body.innerHTML
