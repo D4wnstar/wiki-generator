@@ -185,13 +185,44 @@ export function postprocessHtml(
 		}
 	}
 
-	// Handle <img> sources
+	// Unwrap images nested in p > span > img to be top-level img elements
+	const nestedImgs = Array.from(
+		doc.querySelectorAll("p > span.image-embed > img")
+	)
+	for (const img of nestedImgs) {
+		const span = img.parentElement
+		const p = span?.parentElement
+
+		// If we have all the elements, move the img to be a sibling of the p
+		if (p && span) {
+			p.parentNode?.insertBefore(img, p)
+			span.remove()
+			p.remove()
+		}
+	}
+
+	// Handle <img> sources and captions
 	const imgs = Array.from(doc.querySelectorAll("img"))
 	for (const img of imgs) {
 		// The alt property contains the filename
-		const alt = img.getAttribute("alt")
-		if (!alt) continue
-		const path = imageNameToPath.get(alt)
+		const filename = img.getAttribute("alt")
+		if (!filename) continue
+
+		// Inline :::image::: blocks add their caption as the next element over
+		// Frontend uses alt to initialize caption, so we move it to there
+		const caption = img.nextElementSibling
+		if (
+			caption &&
+			caption.tagName === "P" &&
+			caption.classList.contains("image-caption")
+		) {
+			img.setAttribute("alt", caption.textContent ?? "")
+			caption.remove()
+		} else {
+			img.removeAttribute("alt")
+		}
+
+		const path = imageNameToPath.get(filename)
 		if (path) {
 			const component = encodeURIComponent(path)
 			img.setAttribute("src", `/api/v1/image/${component}`)
@@ -259,22 +290,6 @@ export function postprocessHtml(
 	doc.querySelectorAll("input.task-list-item-checkbox").forEach((input) =>
 		input.setAttribute("disabled", "")
 	)
-
-	// Unwrap images nested in p > span > img to be top-level img elements
-	const nestedImages = Array.from(
-		doc.querySelectorAll("p > span.image-embed > img")
-	)
-	for (const img of nestedImages) {
-		const span = img.parentElement
-		const p = span?.parentElement
-
-		// If we have all the elements, move the img to be a sibling of the p
-		if (p && span) {
-			p.parentNode?.insertBefore(img, p)
-			span.remove()
-			p.remove()
-		}
-	}
 
 	// Callout icons are not available in the rendered HTML (probably added by JS after render)
 	// so we do the same here (icons are below)

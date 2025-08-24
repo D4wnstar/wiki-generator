@@ -1,7 +1,7 @@
 import { App, Notice } from "obsidian"
-import { partition } from "src/utils"
 import { Detail, SidebarImage } from "../database/types"
 import { mdToHtml } from "./text-transformations"
+import { replaceAllAsync } from "src/utils"
 
 abstract class Block {
 	static blockName: string
@@ -72,14 +72,12 @@ class DetailsBlock extends Block {
 			imageNameToPath: Map<string, string>
 		}
 	): Promise<{ md: string; details: Detail[] }> {
-		// Convert only the first details block and leave all others untouched
-		// so we remove the global flag. TODO: Maybe merge them all instead?
-		const regex = new RegExp(this.getRegex(), "ms")
-		const match = md.match(regex)
+		// Grab the first details block only by removing the global flag
+		const match = md.match(new RegExp(this.getRegex(), "ms"))
 		if (!match) return { md, details: [] }
 
-		// Delete the block from the page
-		md = md.replace(match[0], "")
+		// Delete all details blocks. Any block after the first is ignored
+		md = this.delete(md)
 
 		const contents = match[2]
 		const details: Detail[] = []
@@ -206,7 +204,6 @@ class ImageBlock extends Block {
 
 			// Let the Obsidian renderer handle the ![[wikilink]] -> <img> conversion
 			// but mark the caption manually
-			// TODO: Figure out a way to put both in a <figure> for more semantic HTML
 			const lines = content.split("\n")
 			const wikilink = lines[0]
 			const caption = lines.slice(1).join("\n")
@@ -256,24 +253,41 @@ class SecretBlock extends Block {
 	static blockName = "secret"
 
 	/**
-	 * Process secret blocks by wrapping content in special markers.
+	 * Process secret blocks by wrapping content in div with the `data-allowed-users`
+	 * attribute, which is a semi-color separated list of usernames.
 	 */
-	static async replace(md: string) {
-		return md.replace(this.getRegex(), (match, args, content) => {
-			if (!args) return match
-			const users = (args as string)
-				.split(",")
-				.map((s) => s.trim())
-				.join(";")
+	static async replace(
+		md: string,
+		app: App,
+		imageNameToPath: Map<string, string>,
+		titleToSlug: Map<string, string>
+	) {
+		return await replaceAllAsync(
+			md,
+			this.getRegex(),
+			async (match, args, content) => {
+				if (!args) return match
+				const users = (args as string)
+					.split(",")
+					.map((s) => s.trim())
+					.join(";")
 
-			return `\n\n<div class="secret-block" data-allowed-users="${users}">${content}</div>\n\n`
-		})
+				const html = await mdToHtml(
+					content,
+					app,
+					titleToSlug,
+					imageNameToPath
+				)
+
+				return `\n\n<section class="secret-block" data-allowed-users="${users}"><header class="secret-block-header">Secret</header><div class="secret-block-content">${html}</div></section>\n\n`
+			}
+		)
 	}
 }
 
 /**
- * Parse Markdown text for custom syntax that's not handled by remark already,
- * mostly custom :::blocks::: and Obsidian embeds.
+ * Parse Markdown text for custom syntax that's not handled by Obsidian already,
+ * such as custom :::blocks::: and separate handling of math and Mermaid graphs.
  *
  * @param md The markdown text to transform
  * @param filename The name of the file that's being processed
@@ -299,7 +313,7 @@ export async function handleCustomSyntax(
 	md = HiddenBlock.delete(md)
 
 	// Process :::secret::: blocks
-	md = await SecretBlock.replace(md)
+	md = await SecretBlock.replace(md, app, titleToSlug, imageNameToPath)
 
 	// Process inline :::image::: blocks
 	md = await ImageBlock.replace(md)
@@ -318,9 +332,6 @@ export async function handleCustomSyntax(
 		new Notice(`Error parsing :::details::: in ${filename}: ${error}`, 0)
 		console.warn(`Error parsing :::details::: in ${filename}: ${error}`)
 	}
-
-	// Delete all the other ones
-	md = DetailsBlock.delete(md)
 
 	// Extract sidebar :::image::: blocks
 	let images: SidebarImage[] = []
