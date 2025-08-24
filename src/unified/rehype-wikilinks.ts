@@ -7,7 +7,7 @@ import { partition } from "src/utils"
 import { visit } from "unist-util-visit"
 
 // Capture groups:
-//  0. ! (Transclusion or not)
+//  0. ! (embed or not)
 //  1. Linked page title
 //  2. Internal header
 //  3. Alias
@@ -109,20 +109,20 @@ function findWikilinkProperties(
 		}
 	}
 
-	const isTransclusion = rmatch[1] === "!"
+	const isembed = rmatch[1] === "!"
 	const titleOrPath = rmatch[2]
 	const header = rmatch[3]
 	const alias = rmatch[4]
 
 	const hasFileExtension = titleOrPath.match(/\..*$/)
-	if (!isTransclusion) {
+	if (!isembed) {
 		if (!hasFileExtension) {
 			return handleTextReference(titleOrPath, header, alias, titleToPath)
 		} else {
 			return handleImageReference(titleOrPath, imageNameToPath)
 		}
 	} else {
-		// Transclusions are handled separately in the page chunking process
+		// embeds are handled separately in the page chunking process
 		return { linkText: titleOrPath, href: "", class: "", remove: true }
 	}
 }

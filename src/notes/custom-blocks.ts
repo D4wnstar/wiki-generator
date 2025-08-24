@@ -273,7 +273,7 @@ class SecretBlock extends Block {
 
 /**
  * Parse Markdown text for custom syntax that's not handled by remark already,
- * mostly custom :::blocks::: and Obsidian transclusions.
+ * mostly custom :::blocks::: and Obsidian embeds.
  *
  * @param md The markdown text to transform
  * @param filename The name of the file that's being processed
@@ -292,7 +292,7 @@ export async function handleCustomSyntax(
 	// Anything in codeblocks should be ignored, so remove them and put them back later
 	const codeRegex = /^```.*\n[^]*?\n```/gm
 	const codeblocks = Array.from(md.matchAll(codeRegex)).reverse()
-	md = md.replace(codeRegex, "<__codeblock__>")
+	md = md.replace(codeRegex, "|codeblock|")
 
 	// Remove :::hidden::: blocks and Markdown comments
 	md = md.replace(/%%.*?%%/gs, "")
@@ -337,13 +337,36 @@ export async function handleCustomSyntax(
 		console.warn(`Error parsing :::image::: in ${filename}: ${error}`)
 	}
 
-	// remarkMath needs newlines to consider a math block as display
-	// The quadruple $ is because $ is the backreference character in
-	// regexes and is escaped as $$, so $$$$ -> $$
-	// md = md.replace(/^\$\$(.*?)\$\$$/gms, "$$$$\n$1\n$$$$")
+	// Bypass MathJax entirely and use KaTeX instead
+	const mathBlock = Array.from(md.matchAll(/\$\$(.*?)\$\$/gs))
+		.map((block) =>
+			block[1]
+				.replace(/^>\s+/gm, "")
+				.replace("\n", "")
+				.replace(
+					/\\(begin|end)\{(equation|gather|align|alignat)\}/g,
+					"\\$1{$2*}"
+				)
+		)
+		.reverse()
+	md = md
+		.replace(/\$\$.*?\$\$/gs, "|math|")
+		.replace(/^\|math\|/gm, "\n|math|\n")
+	const mathInline = Array.from(md.matchAll(/\$(.*?)\$/g))
+		.map((code) => code[1])
+		.reverse()
+	md = md.replace(/\$.*?\$/g, "|math-inline|")
 
 	// Put the codeblocks back
-	md = md.replace(/^<__codeblock__>/gm, () => codeblocks.pop()?.[0] ?? "")
+	md = md.replace(/^\|codeblock\|/gm, () => codeblocks.pop()?.[0] ?? "")
 
-	return { md, details, sidebarImages: images }
+	// Manually replace Mermaid codeblocks before PrismJS messes up the formatting
+	md = md.replace(/```mermaid\n(.*?)\n```/gs, '<pre class="mermaid">$1</pre>')
+
+	return {
+		md,
+		details,
+		sidebarImages: images,
+		math: { block: mathBlock, inline: mathInline },
+	}
 }

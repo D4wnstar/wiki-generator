@@ -456,10 +456,10 @@ function getImageReferencesInString(text: string): Set<string> {
 			refs.add(filename)
 		} else if (extension === "excalidraw") {
 			refs.add(filename + ".svg")
-		} else if (!extension && match[1] /* is transclusion */) {
+		} else if (!extension && match[1] /* is embed */) {
 			// Since Excalidraw files are (very annoyingly) just markdown, it's
-			// pretty much impossible to reliably distinguish Excalidraw transclusions from
-			// generic note transclusions. As such, we optimistically assume any transclusion
+			// pretty much impossible to reliably distinguish Excalidraw embeds from
+			// generic note embeds. As such, we optimistically assume any embed
 			// without an extension is actually an Excalidraw file and add it to the refs.
 			// Worst case scenario we add a bit too many images.
 			refs.add(filename.replace(/\.md$/, "") + ".svg")

@@ -12,6 +12,7 @@
 	"author": "",
 	"license": "MIT",
 	"devDependencies": {
+		"@types/katex": "^0.16.7",
 		"@types/node": "^16.11.6",
 		"@types/sql.js": "^1.4.9",
 		"@typescript-eslint/eslint-plugin": "5.29.0",
@@ -26,6 +27,7 @@
 	"dependencies": {
 		"@libsql/client": "^0.14.0",
 		"github-slugger": "^2.0.0",
+		"katex": "^0.16.22",
 		"octokit": "^3.1.2",
 		"sql.js": "^1.12.0"
 	}
