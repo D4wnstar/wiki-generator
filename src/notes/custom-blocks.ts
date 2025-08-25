@@ -111,7 +111,8 @@ class DetailsBlock extends Block {
 				key,
 				args.app,
 				args.titleToSlug,
-				args.imageNameToPath
+				args.imageNameToPath,
+				{ unwrap: true }
 			)
 
 			let value
@@ -122,7 +123,8 @@ class DetailsBlock extends Block {
 					values.reduce((a, b) => a + ": " + b).replace(/;/g, "<br>"),
 					args.app,
 					args.titleToSlug,
-					args.imageNameToPath
+					args.imageNameToPath,
+					{ unwrap: true }
 				)
 			} else {
 				value = null
@@ -237,8 +239,13 @@ class ImageBlock extends Block {
 		// Then the caption, if present
 		let caption: string | null
 		if (lines.length > 1) {
-			caption = lines.splice(1).join("\n")
-			caption = await mdToHtml(caption, app, titleToSlug, imageNameToPath)
+			caption = await mdToHtml(
+				lines.splice(1).join("\n"),
+				app,
+				titleToSlug,
+				imageNameToPath,
+				{ unwrap: true }
+			)
 		} else {
 			caption = null
 		}

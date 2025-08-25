@@ -95,14 +95,20 @@ export async function mdToHtml(
 	md: string,
 	app: App,
 	titleToPath: Map<string, string>,
-	imageNameToPath: Map<string, string>
+	imageNameToPath: Map<string, string>,
+	options?: { unwrap?: boolean }
 ) {
 	// Create a temporary element to render the markdown to
 	const tempEl = document.createElement("div")
 
 	try {
 		await MarkdownRenderer.render(app, md, tempEl, "", new Component())
-		return postprocessHtml(tempEl.innerHTML, titleToPath, imageNameToPath)
+		return postprocessHtml(
+			tempEl.innerHTML,
+			titleToPath,
+			imageNameToPath,
+			options?.unwrap
+		)
 	} finally {
 		tempEl.remove()
 	}
@@ -116,10 +122,18 @@ export async function mdToHtml(
 export function postprocessHtml(
 	html: string,
 	titleToPath: Map<string, string>,
-	imageNameToPath: Map<string, string>
+	imageNameToPath: Map<string, string>,
+	unwrap?: boolean
 ) {
 	const parser = new DOMParser()
 	const doc = parser.parseFromString(html, "text/html")
+
+	// Unwrap the topmost element if requested
+	if (unwrap && doc.body.firstElementChild) {
+		doc.body.replaceChildren(
+			...Array.from(doc.body.firstElementChild.childNodes)
+		)
+	}
 
 	// Remove frontmatter
 	doc.querySelectorAll("pre.frontmatter").forEach((pre) => pre.remove())
@@ -133,8 +147,9 @@ export function postprocessHtml(
 		if (!href) continue
 		if (link.className.includes("external-link")) continue
 
-		// Remove target="_blank" from internal links
+		// Remove target="_blank" and classes from internal links
 		link.removeAttribute("target")
+		link.removeAttribute("class")
 
 		// Leave internal links alone
 		if (href.startsWith("#")) continue
