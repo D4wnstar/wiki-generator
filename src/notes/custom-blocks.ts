@@ -72,63 +72,63 @@ class DetailsBlock extends Block {
 			imageNameToPath: Map<string, string>
 		}
 	): Promise<{ md: string; details: Detail[] }> {
-		// Grab the first details block only by removing the global flag
+		// Grab only the first details block by removing the global flag,
+		// then delete all others
 		const match = md.match(new RegExp(this.getRegex(), "ms"))
-		if (!match) return { md, details: [] }
-
-		// Delete all details blocks. Any block after the first is ignored
 		md = this.delete(md)
+		if (!match) return { md, details: [] }
 
 		const contents = match[2]
 		const details: Detail[] = []
-		const detailLines = contents.split("\n").filter((line) => line !== "")
+		const lines = contents
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => line !== "")
 
-		for (const [index, line] of detailLines.entries()) {
-			// Split lines into key-value pairs
-			const split = line.split(/:\s*/)
-			if (split.length === 0) {
-				// Should never happen as we skip empty lines
-				throw new Error(`Improperly formatted :::details:::`)
-			}
-
-			if (split.length === 1) {
-				// Key-only details are valid
-				const key =
-					split[0] === "-" // A single dash is used as an <hr> in the frontend
-						? ""
-						: await mdToHtml(
-								split[0],
-								args.app,
-								args.titleToSlug,
-								args.imageNameToPath
-						  )
+		// Four possibilities:
+		// Key and value: normal display
+		// Key with no value: key as a section header
+		// No key with value: should not happen, ignore
+		// No key and no value: horizontal line (<hr>)
+		for (const [index, line] of lines.entries()) {
+			const order = index + 1
+			// A single hyphen means no key and no value, i.e. an <hr>
+			if (line === "-") {
 				details.push({
-					order: index + 1,
-					key,
+					order,
+					key: null,
 					value: null,
 				})
-			} else {
-				// Both key and value. Make sure to handle excess splits due to additional
-				// colons in the value, which are allowed
-				const key = await mdToHtml(
-					split[0],
-					args.app,
-					args.titleToSlug,
-					args.imageNameToPath
-				)
-				const preValue = split.splice(1).reduce((a, b) => a + ": " + b)
-				const value = await mdToHtml(
-					preValue,
-					args.app,
-					args.titleToSlug,
-					args.imageNameToPath
-				)
-				details.push({
-					order: index + 1,
-					key,
-					value,
-				})
+				continue
 			}
+
+			// Split by colons. Any colon after the first is kept in the value
+			const split = line.split(/:\s*/)
+
+			let key = split.at(0)
+			if (!key) continue
+			key = await mdToHtml(
+				key,
+				args.app,
+				args.titleToSlug,
+				args.imageNameToPath
+			)
+
+			let value
+			const values = split.slice(1)
+			if (values.length > 0) {
+				value = await mdToHtml(
+					// Merge colons and turn semicolons into line breaks
+					values.reduce((a, b) => a + ": " + b).replace(/;/g, "<br>"),
+					args.app,
+					args.titleToSlug,
+					args.imageNameToPath
+				)
+			} else {
+				value = null
+			}
+
+			details.push({ order, key, value })
 		}
 
 		return { md, details }
@@ -162,10 +162,8 @@ class ImageBlock extends Block {
 		)
 		if (matches.length === 0) return { md, images: [] }
 
-		// An :::image::: block should be made up of 1 or 2 lines
-		// The first is mandatory and is the wikilink to the image
-		// The second is optional and is the caption
-		// Any other line will be considered a part of the caption
+		// An :::image::: block should be made of an image embed optionally
+		// followed by a caption
 		const images: SidebarImage[] = []
 		for (const i in matches) {
 			const index = parseInt(i)
@@ -208,7 +206,7 @@ class ImageBlock extends Block {
 			const wikilink = lines[0]
 			const caption = lines.slice(1).join("\n")
 			const captionTag = `<p class="image-caption">${caption}</p>`
-			return "\n\n" + wikilink + captionTag
+			return `\n\n${wikilink}\n\n${captionTag}\n\n`
 		})
 	}
 

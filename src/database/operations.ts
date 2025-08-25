@@ -45,9 +45,9 @@ const createDetails = `
 CREATE TABLE IF NOT EXISTS details (
 	note_path TEXT NOT NULL REFERENCES notes (path) ON DELETE CASCADE,
 	"order" INTEGER NOT NULL,
-	detail_name TEXT NOT NULL,
-	detail_content TEXT,
-	PRIMARY KEY (note_path, detail_name)
+	"key" TEXT,
+	value TEXT,
+	PRIMARY KEY (note_path, "order")
 );`
 
 const createSidebarImages = `
@@ -116,8 +116,8 @@ const insertDetails = `\
 INSERT INTO details (
 	note_path,
 	"order",
-	detail_name,
-	detail_content
+	"key",
+	value
 ) VALUES (?, ?, ?, ?);`
 
 const insertSidebarImages = `\

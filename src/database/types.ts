@@ -25,7 +25,7 @@ export type Frontmatter = {
 
 export type Detail = {
 	order: number
-	key: string
+	key: string | null
 	value: string | null
 }
 

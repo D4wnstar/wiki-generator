@@ -4,6 +4,12 @@ import { handleCustomSyntax } from "./custom-blocks"
 import { Frontmatter, Note, Page } from "../database/types"
 import katex from "katex"
 
+/**
+ * Create a `Page` object from the given Markdown file, which means processing
+ * all Markdown in the file and providing the converted HTML for the website alongside
+ * any additional components.
+ * @returns A `Page` containing everything about the given file
+ */
 export async function createPage(
 	file: TFile,
 	hash: string,
@@ -12,7 +18,7 @@ export async function createPage(
 	app: App
 ): Promise<Page | null> {
 	const content = await app.vault.cachedRead(file)
-	const frontmatter = await extractFrontmatter(content)
+	const frontmatter = await extractFrontmatter(file, app)
 
 	// Skip anything that's not published
 	if (!frontmatter["wiki-publish"]) return null
@@ -70,52 +76,21 @@ export async function createPage(
 	}
 }
 
-// TODO: Use the builtin frontmatter API
 /**
- * Extract frontmatter from markdown content
- * @param content The markdown content
- * @returns The frontmatter object
+ * Return the file's frontmatter as an object.
  */
-async function extractFrontmatter(content: string): Promise<Frontmatter> {
-	// Simple frontmatter extraction
-	const frontmatterRegex = /^---\n([\s\S]*?)\n---/
-	const match = content.match(frontmatterRegex)
-
-	if (match) {
-		const frontmatterContent = match[1]
-		const frontmatter: Frontmatter = {} as Frontmatter
-
-		// Parse each line
-		const lines = frontmatterContent.split("\n")
-		for (const line of lines) {
-			const [key, ...valueParts] = line.split(":")
-			const value = valueParts.join(":").trim()
-
-			if (key && value) {
-				// Handle boolean values
-				if (value === "true") {
-					frontmatter[key.trim() as keyof Frontmatter] = true as any
-				} else if (value === "false") {
-					frontmatter[key.trim() as keyof Frontmatter] = false as any
-				} else if (value.startsWith("[") && value.endsWith("]")) {
-					// Handle array values
-					const arrayContent = value.substring(1, value.length - 1)
-					frontmatter[key.trim() as keyof Frontmatter] = arrayContent
-						.split(",")
-						.map((item) => item.trim()) as any
-				} else {
-					// Handle string values
-					frontmatter[key.trim() as keyof Frontmatter] = value as any
-				}
-			}
-		}
-
-		return frontmatter
-	}
-
-	return {} as Frontmatter
+async function extractFrontmatter(file: TFile, app: App) {
+	let frontmatter: Frontmatter
+	return app.fileManager
+		.processFrontMatter(file, (matter) => (frontmatter = matter))
+		.then(() => frontmatter)
 }
 
+/**
+ * Convert a Markdown string into HTML using Obsidian's builtin converter,
+ * then postprocess the HTML to fix/modify tags to a more useful form.
+ * @returns The converted HTML
+ */
 export async function mdToHtml(
 	md: string,
 	app: App,
@@ -133,6 +108,11 @@ export async function mdToHtml(
 	}
 }
 
+/**
+ * Process an HTML string to run a bunch of miscellaneous changes and fixes to
+ * Obsidian HTML. This is done to turn the HTML in a more useful form for the frontend.
+ * @returns The processed HTML
+ */
 export function postprocessHtml(
 	html: string,
 	titleToPath: Map<string, string>,
@@ -231,7 +211,7 @@ export function postprocessHtml(
 		}
 	}
 
-	// Support for Excalidraw
+	// Support for Excalidraw (make sure SVGs are being exported)
 	const excImgs = Array.from(
 		doc.querySelectorAll("img.excalidraw-embedded-img")
 	)
@@ -268,8 +248,6 @@ export function postprocessHtml(
 			if (code && code.classList.length === 0) {
 				code.className = "language-markdown"
 			}
-		} else if (pre.className === "language-mermaid") {
-			// pre.className = "mermaid"
 		}
 	}
 
