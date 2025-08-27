@@ -4,7 +4,6 @@ import { WikiGeneratorSettings } from "src/settings"
 export type Note = {
 	title: string
 	route: string
-	alt_title: string | null
 	search_terms: string
 	path: string
 	frontpage: string | number // actually boolean but SQLite is jank

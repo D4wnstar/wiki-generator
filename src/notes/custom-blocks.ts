@@ -46,6 +46,13 @@ abstract class Block {
 	>
 
 	/**
+	 * Check if the given string contains a block of this type.
+	 */
+	static contains(md: string) {
+		return this.getRegex().test(md)
+	}
+
+	/**
 	 * Delete any block of this kind from the given string without parsing it.
 	 */
 	static delete(md: string) {
@@ -319,6 +326,7 @@ export async function handleCustomSyntax(
 	md = HiddenBlock.delete(md)
 
 	// Process :::secret::: blocks
+	const isSecret = SecretBlock.contains(md)
 	md = await SecretBlock.replace(md, app, routes, imageNameToPath)
 
 	// Process inline :::image::: blocks
@@ -382,6 +390,7 @@ export async function handleCustomSyntax(
 
 	return {
 		md,
+		isSecret,
 		details,
 		sidebarImages: images,
 		math: { block: mathBlock, inline: mathInline },

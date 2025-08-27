@@ -24,7 +24,7 @@ export async function createPage(
 	if (!frontmatter["wiki-publish"]) return null
 
 	// Parse and replace custom :::blocks::: and other non-standard syntax
-	const { md, details, sidebarImages, math } = await handleCustomSyntax(
+	const parsed = await handleCustomSyntax(
 		content,
 		file.name,
 		app,
@@ -33,33 +33,33 @@ export async function createPage(
 	)
 
 	// Convert the entire markdown to HTML using Obsidian's builtin renderer
-	let html = await mdToHtml(md, app, routes, imageNameToPath)
+	let html = await mdToHtml(parsed.md, app, routes, imageNameToPath)
 
 	// Add KaTeX math manually
 	html = html.replace(/\|math\|(<br>)?/g, () =>
-		katex.renderToString(math.block.pop() ?? "", { displayMode: true })
+		katex.renderToString(parsed.math.block.pop() ?? "", {
+			displayMode: true,
+		})
 	)
 	html = html.replace(/\|math-inline\|/g, () =>
-		katex.renderToString(math.inline.pop() ?? "")
+		katex.renderToString(parsed.math.inline.pop() ?? "")
 	)
 
-	// Get aliases as search terms
+	// Manage titles and routes
 	const route = routes.getRoute(file.path) ?? file.basename.replace(/ /g, "_")
-	const title = file.basename
 	const alt_title = frontmatter["wiki-title"] ?? null
+	const title = alt_title ?? file.basename
 	const aliases = frontmatter["aliases"]?.join("; ") as string | undefined
-	let search_terms = title
-	search_terms += alt_title ? `; ${alt_title}` : ""
-	search_terms += aliases ? `; ${aliases}` : ""
+	const search_terms = title + (aliases ? `; ${aliases}` : "")
 
-	// TODO: Check if there are secret blocks
-	// A page can be prerendered if it does not depend on user permission
+	// A page is secret if there are allowed users (not null and not empty) or
+	// if there are any secret blocks. Nonsecret pages can be prerendered
 	const allowed_users = frontmatter["wiki-allowed-users"]?.join("; ") ?? null
+	const isSecret = allowed_users || parsed.isSecret
 
 	const note: Note = {
 		title,
 		route,
-		alt_title,
 		search_terms,
 		path: file.path,
 		frontpage: frontmatter["wiki-home"] ?? 0,
@@ -67,14 +67,14 @@ export async function createPage(
 		allowed_users,
 		hash,
 		last_updated: Math.floor(Date.now() / 1000),
-		can_prerender: Number(typeof allowed_users !== "string"),
+		can_prerender: Number(!isSecret),
 		html_content: html.trim(),
 	}
 
 	return {
 		note,
-		details,
-		sidebarImages,
+		details: parsed.details,
+		sidebarImages: parsed.sidebarImages,
 	}
 }
 
@@ -144,6 +144,7 @@ export function postprocessHtml(
 	const links = Array.from(doc.querySelectorAll("a")).reverse()
 	for (const link of links) {
 		link.removeAttribute("data-href")
+		link.removeAttribute("data-tooltip-position")
 
 		const href = link.getAttribute("href")
 		if (!href) continue

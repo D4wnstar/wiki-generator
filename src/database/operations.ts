@@ -19,7 +19,6 @@ CREATE TABLE IF NOT EXISTS notes (
 	path TEXT PRIMARY KEY,
     route TEXT NOT NULL UNIQUE,
 	title TEXT NOT NULL,
-	alt_title TEXT,
 	search_terms TEXT NOT NULL, -- semicolon separated list. Default should be alt_title ?? title
 	frontpage BOOLEAN DEFAULT FALSE,
 	lead TEXT NOT NULL,
@@ -101,7 +100,6 @@ INSERT OR REPLACE INTO notes (
 	path,
     route,
 	title,
-	alt_title,
 	search_terms,
 	frontpage,
 	lead,
@@ -110,7 +108,7 @@ INSERT OR REPLACE INTO notes (
 	last_updated,
 	can_prerender,
 	html_content
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING path;`
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING path;`
 
 const insertDetails = `\
 INSERT INTO details (
@@ -424,7 +422,6 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 					page.note.path,
 					page.note.route,
 					page.note.title,
-					page.note.alt_title,
 					page.note.search_terms,
 					page.note.frontpage,
 					page.note.lead,
@@ -659,7 +656,6 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 						page.note.path,
 						page.note.route,
 						page.note.title,
-						page.note.alt_title,
 						page.note.search_terms,
 						page.note.frontpage,
 						page.note.lead,
