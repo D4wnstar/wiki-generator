@@ -1,5 +1,4 @@
 import { App, Component, MarkdownRenderer, TFile } from "obsidian"
-import { slugPath } from "src/utils"
 import { handleCustomSyntax } from "./custom-blocks"
 import { Frontmatter, Note, Page } from "../database/types"
 import katex from "katex"
@@ -13,7 +12,7 @@ import katex from "katex"
 export async function createPage(
 	file: TFile,
 	hash: string,
-	titleToSlug: Map<string, string>,
+	titleToRoute: Map<string, string>,
 	imageNameToPath: Map<string, string>,
 	app: App
 ): Promise<Page | null> {
@@ -28,12 +27,12 @@ export async function createPage(
 		content,
 		file.name,
 		app,
-		titleToSlug,
+		titleToRoute,
 		imageNameToPath
 	)
 
 	// Convert the entire markdown to HTML using Obsidian's builtin renderer
-	let html = await mdToHtml(md, app, titleToSlug, imageNameToPath)
+	let html = await mdToHtml(md, app, titleToRoute, imageNameToPath)
 
 	// Add KaTeX math manually
 	html = html.replace(/\|math\|(<br>)?/g, () =>
@@ -44,6 +43,7 @@ export async function createPage(
 	)
 
 	// Get aliases as search terms
+	const route = makeRoute(file.basename)
 	const title = file.basename
 	const alt_title = frontmatter["wiki-title"] ?? null
 	const aliases = frontmatter["aliases"]?.join("; ") as string | undefined
@@ -56,17 +56,17 @@ export async function createPage(
 
 	const note: Note = {
 		title,
+		route,
 		alt_title,
 		search_terms,
 		path: file.path,
-		slug: titleToSlug.get(title) ?? slugPath(file.path),
 		frontpage: frontmatter["wiki-home"] ?? 0,
 		lead: "", // Currently unused, needed for popups once they are reimplemented
 		allowed_users,
 		hash,
 		last_updated: Math.floor(Date.now() / 1000),
 		can_prerender: Number(!allowed_users),
-		html_content: html,
+		html_content: html.trim(),
 	}
 
 	return {
@@ -74,6 +74,10 @@ export async function createPage(
 		details,
 		sidebarImages,
 	}
+}
+
+export function makeRoute(title: string) {
+	return encodeURIComponent(title.replace(/ /g, "_"))
 }
 
 /**
@@ -121,7 +125,7 @@ export async function mdToHtml(
  */
 export function postprocessHtml(
 	html: string,
-	titleToPath: Map<string, string>,
+	routes: Map<string, string>,
 	imageNameToPath: Map<string, string>,
 	unwrap?: boolean
 ) {
@@ -157,17 +161,17 @@ export function postprocessHtml(
 		// For links to other pages, try to resolve the slug
 		// Remove any hash fragment for lookup
 		const hashIndex = href.indexOf("#")
-		const pageKey = hashIndex > -1 ? href.substring(0, hashIndex) : href
+		const title = hashIndex > -1 ? href.substring(0, hashIndex) : href
 
-		if (titleToPath.has(pageKey)) {
-			const slug = titleToPath.get(pageKey) as string
+		if (routes.has(title)) {
+			const route = routes.get(title) as string
 			const sub =
 				hashIndex > -1
-					? `/${slug}${href.substring(hashIndex)}`
-					: `/${slug}`
+					? `/wiki/${route}${href.substring(hashIndex)}`
+					: `/wiki/${route}`
 			link.setAttribute("href", sub)
-		} else if (imageNameToPath.has(pageKey)) {
-			const slug = imageNameToPath.get(pageKey) as string
+		} else if (imageNameToPath.has(title)) {
+			const slug = imageNameToPath.get(title) as string
 			const path = encodeURIComponent(slug)
 			link.setAttribute("href", `/api/v1/image/${path}`)
 		} else {

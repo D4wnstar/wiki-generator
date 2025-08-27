@@ -17,10 +17,10 @@ import { findFileInPlugin } from "./filesystem"
 const createNotes = `
 CREATE TABLE IF NOT EXISTS notes (
 	path TEXT PRIMARY KEY,
+    route TEXT NOT NULL UNIQUE,
 	title TEXT NOT NULL,
 	alt_title TEXT,
 	search_terms TEXT NOT NULL, -- semicolon separated list. Default should be alt_title ?? title
-	slug TEXT UNIQUE NOT NULL,
 	frontpage BOOLEAN DEFAULT FALSE,
 	lead TEXT NOT NULL,
 	allowed_users TEXT,
@@ -99,10 +99,10 @@ const deleteTableSidebarImages = `DROP TABLE IF EXISTS sidebar_images;`
 const insertNotes = `\
 INSERT OR REPLACE INTO notes (
 	path,
+    route,
 	title,
 	alt_title,
 	search_terms,
-	slug,
 	frontpage,
 	lead,
 	allowed_users,
@@ -377,17 +377,18 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 			res[0].values.map((val) => {
 				return {
 					path: val[0] as string,
-					title: val[1] as string,
-					alt_title: val[2] as string | null,
-					search_terms: val[3] as string,
-					slug: val[4] as string,
-					frontpage: val[5] as string | number,
-					lead: val[6] as string,
-					allowed_users: val[7] as string | null,
-					hash: val[8] as string,
-					last_updated: val[9] as number,
-					can_prerender: val[10] as number,
-					html_content: val[11] as string,
+					route: val[1] as string,
+					title: val[2] as string,
+					alt_title: val[3] as string | null,
+					search_terms: val[4] as string,
+					slug: val[5] as string,
+					frontpage: val[6] as string | number,
+					lead: val[7] as string,
+					allowed_users: val[8] as string | null,
+					hash: val[9] as string,
+					last_updated: val[10] as number,
+					can_prerender: val[11] as number,
+					html_content: val[12] as string,
 				}
 			}) ?? []
 		)
@@ -421,10 +422,10 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 				sql: insertNotes,
 				args: [
 					page.note.path,
+					page.note.route,
 					page.note.title,
 					page.note.alt_title,
 					page.note.search_terms,
-					page.note.slug,
 					page.note.frontpage,
 					page.note.lead,
 					page.note.allowed_users,
@@ -656,10 +657,10 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 					sql: insertNotes,
 					args: [
 						page.note.path,
+						page.note.route,
 						page.note.title,
 						page.note.alt_title,
 						page.note.search_terms,
-						page.note.slug,
 						page.note.frontpage,
 						page.note.lead,
 						page.note.allowed_users,

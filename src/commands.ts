@@ -1,12 +1,4 @@
-import {
-	App,
-	Component,
-	MarkdownRenderer,
-	Notice,
-	request,
-	TFile,
-	Vault,
-} from "obsidian"
+import { App, Notice, request, TFile, Vault } from "obsidian"
 import { WikiGeneratorSettings } from "./settings"
 import {
 	createProgressBarFragment,
@@ -20,7 +12,7 @@ import {
 	LocalDatabaseAdapter,
 	RemoteDatabaseAdapter,
 } from "./database/operations"
-import { createPage, postprocessHtml } from "./notes/text-transformations"
+import { createPage, makeRoute } from "./notes/text-transformations"
 import { DatabaseAdapter, Page } from "./database/types"
 
 import { wikilinkRegex } from "./notes/regexes"
@@ -342,16 +334,16 @@ async function processNotes(
 	app: App
 ) {
 	// Bind titles to paths
-	const titleToPath = new Map<string, string>()
-	const previousSlugs: Set<string> = new Set()
+	const routes = new Map<string, string>()
+	const previousRoutes: Set<string> = new Set()
 	for (const file of app.vault.getMarkdownFiles()) {
-		const slug = ensureUniqueSlug(slugPath(file.path), previousSlugs)
-		previousSlugs.add(slug)
+		const route = makeRoute(file.basename)
+		previousRoutes.add(route)
 		// Add both the normal and lowercase basename for case insensitivity
-		titleToPath.set(file.basename, slug)
-		titleToPath.set(file.basename.toLowerCase(), slug)
+		routes.set(file.basename, route)
+		routes.set(file.basename.toLowerCase(), route)
 	}
-	console.debug("Title -> Path", titleToPath)
+	console.debug("Title -> Route", routes)
 	console.debug("Image name -> Path", imageNameToPath)
 
 	// Process the notes
@@ -363,7 +355,7 @@ async function processNotes(
 			const page = await createPage(
 				file,
 				hash,
-				titleToPath,
+				routes,
 				imageNameToPath,
 				app
 			)
