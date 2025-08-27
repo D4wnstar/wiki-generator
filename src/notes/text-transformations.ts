@@ -2,6 +2,7 @@ import { App, Component, MarkdownRenderer, TFile } from "obsidian"
 import { handleCustomSyntax } from "./custom-blocks"
 import { Frontmatter, Note, Page } from "../database/types"
 import katex from "katex"
+import { RouteManager } from "src/commands"
 
 /**
  * Create a `Page` object from the given Markdown file, which means processing
@@ -12,7 +13,7 @@ import katex from "katex"
 export async function createPage(
 	file: TFile,
 	hash: string,
-	titleToRoute: Map<string, string>,
+	routes: RouteManager,
 	imageNameToPath: Map<string, string>,
 	app: App
 ): Promise<Page | null> {
@@ -27,12 +28,12 @@ export async function createPage(
 		content,
 		file.name,
 		app,
-		titleToRoute,
+		routes,
 		imageNameToPath
 	)
 
 	// Convert the entire markdown to HTML using Obsidian's builtin renderer
-	let html = await mdToHtml(md, app, titleToRoute, imageNameToPath)
+	let html = await mdToHtml(md, app, routes, imageNameToPath)
 
 	// Add KaTeX math manually
 	html = html.replace(/\|math\|(<br>)?/g, () =>
@@ -43,7 +44,7 @@ export async function createPage(
 	)
 
 	// Get aliases as search terms
-	const route = makeRoute(file.basename)
+	const route = routes.getRoute(file.path) ?? file.basename.replace(/ /g, "_")
 	const title = file.basename
 	const alt_title = frontmatter["wiki-title"] ?? null
 	const aliases = frontmatter["aliases"]?.join("; ") as string | undefined
@@ -51,6 +52,7 @@ export async function createPage(
 	search_terms += alt_title ? `; ${alt_title}` : ""
 	search_terms += aliases ? `; ${aliases}` : ""
 
+	// TODO: Check if there are secret blocks
 	// A page can be prerendered if it does not depend on user permission
 	const allowed_users = frontmatter["wiki-allowed-users"]?.join("; ") ?? null
 
@@ -65,7 +67,7 @@ export async function createPage(
 		allowed_users,
 		hash,
 		last_updated: Math.floor(Date.now() / 1000),
-		can_prerender: Number(!allowed_users),
+		can_prerender: Number(typeof allowed_users !== "string"),
 		html_content: html.trim(),
 	}
 
@@ -74,10 +76,6 @@ export async function createPage(
 		details,
 		sidebarImages,
 	}
-}
-
-export function makeRoute(title: string) {
-	return encodeURIComponent(title.replace(/ /g, "_"))
 }
 
 /**
@@ -98,7 +96,7 @@ async function extractFrontmatter(file: TFile, app: App) {
 export async function mdToHtml(
 	md: string,
 	app: App,
-	titleToPath: Map<string, string>,
+	routes: RouteManager,
 	imageNameToPath: Map<string, string>,
 	options?: { unwrap?: boolean }
 ) {
@@ -109,7 +107,7 @@ export async function mdToHtml(
 		await MarkdownRenderer.render(app, md, tempEl, "", new Component())
 		return postprocessHtml(
 			tempEl.innerHTML,
-			titleToPath,
+			routes,
 			imageNameToPath,
 			options?.unwrap
 		)
@@ -125,7 +123,7 @@ export async function mdToHtml(
  */
 export function postprocessHtml(
 	html: string,
-	routes: Map<string, string>,
+	routes: RouteManager,
 	imageNameToPath: Map<string, string>,
 	unwrap?: boolean
 ) {
@@ -158,20 +156,22 @@ export function postprocessHtml(
 		// Leave internal links alone
 		if (href.startsWith("#")) continue
 
-		// For links to other pages, try to resolve the slug
 		// Remove any hash fragment for lookup
 		const hashIndex = href.indexOf("#")
-		const title = hashIndex > -1 ? href.substring(0, hashIndex) : href
+		let titleOrPath = hashIndex > -1 ? href.substring(0, hashIndex) : href
+		if (titleOrPath.includes("/")) {
+			titleOrPath = titleOrPath.concat(".md")
+		}
 
-		if (routes.has(title)) {
-			const route = routes.get(title) as string
+		if (routes.getRoute(titleOrPath)) {
+			const route = routes.getRoute(titleOrPath) as string
 			const sub =
 				hashIndex > -1
 					? `/wiki/${route}${href.substring(hashIndex)}`
 					: `/wiki/${route}`
 			link.setAttribute("href", sub)
-		} else if (imageNameToPath.has(title)) {
-			const slug = imageNameToPath.get(title) as string
+		} else if (imageNameToPath.has(titleOrPath)) {
+			const slug = imageNameToPath.get(titleOrPath) as string
 			const path = encodeURIComponent(slug)
 			link.setAttribute("href", `/api/v1/image/${path}`)
 		} else {

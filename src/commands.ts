@@ -1,18 +1,13 @@
 import { App, Notice, request, TFile, Vault } from "obsidian"
 import { WikiGeneratorSettings } from "./settings"
-import {
-	createProgressBarFragment,
-	ensureUniqueSlug,
-	getPublishableFiles,
-	slugPath,
-} from "./utils"
+import { createProgressBarFragment, getPublishableFiles } from "./utils"
 import { createLocalDatabase, initializeAdapter } from "./database/init"
 import {
 	getUsersFromRemote,
 	LocalDatabaseAdapter,
 	RemoteDatabaseAdapter,
 } from "./database/operations"
-import { createPage, makeRoute } from "./notes/text-transformations"
+import { createPage } from "./notes/text-transformations"
 import { DatabaseAdapter, Page } from "./database/types"
 
 import { wikilinkRegex } from "./notes/regexes"
@@ -334,16 +329,11 @@ async function processNotes(
 	app: App
 ) {
 	// Bind titles to paths
-	const routes = new Map<string, string>()
-	const previousRoutes: Set<string> = new Set()
+	const routeManager = new RouteManager()
 	for (const file of app.vault.getMarkdownFiles()) {
-		const route = makeRoute(file.basename)
-		previousRoutes.add(route)
-		// Add both the normal and lowercase basename for case insensitivity
-		routes.set(file.basename, route)
-		routes.set(file.basename.toLowerCase(), route)
+		routeManager.createRoute(file.path, file.basename)
 	}
-	console.debug("Title -> Route", routes)
+	console.debug("Routes", routeManager)
 	console.debug("Image name -> Path", imageNameToPath)
 
 	// Process the notes
@@ -355,7 +345,7 @@ async function processNotes(
 			const page = await createPage(
 				file,
 				hash,
-				routes,
+				routeManager,
 				imageNameToPath,
 				app
 			)
@@ -767,5 +757,149 @@ export async function pingDeployHook(settings: WikiGeneratorSettings) {
 			})
 	} else {
 		new Notice("No deploy hook is set. Please add one in the settings.")
+	}
+}
+
+/**
+ * Convert note titles to website routes while avoiding duplicates and
+ * disambiguating appropriately. Route format is inspired by Wikipedia,
+ * where the route *is* the title, with spaces turned to underscores and
+ * disambiguations are added in parenthesis after.
+ */
+export class RouteManager {
+	private titleToRoute: Map<string, string> = new Map()
+	private pathToRoute: Map<string, string> = new Map()
+	// Save all the paths that would point to the same route for disambiguation
+	private routeToPaths: Map<string, string[]> = new Map()
+
+	private encodeRoute(title: string) {
+		return encodeURIComponent(title.replace(/ /g, "_"))
+	}
+
+	/**
+	 * Create a route for a file path, handling collisions by appending folder names
+	 * @param path The full path of the file
+	 * @param title The basename of the file
+	 * @returns The unique route for this file
+	 */
+	createRoute(path: string, title: string): string {
+		// Check if we've already processed this path
+		if (this.pathToRoute.has(path)) return this.pathToRoute.get(path)!
+
+		const baseRoute = this.encodeRoute(title)
+
+		// If no path points to this route, just add it to the list
+		if (!this.routeToPaths.has(baseRoute)) {
+			this.routeToPaths.set(baseRoute, [path])
+			this.pathToRoute.set(path, baseRoute)
+			this.titleToRoute.set(title, baseRoute)
+			this.titleToRoute.set(title.toLowerCase(), baseRoute)
+			return baseRoute
+		}
+
+		// Otherwise disambiguate and add that
+		const fixedRoute = this.disambiguateRoute(baseRoute, path)
+		this.pathToRoute.set(path, fixedRoute)
+		this.titleToRoute.set(title, fixedRoute)
+		this.titleToRoute.set(title.toLowerCase(), fixedRoute)
+		return fixedRoute
+	}
+
+	/**
+	 * Get the route associated with the given string. Automatically handles
+	 * both titles and filepaths.
+	 */
+	getRoute(titleOrPath: string) {
+		if (titleOrPath.includes("/")) {
+			return this.pathToRoute.get(titleOrPath)
+		} else {
+			return this.titleToRoute.get(titleOrPath)
+		}
+	}
+
+	getRoutes() {
+		return this.titleToRoute
+	}
+
+	/**
+	 * Check if this path and route pair is unique in the given Map.
+	 */
+	private isRouteUnique(
+		path: string,
+		route: string,
+		existingRoutes: Map<string, string>
+	) {
+		for (const [otherPath, otherRoute] of existingRoutes) {
+			if (path !== otherPath && route === otherRoute) {
+				return false
+			}
+		}
+		return true
+	}
+
+	/**
+	 * Disambiguate a route by appending folder names until it's unique
+	 * @param route The base route that has a collision
+	 * @param path The path of the file we're creating a route for
+	 * @returns A unique route
+	 */
+	private disambiguateRoute(route: string, path: string): string {
+		// Get all paths that currently map to this route and merge them
+		const conflictingPaths = this.routeToPaths.get(route) ?? []
+		const allPaths = [...conflictingPaths, path]
+		this.routeToPaths.set(route, allPaths)
+
+		// Disambiguate shorter paths first since folder order is important
+		allPaths.sort((a, b) => a.split("/").length - b.split("/").length)
+
+		// For each path, create a disambiguated route
+		const updatedRoutes: Map<string, string> = new Map()
+		for (const path of allPaths) {
+			const parts = path.split("/").filter((part) => part !== "")
+
+			// Keep adding folders until we have a unique route
+			let folderIndex = 0
+			let disambiguatedRoute = route
+			while (true) {
+				const folders = this.encodeRoute(
+					parts.slice(0, folderIndex + 1).join("_")
+				)
+				const newRoute = folders ? `${route}_(${folders})` : route
+
+				// Check if this new route already exists for another path
+				let isUnique =
+					this.isRouteUnique(path, newRoute, updatedRoutes) &&
+					this.isRouteUnique(path, newRoute, this.pathToRoute)
+
+				if (isUnique) {
+					disambiguatedRoute = newRoute
+					break
+				}
+
+				folderIndex += 1
+				// Should never happen, but if folders run out, just add a random number
+				if (folderIndex >= parts.length) {
+					const idk = Math.floor(Math.random() * 100)
+					disambiguatedRoute = `${route}_${idk}`
+					break
+				}
+			}
+
+			updatedRoutes.set(path, disambiguatedRoute)
+		}
+
+		// Update all the routes
+		for (const [path, route] of updatedRoutes) {
+			this.pathToRoute.set(path, route)
+			const pathParts = path.split("/").filter((part) => part !== "")
+			const fileName = pathParts[pathParts.length - 1].replace(
+				/\.md$/,
+				""
+			)
+			this.titleToRoute.set(fileName, route)
+			this.titleToRoute.set(fileName.toLowerCase(), route)
+		}
+
+		return updatedRoutes.get(path)!
 	}
 }

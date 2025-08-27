@@ -2,6 +2,7 @@ import { App, Notice } from "obsidian"
 import { Detail, SidebarImage } from "../database/types"
 import { mdToHtml } from "./text-transformations"
 import { replaceAllAsync } from "src/utils"
+import { RouteManager } from "src/commands"
 
 abstract class Block {
 	static blockName: string
@@ -68,7 +69,7 @@ class DetailsBlock extends Block {
 		md: string,
 		args: {
 			app: App
-			titleToSlug: Map<string, string>
+			routes: RouteManager
 			imageNameToPath: Map<string, string>
 		}
 	): Promise<{ md: string; details: Detail[] }> {
@@ -110,7 +111,7 @@ class DetailsBlock extends Block {
 			key = await mdToHtml(
 				key,
 				args.app,
-				args.titleToSlug,
+				args.routes,
 				args.imageNameToPath,
 				{ unwrap: true }
 			)
@@ -122,7 +123,7 @@ class DetailsBlock extends Block {
 					// Merge colons and turn semicolons into line breaks
 					values.reduce((a, b) => a + ": " + b).replace(/;/g, "<br>"),
 					args.app,
-					args.titleToSlug,
+					args.routes,
 					args.imageNameToPath,
 					{ unwrap: true }
 				)
@@ -152,8 +153,8 @@ class ImageBlock extends Block {
 		md: string,
 		args: {
 			app: App
+			routes: RouteManager
 			imageNameToPath: Map<string, string>
-			titleToSlug: Map<string, string>
 		}
 	) {
 		const regex = this.getRegex()
@@ -178,8 +179,8 @@ class ImageBlock extends Block {
 			const { image_name, image_path, caption } = await this.processBlock(
 				contents,
 				args.app,
-				args.imageNameToPath,
-				args.titleToSlug
+				args.routes,
+				args.imageNameToPath
 			)
 
 			images.push({
@@ -215,8 +216,8 @@ class ImageBlock extends Block {
 	private static async processBlock(
 		contents: string,
 		app: App,
-		imageNameToPath: Map<string, string>,
-		titleToSlug: Map<string, string>
+		routes: RouteManager,
+		imageNameToPath: Map<string, string>
 	) {
 		const lines = contents.split("\n").filter((line) => line !== "")
 		if (lines.length === 0) {
@@ -242,7 +243,7 @@ class ImageBlock extends Block {
 			caption = await mdToHtml(
 				lines.splice(1).join("\n"),
 				app,
-				titleToSlug,
+				routes,
 				imageNameToPath,
 				{ unwrap: true }
 			)
@@ -264,8 +265,8 @@ class SecretBlock extends Block {
 	static async replace(
 		md: string,
 		app: App,
-		imageNameToPath: Map<string, string>,
-		titleToSlug: Map<string, string>
+		titleToSlug: RouteManager,
+		imageNameToPath: Map<string, string>
 	) {
 		return await replaceAllAsync(
 			md,
@@ -305,7 +306,7 @@ export async function handleCustomSyntax(
 	md: string,
 	filename: string,
 	app: App,
-	titleToSlug: Map<string, string>,
+	routes: RouteManager,
 	imageNameToPath: Map<string, string>
 ) {
 	// Anything in codeblocks should be ignored, so remove them and put them back later
@@ -318,7 +319,7 @@ export async function handleCustomSyntax(
 	md = HiddenBlock.delete(md)
 
 	// Process :::secret::: blocks
-	md = await SecretBlock.replace(md, app, titleToSlug, imageNameToPath)
+	md = await SecretBlock.replace(md, app, routes, imageNameToPath)
 
 	// Process inline :::image::: blocks
 	md = await ImageBlock.replace(md)
@@ -328,7 +329,7 @@ export async function handleCustomSyntax(
 	try {
 		const extractedDetails = await DetailsBlock.extract(md, {
 			app,
-			titleToSlug,
+			routes,
 			imageNameToPath,
 		})
 		md = extractedDetails.md
@@ -343,8 +344,8 @@ export async function handleCustomSyntax(
 	try {
 		const extractedImages = await ImageBlock.extract(md, {
 			app,
+			routes,
 			imageNameToPath,
-			titleToSlug,
 		})
 		md = extractedImages.md
 		images = extractedImages.images
