@@ -33,7 +33,10 @@ export default class WikiGeneratorPlugin extends Plugin {
 			settings.githubRepoToken &&
 			settings.githubCheckUpdatesOnStartup
 		) {
-			await isWebsiteUpToDate(settings, 10000, true)
+			await isWebsiteUpToDate(settings, {
+				noticeDuration: 10000,
+				quietLevel: 1,
+			})
 		}
 
 		// Automatically add the wiki-publish: true property on file creation

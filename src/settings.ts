@@ -261,42 +261,48 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 					})
 			})
 
+		const updateWebsite = async (dryRun: boolean) => {
+			const upToDate = await isWebsiteUpToDate(settings, {
+				quietLevel: 2,
+			})
+			if (upToDate) {
+				new Notice("Your website is already up to date.")
+				return
+			}
+
+			if (
+				settings.githubRepoToken &&
+				settings.githubUsername &&
+				settings.githubRepoName
+			) {
+				await pullWebsiteUpdates(
+					settings.githubRepoToken,
+					settings.githubUsername,
+					settings.githubRepoName,
+					{ overwrite: settings.githubAutoapplyUpdates, dryRun }
+				)
+
+				if (!dryRun) {
+					const now = new Date()
+					settings.lastTemplateUpdate = now.toISOString()
+					await this.plugin.saveSettings()
+				}
+			} else {
+				new Notice(
+					"Please set your GitHub username, repository and token."
+				)
+			}
+		}
+
 		new Setting(containerEl)
 			.setName("Update website repository")
 			.setDesc(
-				"Update your website to synchronize with all new template additions. This may take some time. Please don't close Obsidian while updating. Always update this plugin when you update the website, otherwise it might break."
+				"Update your website to synchronize with all new template additions. This may take some time. Please don't close Obsidian while updating. Always update this plugin when you update the website, otherwise it might break. Also, sync your notes after updating."
 			)
 			.addButton((button) => {
-				button.setButtonText("Update website").onClick(async () => {
-					if (
-						settings.githubRepoToken &&
-						settings.githubUsername &&
-						settings.githubRepoName
-					) {
-						new Notice("Updating your website...")
-						const prUrl = await pullWebsiteUpdates(
-							settings.githubRepoToken,
-							settings.githubUsername,
-							settings.githubRepoName,
-							settings.githubAutoapplyUpdates
-						)
-
-						if (prUrl) {
-							new Notice(
-								"A new pull request has been opened in your website's repository. You must merge it for the update to apply."
-							)
-						} else {
-							new Notice("Your website is now up to date.")
-						}
-
-						const now = new Date()
-						settings.lastTemplateUpdate = now.toISOString()
-					} else {
-						new Notice(
-							"Please set your GitHub username, repository and token."
-						)
-					}
-				})
+				button
+					.setButtonText("Update website")
+					.onClick(async () => updateWebsite(false))
 			})
 
 		const autoapplyUpdateDesc = document.createDocumentFragment()
@@ -476,6 +482,17 @@ export class WikiGeneratorSettingTab extends PluginSettingTab {
 						settings.deployOnSync = value
 						await this.plugin.saveSettings()
 					})
+			})
+
+		new Setting(containerEl)
+			.setName("Update website repository (dry run)")
+			.setDesc(
+				"Like the usual update button, but doesn't make any changes. Show debug logs in the console to see the output."
+			)
+			.addButton((button) => {
+				button
+					.setButtonText("Update website")
+					.onClick(async () => updateWebsite(true))
 			})
 	}
 }

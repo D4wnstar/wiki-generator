@@ -4,28 +4,18 @@ import { createProgressBarFragment } from "./utils"
 
 const TEMPLATE_OWNER = "D4wnstar"
 const TEMPLATE_REPO = "wiki-generator-template"
-const EXCLUDED_FILES = ["README.md", "package-lock.json"]
+const EXCLUDED_PATHS = ["README.md"]
 
-/**
- * User repo update flow chart
- * 1. Get date of last commit in user repo
- * 2. Get list of commits since that date in template repo
- * 3. Create list of changed files in commits since then
- * 4. Run that list through a filter (exclude things like README)
- * 5. Fetch contents of all remaining files
- * If user allows blind overwriting:
- *   6. Overwrite files in the user's main branch with the new content
- * Otherwise:
- *   6. Create a new branch in the user's repo
- *   7. Overwrite files in that branch with the new content
- *   8. Create a pull request to merge new branch into main
- *   9. Tell the user to merge the pull request manually
- */
+type File = {
+	sha: string
+	content?: string
+}
+
 export async function pullWebsiteUpdates(
 	token: string,
 	username: string,
 	repo: string,
-	overwrite: boolean
+	options: { overwrite: boolean; dryRun?: boolean }
 ) {
 	const octokit = new Octokit({
 		auth: token,
@@ -37,7 +27,7 @@ export async function pullWebsiteUpdates(
 	try {
 		// Get current state of template repo
 		updateProgress(5, "Getting template")
-		const templateTreeRes = await octokit.request(
+		const templateTree = await octokit.request(
 			"GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
 			{
 				owner: TEMPLATE_OWNER,
@@ -52,7 +42,7 @@ export async function pullWebsiteUpdates(
 
 		// Get current state of user repo
 		updateProgress(10, "Getting user website")
-		const userTreeRes = await octokit.request(
+		const userTree = await octokit.request(
 			"GET /repos/{owner}/{repo}/git/trees/{tree_sha}",
 			{
 				owner: username,
@@ -65,145 +55,201 @@ export async function pullWebsiteUpdates(
 			}
 		)
 
-		// Process all files in template (except excluded ones)
-		const templateFiles: Map<
-			string,
-			{ content: string; userSha?: string }
-		> = new Map()
-		const userFilesToDelete: Set<{ path: string; userSha: string }> =
-			new Set()
+		console.debug(
+			`Template repo has ${templateTree.data.tree.length} files`
+		)
+		console.debug(`User repo has ${userTree.data.tree.length} files`)
 
-		const isExcluded = (filepath: string) =>
-			EXCLUDED_FILES.some(
-				(pattern) =>
-					filepath === pattern ||
-					(pattern.endsWith("*") &&
-						filepath.startsWith(pattern.slice(0, -1)))
-			)
-
-		// First collect all template files
-		updateProgress(20, "Collecting new or updated files")
-		for (const file of templateTreeRes.data.tree) {
-			const filepath = file.path
-			if (!filepath || file.type !== "file") continue
-
-			// Skip excluded files
-			if (isExcluded(filepath)) continue
-
-			try {
-				// Get template file content
-				const templateFileRes = await octokit.request(
-					"GET /repos/{owner}/{repo}/contents/{path}",
-					{
-						owner: TEMPLATE_OWNER,
-						repo: TEMPLATE_REPO,
-						path: filepath,
-						headers: {
-							"X-GitHub-Api-Version": "2022-11-28",
-						},
-					}
-				)
-				// @ts-expect-error
-				const templateContent = templateFileRes.data.content
-				// @ts-expect-error
-				const templateSha = templateFileRes.data.sha
-
-				// Get SHA of the equivalent file on the user end if it exists
-				const userSha = userTreeRes.data.tree.find(
-					(file) => file.path === filepath
-				)?.sha
-
-				// Only include file if it's new or changed
-				if (!userSha || userSha !== templateSha) {
-					templateFiles.set(filepath, {
-						content: templateContent,
-						userSha: userSha, // Store user SHA for update operation
-					})
-				}
-			} catch (error) {
-				console.warn(
-					`Error getting template file ${filepath}:`,
-					error.message
-				)
-			}
-		}
-
-		// Find files in user repo that don't exist in template (and aren't excluded)
-		updateProgress(40, "Collecting outdated files")
-		for (const file of userTreeRes.data.tree) {
-			const filepath = file.path
-			if (!filepath || file.type !== "file" || !file.sha) continue
-
-			// Skip excluded files
-			if (isExcluded(filepath)) continue
-
-			// Mark for deletion if no longer in template
-			if (
-				!templateTreeRes.data.tree.find(
-					(file) => file.path === filepath
-				)
-			) {
-				userFilesToDelete.add({ path: filepath, userSha: file.sha })
-			}
-		}
-
-		console.log(
-			`Found ${templateFiles.size} files to update and ${userFilesToDelete.size} files to delete`
+		updateProgress(20, "Finding different files")
+		const diff = diffTrees(
+			userTree.data.tree.filter((file) => file.type === "blob"),
+			templateTree.data.tree.filter((file) => file.type === "blob")
 		)
 
-		if (overwrite) {
-			updateProgress(60, "Updating website")
-			return await updateAndAddFiles(
+		// Diff by content and save the content for later
+		updateProgress(30, "Finding different content")
+		await diffContent(octokit, username, repo, diff.toUpdate)
+
+		// Save the content to create too
+		updateProgress(60, "Getting new content")
+		await getNewContent(octokit, diff.toCreate)
+
+		console.debug("To create:", diff.toCreate)
+		console.debug("To update:", diff.toUpdate)
+		console.debug("To delete:", diff.toDelete)
+
+		if (options.dryRun) {
+			updateProgress(100, "Dry run completed!")
+			setTimeout(() => notice.hide(), 3000)
+			return
+		}
+
+		let branch: string | undefined
+		let commitSha: string | undefined
+		if (!options.overwrite) {
+			updateProgress(70, "Creating new branch")
+			const out = await createBranch(octokit, username, repo)
+			branch = out.branch
+			commitSha = out.commitSha
+		}
+
+		updateProgress(80, "Committing changes")
+		await commitChanges(octokit, username, repo, diff, branch)
+
+		if (!options.overwrite) {
+			updateProgress(95, "Creating pull request")
+			await createPullRequest(
 				octokit,
 				username,
 				repo,
-				templateFiles,
-				userFilesToDelete
-			)
-		} else {
-			return await handleBranchSplit(
-				octokit,
-				username,
-				repo,
-				templateFiles,
-				userFilesToDelete,
-				{ fragment, updateProgress }
+				branch as string,
+				commitSha as string
 			)
 		}
-	} catch (error) {
-		console.error(
-			`Error! Status: ${error.status}. Error message: ${error.response.data.message}`
-		)
-		new Notice(`There was an error while updating.`)
-	} finally {
+
 		updateProgress(100, "Update complete!")
 		setTimeout(() => notice.hide(), 3000)
+	} catch (error) {
+		const msg = error.response?.data?.message ?? error.message
+		console.error(`Error! Status: ${error.status}. Error message: ${msg}`)
+		updateProgress(100, "Update failed. There was an error while updating.")
 	}
 }
 
-async function updateAndAddFiles(
+function diffTrees(userTree: any[], templateTree: any[]) {
+	const userRepo = new Map<string, string>(
+		userTree.map((file) => [file.path, file.sha])
+	)
+	const templateRepo = new Map<string, string>(
+		templateTree.map((file) => [file.path, file.sha])
+	)
+
+	for (const ignored of EXCLUDED_PATHS) {
+		userRepo.delete(ignored)
+		templateRepo.delete(ignored)
+	}
+
+	// For the API to modify user files, we need the SHA from the user repo
+
+	// To delete (in user repo but not in template)
+	const toDelete = new Map<string, string>()
+	for (const [userPath, userSha] of userRepo) {
+		if (!templateRepo.has(userPath)) {
+			toDelete.set(userPath, userSha)
+		}
+	}
+
+	// To update (in both repos)
+	// To create (in template but not in user repo)
+	const toUpdate = new Map<string, File>()
+	const toCreate = new Map<string, File>()
+	for (const templatePath of templateRepo.keys()) {
+		if (userRepo.has(templatePath)) {
+			const userSha = userRepo.get(templatePath) as string
+			toUpdate.set(templatePath, { sha: userSha })
+		} else {
+			// API doesn't need a SHA to create a file
+			toCreate.set(templatePath, { sha: "" })
+		}
+	}
+
+	console.debug("User tree", userRepo)
+	console.debug("Template tree", templateRepo)
+	return { toDelete, toUpdate, toCreate }
+}
+
+async function diffContent(
 	octokit: Octokit,
 	username: string,
 	repo: string,
-	templateFiles: Map<string, { content: string; userSha?: string }>,
-	userFilesToDelete: Set<{ path: string; userSha: string }>,
-	branch: string | undefined = undefined
+	toUpdate: Map<string, File>
 ) {
-	let successCount = 0
+	for (const [filepath, { sha }] of toUpdate) {
+		// Get template file content
+		const templateFile = await octokit.request(
+			"GET /repos/{owner}/{repo}/contents/{path}",
+			{
+				owner: TEMPLATE_OWNER,
+				repo: TEMPLATE_REPO,
+				path: filepath,
+				headers: {
+					"X-GitHub-Api-Version": "2022-11-28",
+				},
+			}
+		)
+		const userFile = await octokit.request(
+			"GET /repos/{owner}/{repo}/contents/{path}",
+			{
+				owner: username,
+				repo,
+				path: filepath,
+				headers: {
+					"X-GitHub-Api-Version": "2022-11-28",
+				},
+			}
+		)
+		// @ts-expect-error
+		const templateContent = templateFile.data.content as string
+		// @ts-expect-error
+		const userContent = userFile.data.content as string
+
+		if (userContent === templateContent) {
+			// If file is identical, no need to update it
+			toUpdate.delete(filepath)
+		} else {
+			// If not, save the template's content for later
+			toUpdate.set(filepath, { sha, content: templateContent })
+			// @ts-expect-error
+			console.debug("Found different files:", userFile.data.name)
+		}
+	}
+}
+
+async function getNewContent(octokit: Octokit, toCreate: Map<string, File>) {
+	for (const path of toCreate.keys()) {
+		const templateFile = await octokit.request(
+			"GET /repos/{owner}/{repo}/contents/{path}",
+			{
+				owner: TEMPLATE_OWNER,
+				repo: TEMPLATE_REPO,
+				path,
+				headers: {
+					"X-GitHub-Api-Version": "2022-11-28",
+				},
+			}
+		)
+		// @ts-expect-error
+		const templateContent = templateFile.data.content as string
+		toCreate.set(path, { sha: "", content: templateContent })
+	}
+}
+
+async function commitChanges(
+	octokit: Octokit,
+	username: string,
+	repo: string,
+	diff: {
+		toCreate: Map<string, File>
+		toUpdate: Map<string, File>
+		toDelete: Map<string, string>
+	},
+	branch?: string
+) {
 	let deleteCount = 0
+	let createCount = 0
+	let updateCount = 0
 	let errorCount = 0
 
-	// First delete files that shouldn't exist anymore
-	for (const { path, userSha: sha } of userFilesToDelete) {
+	// Delete excess files from user repo
+	for (const [path, sha] of diff.toDelete) {
 		try {
-			// Delete the file with the given path and the correct user SHA (NOT the template SHA)
-			const deleteRes = await octokit.request(
+			const res = await octokit.request(
 				"DELETE /repos/{owner}/{repo}/contents/{path}",
 				{
 					owner: username,
 					repo,
 					path,
-					message: `Remove ${path} (no longer in template)`,
+					message: `Autoupdate: Delete ${path}`,
 					sha,
 					branch,
 					headers: {
@@ -211,8 +257,8 @@ async function updateAndAddFiles(
 					},
 				}
 			)
-			if (deleteRes.status >= 400) {
-				throw new Error(`Failed to delete ${path} from user repo`)
+			if (res.status >= 400) {
+				throw new Error(`Request errored with status ${res.status}`)
 			}
 
 			deleteCount += 1
@@ -222,23 +268,62 @@ async function updateAndAddFiles(
 		}
 	}
 
-	// Then update/create all files from template
-	for (const [path, { content, userSha: sha }] of templateFiles) {
+	// Create new files from template
+	for (const [path, { content }] of diff.toCreate) {
+		if (!content) {
+			console.warn(
+				`Couldn't find content for ${path}. This shouldn't happen`
+			)
+			continue
+		}
+
+		try {
+			const res = await octokit.request(
+				"PUT /repos/{owner}/{repo}/contents/{path}",
+				{
+					owner: username,
+					repo,
+					path,
+					message: `Autoupdate: Create ${path}`,
+					content,
+					branch,
+					headers: {
+						"X-GitHub-Api-Version": "2022-11-28",
+					},
+				}
+			)
+			if (res.status >= 400) {
+				throw new Error(`Request errored with status ${res.status}`)
+			}
+
+			createCount += 1
+		} catch (error) {
+			errorCount += 1
+			console.error(`Failed to create ${path}:`, error.message)
+		}
+	}
+
+	// Update all files that changed since last update
+	for (const [path, { sha, content }] of diff.toUpdate) {
+		if (!content) {
+			console.warn(
+				`Couldn't find content for ${path}. This shouldn't happen`
+			)
+			continue
+		}
+
 		try {
 			// Retry up to 3 times for rate limits
 			let retries = 3
 			while (retries > 0) {
 				try {
-					// As a reminder, the SHAs in the template file are from the USER REPO just so they work here
-					// If a SHA is undefined, that just means that the file does not exist user side and that's fine
-					// since the API only needs SHA for overwriting
-					const putRes = await octokit.request(
+					const res = await octokit.request(
 						"PUT /repos/{owner}/{repo}/contents/{path}",
 						{
 							owner: username,
 							repo,
 							path,
-							message: `Update from template: ${path}`,
+							message: `Autoupdate: Update ${path}`,
 							content,
 							sha,
 							branch,
@@ -247,13 +332,13 @@ async function updateAndAddFiles(
 							},
 						}
 					)
-					if (putRes.status >= 400) {
+					if (res.status >= 400) {
 						throw new Error(
 							"Failed to create or overwrite user file with template file"
 						)
 					}
 
-					successCount += 1
+					updateCount += 1
 					break
 				} catch (error) {
 					retries -= 1
@@ -275,29 +360,18 @@ async function updateAndAddFiles(
 		}
 	}
 
-	// new Notice(
-	// 	`Updated ${successCount} files, deleted ${deleteCount}. ${errorCount} errors.`
-	// )
 	console.log(
-		`Update complete: ${successCount} successful, ${deleteCount} deletions, ${errorCount} errors`
+		`Update complete:
+- ${createCount} files created
+- ${deleteCount} files deleted
+- ${updateCount} files updated
+- ${errorCount} errors occured`
 	)
 }
 
-async function handleBranchSplit(
-	octokit: Octokit,
-	username: string,
-	repo: string,
-	templateFiles: Map<string, { content: string; userSha?: string }>,
-	userFilesToDelete: Set<{ path: string; userSha: string }>,
-	progressBar: {
-		fragment: DocumentFragment
-		updateProgress: (percent: number, text: string) => void
-	}
-) {
-	// Create a new branch from the latest main commit in user repo
-	// First get the reference to the latest commit on user for the SHA
-	new Notice("Creating a new branch...")
-	progressBar.updateProgress(50, "Getting latest user commit")
+async function createBranch(octokit: Octokit, username: string, repo: string) {
+	// Get a reference to the latest user commit to tell GitHub where to branch from
+	// progressBar.updateProgress(50, "Getting latest user commit")
 	const latestMainCommitOnUser = await octokit.request(
 		"GET /repos/{owner}/{repo}/git/ref/{ref}",
 		{
@@ -314,8 +388,8 @@ async function handleBranchSplit(
 	}
 	const latestUserSha = latestMainCommitOnUser.data.object.sha
 
-	// Then get the reference to the latest commit on template for the branch name
-	progressBar.updateProgress(60, "Getting latest template commit")
+	// Get a reference to the latest template commit for the branch name
+	// progressBar.updateProgress(60, "Getting latest template commit")
 	const latestMainCommitOnTemplate = await octokit.request(
 		"GET /repos/{owner}/{repo}/git/ref/{ref}",
 		{
@@ -331,11 +405,10 @@ async function handleBranchSplit(
 		throw new Error("Failed to get reference to latest template commit")
 	}
 	const latestTemplateSha = latestMainCommitOnTemplate.data.object.sha
-	const latestTemplateShaShort = latestTemplateSha.substring(0, 7)
-	const branchName = `sync-from-template-${latestTemplateShaShort}`
+	const branchName = `sync-to-commit-${latestTemplateSha.substring(0, 7)}`
 
 	// Finally, actually create the branch
-	progressBar.updateProgress(70, "Creating new branch")
+	// progressBar.updateProgress(70, "Creating new branch")
 	const branchRes = await octokit.request(
 		"POST /repos/{owner}/{repo}/git/refs",
 		{
@@ -349,37 +422,33 @@ async function handleBranchSplit(
 		throw new Error("Failed to create branch for template update")
 	}
 	console.log(`Successfully created branch ${branchName}`)
+	return { branch: branchName, commitSha: latestTemplateSha }
+}
 
-	// Push all changes to the branch
-	progressBar.updateProgress(80, "Adding changes to new branch")
-	await updateAndAddFiles(
-		octokit,
-		username,
-		repo,
-		templateFiles,
-		userFilesToDelete,
-		branchName
-	)
-
-	// Create a pull request to merge into main
-	progressBar.updateProgress(90, "Creating a pull request")
-	const prRes = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
+async function createPullRequest(
+	octokit: Octokit,
+	username: string,
+	repo: string,
+	branch: string,
+	commitSha: string
+) {
+	const res = await octokit.request("POST /repos/{owner}/{repo}/pulls", {
 		owner: username,
 		repo: repo,
-		title: `Sync template to ${latestTemplateShaShort}`,
-		body: `Sync with template commit ${TEMPLATE_OWNER}/${TEMPLATE_REPO}@${latestTemplateSha}.`,
-		head: branchName,
+		title: `Sync template to ${commitSha.substring(0, 7)}`,
+		body: `Sync with template commit ${TEMPLATE_OWNER}/${TEMPLATE_REPO}@${commitSha}.`,
+		head: branch,
 		base: "main",
 		headers: {
 			"X-GitHub-Api-Version": "2022-11-28",
 		},
 	})
-	if (prRes.status >= 400) {
-		throw new Error("Failed to create PR for template update")
+	if (res.status >= 400) {
+		throw new Error("Failed to create pull request")
 	}
-	console.log(`Created pull request at API URL: ${prRes.data.url}`)
+	console.log(`Created pull request at API URL: ${res.data.url}`)
 
-	return prRes.data.url
+	return res.data.url
 }
 
 export async function checkForTemplateUpdates(

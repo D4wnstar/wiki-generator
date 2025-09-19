@@ -19,7 +19,7 @@ export function slugPath(path: string): string {
 
 /**
  * Ensure a slug is unique by appending incrementing numbers when collisions occur.
- * @param slug The base slug to check
+ * @param slug The b slug to check
  * @param existingSlugs Set of existing slugs to check against
  * @returns A unique version of the slug
  * @example ensureUniqueSlug("hello", new Set(["hello"])) -> "hello-1"
@@ -230,6 +230,7 @@ export function createProgressBarFragment(): {
 	const updateProgress = (percent: number, text: string) => {
 		progressBar.style.width = `${percent}%`
 		progressText.textContent = text
+		console.debug(text)
 	}
 
 	return { fragment, updateProgress }
@@ -239,21 +240,28 @@ export function createProgressBarFragment(): {
  * Check if the website is up to date and show an notice with the result.
  * @param settings The plugin settings
  * @param noticeDuration The duration of the notice. Default 3 seconds
+ * @param quietLevel How much output to mute. Level 1 removes "already up to date",
+ * level 2 also removes "needs an update".
  */
 export async function isWebsiteUpToDate(
 	settings: WikiGeneratorSettings,
-	noticeDuration = 3000,
-	quiet = false
+	options?: {
+		noticeDuration?: number
+		quietLevel?: number
+	}
 ) {
+	const noticeDuration = options?.noticeDuration ?? 3000
+	const quiet = options?.quietLevel ?? 0
+
 	if (!settings.githubUsername) {
 		new Notice("The GitHub username is not set.", noticeDuration)
-		return
+		return true
 	} else if (!settings.githubRepoName) {
 		new Notice("The GitHub repository name is not set.", noticeDuration)
-		return
+		return true
 	} else if (!settings.githubRepoToken) {
 		new Notice("The GitHub repository token is not set.", noticeDuration)
-		return
+		return true
 	}
 
 	try {
@@ -262,17 +270,20 @@ export async function isWebsiteUpToDate(
 			settings.lastTemplateUpdate
 		)
 		if (updates.length === 0) {
-			if (!quiet) {
+			if (quiet < 1) {
 				new Notice(
 					"Your website is already up to date!",
 					noticeDuration
 				)
 			}
+			return true
 		} else {
-			new Notice(
-				"There is an update available for your website. Update it from the settings tab.",
-				noticeDuration
-			)
+			if (quiet < 2)
+				new Notice(
+					"There is an update available for your website. Update it from the settings tab.",
+					noticeDuration
+				)
+			return false
 		}
 	} catch (error) {
 		const msg = error.response?.data?.message ?? error.message
@@ -283,5 +294,6 @@ export async function isWebsiteUpToDate(
 			`There was an error while checking website updates: ${msg}`,
 			noticeDuration * 2
 		)
+		return true
 	}
 }
