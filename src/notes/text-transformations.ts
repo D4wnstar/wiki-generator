@@ -1,440 +1,333 @@
-import { Notice, TFile, Vault } from "obsidian"
-import { ensureUniqueSlug, replaceAllAsync, slugPath } from "src/utils"
-import { Processor, unified } from "unified"
+import { App, Component, MarkdownRenderer, TFile } from "obsidian"
 import { handleCustomSyntax } from "./custom-blocks"
-import {
-	ContentChunk,
-	Detail,
-	Frontmatter,
-	Note,
-	Pages,
-	SidebarImage,
-} from "../database/types"
-
-import remarkParse from "remark-parse"
-import remarkGfm from "remark-gfm"
-import remarkFrontmatter from "remark-frontmatter"
-import remarkRehype from "remark-rehype"
-import remarkMath from "remark-math"
-import remarkFrontmatterExport from "../unified/remark-frontmatter-export"
-
-import rehypeStylist from "../unified/rehype-stylist"
-import rehypeParse from "rehype-parse"
-import rehypeCallouts from "rehype-callouts"
-import rehypePrism from "rehype-prism-plus"
-import rehypeKatex from "rehype-katex"
-import rehypeMermaid from "rehype-mermaid"
-import rehypeSlug from "rehype-slug"
-import rehypeStringify from "rehype-stringify"
+import { Frontmatter, Note, Page } from "../database/types"
+import katex from "katex"
+import { RouteManager } from "src/commands"
 
 /**
- * Convert Markdown files into rich data structures encoding their contents.
- * @param files A list of Markdown files
- * @param processor A unified processor to convert Markdown into HTML
- * @param frontmatterProcessor A unified process to extract markdown frontmatter
- * @param imageNameToPath A Map linking image filenames with their base64 representation
- * @param vault A reference to the vault
- * @returns A Pages object containing all converted data and a Map linking lowercase
- * page titles with their full filepath slugs.
+ * Create a `Page` object from the given Markdown file, which means processing
+ * all Markdown in the file and providing the converted HTML for the website alongside
+ * any additional components.
+ * @returns A `Page` containing everything about the given file
  */
-export async function makePagesFromFiles(
-	files: { file: TFile; hash: string }[],
+export async function createPage(
+	file: TFile,
+	hash: string,
+	routes: RouteManager,
 	imageNameToPath: Map<string, string>,
-	vault: Vault
-) {
-	const lastUpdated = Math.floor(Date.now() / 1000)
-	const pages: Pages = new Map()
-	const unpublishedNotes: Set<string> = new Set()
-	const titleToPath: Map<string, string> = new Map()
-	const noteNameToPath: Map<string, { path: string; isExcalidraw: boolean }> =
-		new Map()
+	app: App
+): Promise<Page | null> {
+	const content = await app.vault.cachedRead(file)
+	const frontmatter = await extractFrontmatter(file, app)
 
-	for (const { file } of files) {
-		const content = await vault.cachedRead(file)
-		const isExcalidraw = content.includes("excalidraw-plugin:")
-		noteNameToPath.set(file.basename, { path: file.path, isExcalidraw })
-	}
+	// Skip anything that's not published
+	if (!frontmatter["wiki-publish"]) return null
 
-	// Initialize unified processors to handle syntax conversion and frontmatter export
-	const processor = unified()
-		.use(remarkParse) // Parse markdown into a syntax tree
-		.use(remarkGfm, { singleTilde: false }) // Parse Github-flavored markdown
-		.use(remarkMath) // Parse $inline$ and $$display$$ math blocks
-		.use(remarkFrontmatter) // Expose frontmatter in the syntax tree
-		.use(remarkRehype, { allowDangerousHtml: true }) // Convert to an HTML syntax tree
-		.use(rehypeKatex, { trust: true }) // Render LaTeX math with KaTeX
-		.use(rehypeSlug) // Add ids to headers
-		.use(rehypeCallouts) // Handle Obsidian-style callouts
-		.use(rehypeStylist) // Add classes to tags that are unstyled in Tailwind
-		.use(rehypePrism, { defaultLanguage: "markdown", ignoreMissing: true }) // Highlight code blocks
-		.use(rehypeMermaid, { strategy: "img-svg", dark: true }) // Render Mermaid diagrams
-		.use(rehypeStringify, { allowDangerousHtml: true }) // Compile syntax tree into an HTML string
-
-	const latexProcessor = unified()
-		.use(remarkParse)
-		.use(remarkMath)
-		.use(remarkRehype, { allowDangerousHtml: true })
-		.use(rehypeKatex, { trust: true })
-		.use(rehypeStringify, { allowDangerousHtml: true })
-
-	const frontmatterProcessor = unified()
-		.use(remarkFrontmatter)
-		.use(remarkFrontmatterExport) // Export the frontmatter into an array
-		.use(rehypeParse)
-		.use(rehypeStringify)
-
-	// Keep track of previous slugs to avoid collisions
-	// This is done manually despite using github-slugger because slugger turns
-	// '/' into '-' and breaks paths, so it is instead ran on each path element
-	// and the full path is reconstructed and tracked manually
-	const previousSlugs: Set<string> = new Set()
-
-	const failedPages: { path: string; error: Error }[] = []
-
-	for (const { file, hash } of files) {
-		try {
-			const title = file.basename
-			const path = file.path
-			const slug = ensureUniqueSlug(slugPath(file.path), previousSlugs)
-			previousSlugs.add(slug)
-
-			let content = await vault.cachedRead(file)
-
-			// Grab the frontmatter first because we need some properties
-			const fmVfile = await frontmatterProcessor.process(content)
-			const frontmatter = fmVfile.data.matter as Frontmatter
-
-			// Anything that's not public should me marked as such keep thing synced
-			if (!frontmatter["wiki-publish"]) {
-				unpublishedNotes.add(file.path)
-				continue
-			}
-
-			// Parse and replace custom :::blocks::: and other non-standard syntax
-			// Codeblocks are removed and added back later to keep them unmodified
-			content = await processDisplayLatex(content, latexProcessor)
-			const { md, inlineCode, codeBlocks } = removeCodeblocks(content)
-			const { md: md2, footnotes } = await removeFootnotes(md, processor)
-			const { wChunks, details, sidebarImages } =
-				await handleCustomSyntax(
-					md2,
-					file.name,
-					processor,
-					imageNameToPath,
-					noteNameToPath
-				)
-			let chunks = addFootnotesBack(wChunks.chunks, footnotes)
-			chunks = addCodeblocksBack(chunks, inlineCode, codeBlocks)
-
-			// Convert the markdown of each chunk separately
-			for (const chunk of chunks) {
-				if (!chunk.text) continue
-				chunk.text = String(await processor.process(chunk.text))
-			}
-
-			// Save the current title/slug pair for later use
-			titleToPath.set(title.toLowerCase(), slug)
-
-			// Get aliases as search terms
-			const alt_title = frontmatter["wiki-title"] ?? null
-			const aliases = frontmatter["aliases"]?.join("; ") as
-				| string
-				| undefined
-			let search_terms = title
-			search_terms += alt_title ? `; ${alt_title}` : ""
-			search_terms += aliases ? `; ${aliases}` : ""
-
-			// A page can be prerendered if it does not depend on user permission
-			const allowed_users =
-				frontmatter["wiki-allowed-users"]?.join("; ") ?? null
-			const requiresAuth =
-				allowed_users !== null ||
-				chunks.some((chunk) => chunk.allowed_users !== null)
-
-			const note: Note = {
-				title,
-				alt_title,
-				search_terms,
-				path,
-				slug: slug,
-				frontpage: frontmatter["wiki-home"] ?? 0,
-				lead: "", // Currently unused, needed for popups once they are reimplemented
-				allowed_users,
-				hash,
-				last_updated: lastUpdated,
-				can_prerender: Number(!requiresAuth),
-			}
-			pages.set(path, { note, chunks, details, sidebarImages })
-		} catch (error) {
-			failedPages.push({ path: file.path, error })
-			continue
-		}
-	}
-
-	if (failedPages.length > 0) {
-		console.warn(`${failedPages.length} pages failed to process:`)
-		new Notice(`${failedPages.length} pages failed to process:`)
-		for (const { path, error } of failedPages) {
-			console.warn(`- ${path}: ${error.message}`)
-		}
-	}
-
-	return { pages, titleToPath, unpublishedNotes }
-}
-
-/**
- * Replace inline code and codeblocks with plain text identifiers (<|inlinecode_i|> and
- * <|codeblock_i|> where i is the order of appearance of the codeblock (starting from 1).
- * Intended to be * coupled with `addCodeblocksBack`, mostly to prevent codeblocks from
- * being formatted.
- * @param text The Markdown text to transform
- * @returns The modified text and a list of Markdown codeblocks
- */
-export function removeCodeblocks(text: string): {
-	md: string
-	inlineCode: Map<number, string>
-	codeBlocks: Map<number, string>
-} {
-	// Remove codeblocks from the markdown as anything inside of them should be kept as is
-	// Instead, add a generic marker to know where the codeblocks were and add them back later
-	const codeBlockRegex = /^```(\w*)\n(.*?)\n```/gms
-	const inlineCodeRegex = /(?<=[^`])`([^`\n]+?)`(?!`)/g
-
-	const codeBlocks: Map<number, string> = new Map()
-	const inlineCode: Map<number, string> = new Map()
-
-	let counter = 0
-	text = text.replace(codeBlockRegex, (block, lang) => {
-		// Ignore TikZ! These are rendered into SVG separately when chunking
-		if (lang === "tikz") return block
-		counter += 1
-		codeBlocks.set(counter, block)
-		return `<|codeblock_${counter}|>`
-	})
-
-	counter = 0
-	text = text.replace(inlineCodeRegex, (block) => {
-		counter += 1
-		inlineCode.set(counter, block)
-		return `<|inlinecode_${counter}|>`
-	})
-
-	return { md: text, inlineCode, codeBlocks }
-}
-
-/**
- * Add codeblocks and inline code removed by `removeCodeblocks`.
- * @param text The markdown to transform
- * @param codeBlocks A string array of codeblocks
- * @returns The transformed markdown, with all codeblocks put back in place
- */
-export function addCodeblocksBack(
-	chunks: ContentChunk[],
-	inlineCode: Map<number, string>,
-	codeBlocks: Map<number, string>
-): ContentChunk[] {
-	return chunks.map((chunk) => {
-		const text = chunk.text
-			.replace(
-				/<\|inlinecode_(\d+)\|>/g,
-				(_match, blockId) => inlineCode.get(parseInt(blockId)) ?? ""
-			)
-			.replace(
-				/<\|codeblock_(\d+)\|>/g,
-				(_match, blockId) => codeBlocks.get(parseInt(blockId)) ?? ""
-			)
-		return { ...chunk, text }
-	})
-}
-
-/**
- * LaTeX display blocks are kinda broken with the builtin remark/rehype pipeline if they
- * are not on a clean line. They break if they are on a line with existing formatting, such
- * as a list, a blockquote or a callout. As a workaround, thi function extracts display math
- * blocks individually and process them in isolation. The HTML is then intended to be passed
- * as-is through the main processor.
- *
- * It also updates environments that lead to automatic equation numbering in normal LaTeX, like
- * `align`, and turns them in their respective non-numbering version, like `align*`, to match
- * Obsidian behavior.
- *
- * @param md The text to process
- * @param latexProcessor A processor to convert math blocks into HTML
- * @returns The processed text
- */
-async function processDisplayLatex(
-	md: string,
-	latexProcessor: Processor<any, any, any, any, any>
-) {
-	md = md.replaceAll(
-		/\\(begin|end){(align|equation|gather|multline|eqnarray)}/g,
-		"\\$1{$2*}"
+	// Parse and replace custom :::blocks::: and other non-standard syntax
+	const parsed = await handleCustomSyntax(
+		content,
+		file.name,
+		app,
+		routes,
+		imageNameToPath
 	)
-	return await replaceAllAsync(
-		md,
-		/^\s*([>-])\s*\$\$(.*?)\$\$/gms,
-		async (_match, before, inner) => {
-			inner = inner.replaceAll(/^\s*[>-]\s*/gm, "")
-			return (
-				before +
-				String(await latexProcessor.process(`\n$$\n${inner}\n$$\n\n`))
-			)
-		}
+
+	// Convert the entire markdown to HTML using Obsidian's builtin renderer
+	let html = await mdToHtml(parsed.md, app, routes, imageNameToPath)
+
+	// Add KaTeX math manually
+	html = html.replace(/\|math\|(<br>)?/g, () =>
+		katex.renderToString(parsed.math.block.pop() ?? "", {
+			displayMode: true,
+		})
 	)
+	html = html.replace(/\|math-inline\|/g, () =>
+		katex.renderToString(parsed.math.inline.pop() ?? "")
+	)
+
+	// Manage titles and routes
+	const route = routes.getRoute(file.path) ?? file.basename.replace(/ /g, "_")
+	const alt_title = frontmatter["wiki-title"] ?? null
+	const title = alt_title ?? file.basename
+	const aliases = frontmatter["aliases"]?.join("; ") as string | undefined
+	const search_terms = title + (aliases ? `; ${aliases}` : "")
+
+	// A page is secret if there are allowed users (not null and not empty) or
+	// if there are any secret blocks. Nonsecret pages can be prerendered
+	const allowed_users = frontmatter["wiki-allowed-users"]?.join("; ") ?? null
+	const isSecret = allowed_users || parsed.isSecret
+
+	const note: Note = {
+		title,
+		route,
+		search_terms,
+		path: file.path,
+		frontpage: frontmatter["wiki-home"] ?? 0,
+		lead: "", // Currently unused, needed for popups once they are reimplemented
+		allowed_users,
+		hash,
+		last_updated: Math.floor(Date.now() / 1000),
+		can_prerender: Number(!isSecret),
+		html_content: html.trim(),
+	}
+
+	return {
+		note,
+		details: parsed.details,
+		sidebarImages: parsed.sidebarImages,
+	}
 }
 
 /**
- * Remove footnote definitions and encode references to those footnotes to avoid them being
- * processed by the main loop. This is because automatic footnote processing is broken when
- * done chunk-by-chunk since they require referencing all the way across the file. Meant to
- * be paired with `addFootnotesBack`.
- *
- * @param md The text to parse
- * @param processor General purpose processor to convert md to HTML
- * @returns The text without the footnotes and encoded references
+ * Return the file's frontmatter as an object.
  */
-async function removeFootnotes(
+async function extractFrontmatter(file: TFile, app: App) {
+	let frontmatter: Frontmatter
+	return app.fileManager
+		.processFrontMatter(file, (matter) => (frontmatter = matter))
+		.then(() => frontmatter)
+}
+
+/**
+ * Convert a Markdown string into HTML using Obsidian's builtin converter,
+ * then postprocess the HTML to fix/modify tags to a more useful form.
+ * @returns The converted HTML
+ */
+export async function mdToHtml(
 	md: string,
-	processor: Processor<any, any, any, any, any>
+	app: App,
+	routes: RouteManager,
+	imageNameToPath: Map<string, string>,
+	options?: { unwrap?: boolean }
 ) {
-	const footnotes: Map<string, string> = new Map()
-	for (const match of md.matchAll(/^\[\^(.*?)\]:\s*(.*)/gm)) {
-		const id = encodeURIComponent(match[1])
-		const text = match[2] + ` <a class="anchor" href="#ref_${id}">↩</a>`
-		footnotes.set(match[1], String(await processor.process(text)))
-	}
+	// Create a temporary element to render the markdown to
+	const tempEl = document.createElement("div")
 
-	md = md.replaceAll(/^\[\^.*?\]:.*/gm, "")
-	md = md.replaceAll(/\[\^(.*?)\]/g, "<|footnote_$1|>")
-	return { md, footnotes }
+	try {
+		await MarkdownRenderer.render(app, md, tempEl, "", new Component())
+		return postprocessHtml(
+			tempEl.innerHTML,
+			routes,
+			imageNameToPath,
+			options?.unwrap
+		)
+	} finally {
+		tempEl.remove()
+	}
 }
 
 /**
- * Add the footnotes removed by `removeFootnotes`.
- * @param chunks The chunks to process
- * @param footnotes The Map of footnotes created by `removeFootnotes`
- * @returns The processed chunks
+ * Process an HTML string to run a bunch of miscellaneous changes and fixes to
+ * Obsidian HTML. This is done to turn the HTML in a more useful form for the frontend.
+ * @returns The processed HTML
  */
-function addFootnotesBack(
-	chunks: ContentChunk[],
-	footnotes: Map<string, string>
+export function postprocessHtml(
+	html: string,
+	routes: RouteManager,
+	imageNameToPath: Map<string, string>,
+	unwrap?: boolean
 ) {
-	for (const [idx, chunk] of chunks.entries()) {
-		chunk.text = chunk.text.replaceAll(/<\|footnote_(.*?)\|>/g, (_m, i) => {
-			const id = encodeURIComponent(i)
-			return `<sup id="ref_${id}"><a class="anchor" href="#footnote_${id}">[${i}]</a></sup>`
-		})
+	const parser = new DOMParser()
+	const doc = parser.parseFromString(html, "text/html")
 
-		if (idx === chunks.length - 1 && footnotes.size > 0) {
-			const footnoteText = footnotes.entries().reduce((t, [i, f]) => {
-				const id = encodeURIComponent(i)
-				return (t += `<div class="flex" id="footnote_${id}"><span style="opacity: 0.5; margin-right: 4px;">${i}.</span>${f}</div>`)
-			}, "")
+	// Unwrap the topmost element if requested
+	if (unwrap && doc.body.firstElementChild) {
+		doc.body.replaceChildren(
+			...Array.from(doc.body.firstElementChild.childNodes)
+		)
+	}
 
-			chunk.text +=
-				'<hr class="hr" /><section class="space-y-2">' +
-				footnoteText +
-				"</section>"
+	// Remove frontmatter
+	doc.querySelectorAll("pre.frontmatter").forEach((pre) => pre.remove())
+
+	// Change link URLs to be actual website URLs
+	const links = Array.from(doc.querySelectorAll("a")).reverse()
+	for (const link of links) {
+		link.removeAttribute("data-href")
+		link.removeAttribute("data-tooltip-position")
+
+		const href = link.getAttribute("href")
+		if (!href) continue
+		if (link.className.includes("external-link")) continue
+
+		// Remove target="_blank" and classes from internal links
+		link.removeAttribute("target")
+		link.removeAttribute("class")
+
+		// Leave internal links alone
+		if (href.startsWith("#")) continue
+
+		// Remove any hash fragment for lookup
+		const hashIndex = href.indexOf("#")
+		let titleOrPath = hashIndex > -1 ? href.substring(0, hashIndex) : href
+		if (titleOrPath.includes("/")) {
+			titleOrPath = titleOrPath.concat(".md")
+		}
+
+		if (routes.getRoute(titleOrPath)) {
+			const route = routes.getRoute(titleOrPath) as string
+			const sub =
+				hashIndex > -1
+					? `/wiki/${route}${href.substring(hashIndex)}`
+					: `/wiki/${route}`
+			link.setAttribute("href", sub)
+		} else if (imageNameToPath.has(titleOrPath)) {
+			const slug = imageNameToPath.get(titleOrPath) as string
+			const path = encodeURIComponent(slug)
+			link.setAttribute("href", `/api/v1/image/${path}`)
+		} else {
+			// If no slug is found, unwrap the anchor tag
+			const parent = link.parentNode
+			while (link.firstChild) {
+				parent?.insertBefore(link.firstChild, link)
+			}
+			parent?.removeChild(link)
 		}
 	}
 
-	return chunks
-}
+	// Unwrap images nested in p > span > img to be top-level img elements
+	const nestedImgs = Array.from(
+		doc.querySelectorAll("p > span.image-embed > img")
+	)
+	for (const img of nestedImgs) {
+		const span = img.parentElement
+		const p = span?.parentElement
 
-/**
- * Unwrap wikilinks by removing the brackets around them, replacing them with the linked
- * note's name or its alias, if present.
- * @param text The text to modify
- * @param removeReferences Whether to delete references instead of unwrapping them
- * @param removeTransclusions Whether to delete transclusions instead of unwrapping them
- * @returns The modified text
- * @example '[[Page name]]' -> 'Page name'
- * @example '[[Page name#Header]]' -> 'Page name'
- * @example '[[Page name#Header|Alias]]' -> 'Alias'
- */
-export function unwrapWikilinks(
-	text: string,
-	removeReferences = false,
-	removeTransclusions = false
-): string {
-	const transclusionRegex = /!\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/g
-	const referenceRegex = /\[\[(.*?)(#\^?.*?)?(\|.*?)?\]\]/g
-
-	console.log("Replacing transclusions")
-	text = text.replaceAll(transclusionRegex, (_match, groups) => {
-		if (removeTransclusions) return ""
-		if (groups[3]) return groups[3]
-		return groups[1]
-	})
-
-	console.log("Replacing references")
-	text = text.replace(referenceRegex, (_match, groups) => {
-		if (removeReferences) return ""
-		if (groups[3]) return groups[3]
-		return groups[1]
-	})
-
-	return text
-}
-
-export async function convertWikilinks(
-	pages: Pages,
-	processor: Processor<any, any, any, any, any>
-) {
-	const newPages: Pages = new Map()
-
-	// Create a new version of each page where all text has been run
-	// through wikilink conversion
-	for (const [id, page] of pages.entries()) {
-		// Note objects have no text
-
-		// Process each ContentChunk
-		const newChunks: ContentChunk[] = []
-		for (const chunk of page.chunks) {
-			const newText = await processor
-				.process(chunk.text)
-				.then((vfile) => String(vfile))
-
-			newChunks.push({ ...chunk, text: newText })
+		// If we have all the elements, move the img to be a sibling of the p
+		if (p && span) {
+			p.parentNode?.insertBefore(img, p)
+			span.remove()
+			p.remove()
 		}
-
-		// Process all Details. Only values need to be converted
-		const newDetails: Detail[] = []
-		for (const detail of page.details) {
-			let newValue: string | null
-			if (detail.value) {
-				newValue = await processor
-					.process(detail.value)
-					.then((vfile) => String(vfile))
-			} else {
-				newValue = null
-			}
-
-			newDetails.push({ ...detail, value: newValue })
-		}
-
-		// Process all sidebar image captions
-		const newSidebarImages: SidebarImage[] = []
-		for (const img of page.sidebarImages) {
-			let newCaption: string | null
-			if (img.caption) {
-				newCaption = await processor
-					.process(img.caption)
-					.then((vfile) => String(vfile))
-			} else {
-				newCaption = null
-			}
-
-			newSidebarImages.push({ ...img, caption: newCaption })
-		}
-
-		newPages.set(id, {
-			note: page.note,
-			chunks: newChunks,
-			details: newDetails,
-			sidebarImages: newSidebarImages,
-		})
 	}
 
-	return newPages
+	// Handle <img> sources and captions
+	const imgs = Array.from(doc.querySelectorAll("img"))
+	for (const img of imgs) {
+		// The alt property contains the filename
+		const filename = img.getAttribute("alt")
+		if (!filename) continue
+
+		// Inline :::image::: blocks add their caption as the next element over
+		// Frontend uses alt to initialize caption, so we move it to there
+		const caption = img.nextElementSibling
+		if (
+			caption &&
+			caption.tagName === "P" &&
+			caption.classList.contains("image-caption")
+		) {
+			img.setAttribute("alt", caption.textContent ?? "")
+			caption.remove()
+		} else {
+			img.removeAttribute("alt")
+		}
+
+		const path = imageNameToPath.get(filename)
+		if (path) {
+			const component = encodeURIComponent(path)
+			img.setAttribute("src", `/api/v1/image/${component}`)
+		} else {
+			img.removeAttribute("src")
+		}
+	}
+
+	// Support for Excalidraw (make sure SVGs are being exported)
+	const excImgs = Array.from(
+		doc.querySelectorAll("img.excalidraw-embedded-img")
+	)
+	for (const img of excImgs) {
+		const path = img.getAttribute("filesource")?.replace(/\.md$/, ".svg")
+		if (path) {
+			img.setAttribute("src", `/api/v1/image/${encodeURIComponent(path)}`)
+		} else {
+			img.removeAttribute("src")
+		}
+	}
+
+	// Move data-heading to id on <hN>
+	for (const h of ["h1", "h2", "h3", "h4", "h5", "h6"]) {
+		const headers = Array.from(doc.querySelectorAll(h))
+		for (const header of headers) {
+			const id = header.getAttribute("data-heading")
+			if (id) header.setAttribute("id", encodeURIComponent(id))
+			header.removeAttribute("data-heading")
+		}
+	}
+
+	// Remove copy code buttons
+	doc.querySelectorAll("button.copy-code-button").forEach((btn) =>
+		btn.remove()
+	)
+
+	// Default code blocks to markdown if language is unspecified (prevents unstyled code blocks)
+	const presWithCode = Array.from(doc.querySelectorAll("pre:has(> code)"))
+	for (const pre of presWithCode) {
+		if (pre.classList.length === 0) {
+			pre.className = "language-markdown"
+			const code = pre.querySelector("code")
+			if (code && code.classList.length === 0) {
+				code.className = "language-markdown"
+			}
+		}
+	}
+
+	// Text embeds: Remove empty tags
+	doc.querySelectorAll("div.markdown-embed-title").forEach((div) =>
+		div.remove()
+	)
+	doc.querySelectorAll("p:has(> span.markdown-embed)").forEach((p) =>
+		p.remove()
+	)
+
+	// Text embeds: Change classes
+	doc.querySelectorAll("div.markdown-preview-view").forEach(
+		(div) => (div.className = "note-embed")
+	)
+
+	// Disable checklist checkboxes
+	doc.querySelectorAll("input.task-list-item-checkbox").forEach((input) =>
+		input.setAttribute("disabled", "")
+	)
+
+	// Callout icons are not available in the rendered HTML (probably added by JS after render)
+	// so we do the same here (icons are below)
+	const callouts = Array.from(doc.querySelectorAll(".callout"))
+	for (const callout of callouts) {
+		const icon = callout.querySelector(".callout-icon")
+		const calloutType = callout.getAttribute("data-callout")
+		if (!icon || !calloutType) continue
+		const svg = calloutIcons[calloutType]
+		if (!svg) continue
+
+		icon.innerHTML = svg
+	}
+
+	return doc.body.innerHTML
+}
+
+const calloutIcons: Record<string, string> = {
+	abstract: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-clipboard-list-icon lucide-clipboard-list"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg>`,
+	attention: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-triangle-alert-icon lucide-triangle-alert"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>`,
+	bug: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-bug-icon lucide-bug"><path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/><path d="M12 20v-9"/><path d="M6.53 9C4.6 8.8 3 7.1 3 5"/><path d="M6 13H2"/><path d="M3 21c0-2.1 1.7-3.9 3.8-4"/><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"/><path d="M22 13h-4"/><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"/></svg>`,
+	caution: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-triangle-alert-icon lucide-triangle-alert"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>`,
+	check: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check-icon lucide-check"><path d="M20 6 9 17l-5-5"/></svg>`,
+	cite: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-quote-icon lucide-quote"><path d="M16 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/><path d="M5 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/></svg>`,
+	danger: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-zap-icon lucide-zap"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>`,
+	done: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check-icon lucide-check"><path d="M20 6 9 17l-5-5"/></svg>`,
+	error: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-zap-icon lucide-zap"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>`,
+	fail: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-x-icon lucide-x"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`,
+	failure: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-x-icon lucide-x"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`,
+	faq: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle-question-mark-icon lucide-circle-question-mark"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>`,
+	help: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle-question-mark-icon lucide-circle-question-mark"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>`,
+	hint: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-flame-icon lucide-flame"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>`,
+	important: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-flame-icon lucide-flame"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>`,
+	info: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-info-icon lucide-info"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`,
+	example: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-list-icon lucide-list"><path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/></svg>`,
+	missing: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-x-icon lucide-x"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`,
+	question: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle-question-mark-icon lucide-circle-question-mark"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>`,
+	quote: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-quote-icon lucide-quote"><path d="M16 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/><path d="M5 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/></svg>`,
+	success: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check-icon lucide-check"><path d="M20 6 9 17l-5-5"/></svg>`,
+	tip: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-flame-icon lucide-flame"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>`,
+	todo: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle-check-icon lucide-circle-check"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>`,
+	warning: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-triangle-alert-icon lucide-triangle-alert"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>`,
 }

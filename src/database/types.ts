@@ -3,16 +3,16 @@ import { WikiGeneratorSettings } from "src/settings"
 
 export type Note = {
 	title: string
-	alt_title: string | null
+	route: string
 	search_terms: string
 	path: string
-	slug: string
 	frontpage: string | number // actually boolean but SQLite is jank
 	lead: string
 	allowed_users: string | null
 	hash: string
 	last_updated: number
 	can_prerender: number // actually boolean but SQLite is jank
+	html_content: string
 }
 
 export type Frontmatter = {
@@ -24,7 +24,7 @@ export type Frontmatter = {
 
 export type Detail = {
 	order: number
-	key: string
+	key: string | null
 	value: string | null
 }
 
@@ -33,14 +33,6 @@ export type SidebarImage = {
 	image_name: string
 	image_path: string
 	caption: string | null
-}
-
-export type ContentChunk = {
-	chunk_id: number
-	text: string
-	allowed_users: string | null
-	image_path: string | null
-	note_transclusion_path: string | null
 }
 
 export type Image = {
@@ -58,15 +50,11 @@ export type ImageData = {
 	hash: string
 }
 
-export type Pages = Map<
-	string,
-	{
-		note: Note
-		chunks: ContentChunk[]
-		details: Detail[]
-		sidebarImages: SidebarImage[]
-	}
->
+export type Page = {
+	note: Note
+	details: Detail[]
+	sidebarImages: SidebarImage[]
+}
 
 export type User = {
 	id: number
@@ -93,7 +81,7 @@ export interface DatabaseAdapter {
 	deleteImagesByPath(paths: string[]): Promise<number>
 
 	getNotes(): Promise<Note[]>
-	insertPages(pages: Pages): Promise<number>
+	insertPages(pages: Page[]): Promise<number>
 	deleteNotesByPath(paths: string[]): Promise<number>
 
 	updateSettings(settings: WikiGeneratorSettings): Promise<void>

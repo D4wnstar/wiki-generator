@@ -1,22 +1,15 @@
 import { App, Notice, request, TFile, Vault } from "obsidian"
 import { WikiGeneratorSettings } from "./settings"
 import { createProgressBarFragment, getPublishableFiles } from "./utils"
-import { unified } from "unified"
 import { createLocalDatabase, initializeAdapter } from "./database/init"
 import {
 	getUsersFromRemote,
 	LocalDatabaseAdapter,
 	RemoteDatabaseAdapter,
 } from "./database/operations"
-import {
-	convertWikilinks,
-	makePagesFromFiles,
-} from "./notes/text-transformations"
-import { DatabaseAdapter, Pages } from "./database/types"
+import { createPage } from "./notes/text-transformations"
+import { DatabaseAdapter, Page } from "./database/types"
 
-import rehypeParse from "rehype-parse"
-import rehypeWikilinks from "./unified/rehype-wikilinks"
-import rehypeStringify from "rehype-stringify"
 import { wikilinkRegex } from "./notes/regexes"
 import * as crypto from "crypto"
 import { createClient } from "@libsql/client"
@@ -35,7 +28,7 @@ const IMAGE_EXTENSIONS = ["png", "webp", "jpg", "jpeg", "gif", "bmp", "svg"]
  * @param reset Whether the database should be reset before uploading
  */
 export async function syncNotes(
-	vault: Vault,
+	app: App,
 	settings: WikiGeneratorSettings,
 	reset = false
 ) {
@@ -53,7 +46,7 @@ export async function syncNotes(
 	const notice = new Notice(fragment, 0)
 
 	// Initialize common database interface
-	const database = await initializeAdapter(settings, vault)
+	const database = await initializeAdapter(settings, app.vault)
 
 	try {
 		if (reset) {
@@ -68,11 +61,11 @@ export async function syncNotes(
 
 		updateProgress(20, "Collecting files...")
 		console.log("Collecting files...")
-		const files = await collectFiles(database, vault)
+		const files = await collectFiles(database, app.vault)
 
 		updateProgress(35, "Collecting notes...")
 		console.log("Collecting notes...")
-		const notes = await collectNotes(database, vault)
+		const notes = await collectNotes(database, app.vault)
 
 		updateProgress(50, "Processing notes...")
 		console.log("Processing notes...")
@@ -80,7 +73,7 @@ export async function syncNotes(
 			notes.toProcess,
 			notes.outdated,
 			files.images.nameToPath,
-			vault
+			this.app
 		)
 
 		updateProgress(65, "Syncing files...")
@@ -88,7 +81,7 @@ export async function syncNotes(
 			files.images.toInsert,
 			files.images.toDelete,
 			database,
-			vault
+			app.vault
 		)
 
 		updateProgress(80, "Syncing notes...")
@@ -118,7 +111,7 @@ export async function syncNotes(
 		if (settings.localExport) {
 			updateProgress(98, "Exporting database...")
 			console.log("Exporting database...")
-			await database.export(vault)
+			await database.export(app.vault)
 			updateProgress(100, notice)
 		} else {
 			// Ping Vercel so it rebuilds the site, but only if something changed
@@ -261,7 +254,9 @@ async function collectNotes(database: DatabaseAdapter, vault: Vault) {
 
 	// Notes that exist in remote but not in local are outdated and should be deleted
 	const remotePaths = new Set(remoteHashes.keys())
-	const outdatedNotes = remotePaths.difference(localPaths)
+	const outdatedNotes = new Set(
+		[...remotePaths].filter((x) => !localPaths.has(x))
+	)
 
 	console.debug("Notes to process:", notesToProcess)
 	console.debug("Outdated notes:", outdatedNotes)
@@ -331,28 +326,56 @@ async function processNotes(
 	files: { file: TFile; hash: string }[],
 	outdatedNotePaths: Set<string>,
 	imageNameToPath: Map<string, string>,
-	vault: Vault
+	app: App
 ) {
-	// Convert notes into rich data structures
-	const { pages, titleToPath, unpublishedNotes } = await makePagesFromFiles(
-		files,
-		imageNameToPath,
-		vault
-	)
+	// Bind titles to paths
+	const routeManager = new RouteManager()
+	for (const file of app.vault.getMarkdownFiles()) {
+		routeManager.createRoute(file.path, file.basename)
+	}
+	console.debug("Routes", routeManager)
+	console.debug("Image name -> Path", imageNameToPath)
 
-	// Initialize one last processor to handle wikilink conversion
-	const postprocessor = unified()
-		.use(rehypeParse, { fragment: true })
-		.use(rehypeWikilinks, titleToPath, imageNameToPath)
-		.use(rehypeStringify, { allowDangerousHtml: true })
+	// Process the notes
+	const pages: Page[] = []
+	const unpublishedNotes: Set<string> = new Set()
+	const failedPages: { path: string; error: Error }[] = []
+	for (const { file, hash } of files) {
+		try {
+			const page = await createPage(
+				file,
+				hash,
+				routeManager,
+				imageNameToPath,
+				app
+			)
 
-	console.log("Converting wikilinks...")
-	const pagesWithLinks = await convertWikilinks(pages, postprocessor)
-	console.debug("Pages to insert:", pagesWithLinks)
+			if (page) {
+				pages.push(page)
+			} else {
+				unpublishedNotes.add(file.path)
+			}
+		} catch (error) {
+			failedPages.push({ path: file.path, error })
+			continue
+		}
+	}
+
+	if (failedPages.length > 0) {
+		new Notice(`${failedPages.length} pages failed to process`)
+		console.warn(`${failedPages.length} pages failed to process:`)
+		for (const { path, error } of failedPages) {
+			console.warn(`- ${path}: ${error.message}`)
+		}
+	}
+
+	const unpublishedNotesArray = Array.from(unpublishedNotes)
+	const outdatedNotePathsArray = Array.from(outdatedNotePaths)
+	const toDeleteArray = [...outdatedNotePathsArray, ...unpublishedNotesArray]
 
 	return {
-		toInsert: pagesWithLinks,
-		toDelete: outdatedNotePaths.union(unpublishedNotes),
+		toInsert: pages,
+		toDelete: new Set(toDeleteArray),
 	}
 }
 
@@ -362,7 +385,7 @@ export interface PageSyncResult {
 }
 
 async function syncPages(
-	pagesToInsert: Pages,
+	pagesToInsert: Page[],
 	pagesToDelete: Set<string>,
 	imagePathsInDb: string[],
 	database: DatabaseAdapter
@@ -396,7 +419,8 @@ async function getImageReferencesInVault(vault: Vault): Promise<Set<string>> {
 		try {
 			// Scan each file for image filenames
 			const content = await vault.cachedRead(file)
-			refs = refs.union(getImageReferencesInString(content))
+			const newRefs = getImageReferencesInString(content)
+			refs = new Set([...refs, ...newRefs])
 		} catch (error) {
 			console.error(`Error reading ${file.path}:`, error)
 		}
@@ -414,10 +438,10 @@ function getImageReferencesInString(text: string): Set<string> {
 			refs.add(filename)
 		} else if (extension === "excalidraw") {
 			refs.add(filename + ".svg")
-		} else if (!extension && match[1] /* is transclusion */) {
+		} else if (!extension && match[1] /* is embed */) {
 			// Since Excalidraw files are (very annoyingly) just markdown, it's
-			// pretty much impossible to reliably distinguish Excalidraw transclusions from
-			// generic note transclusions. As such, we optimistically assume any transclusion
+			// pretty much impossible to reliably distinguish Excalidraw embeds from
+			// generic note embeds. As such, we optimistically assume any embed
 			// without an extension is actually an Excalidraw file and add it to the refs.
 			// Worst case scenario we add a bit too many images.
 			refs.add(filename.replace(/\.md$/, "") + ".svg")
@@ -437,34 +461,25 @@ function getImageReferencesInString(text: string): Set<string> {
  * @param pages The Pages to analyze
  * @param images The set of images that goes alongside the pages
  */
-function validateForeignKeys(pages: Pages, imagePathsInDb: string[]) {
+function validateForeignKeys(pages: Page[], imagePathsInDb: string[]) {
 	const missingRefs = new Map<string, string[]>()
-	for (const [notePath, page] of pages.entries()) {
-		const chunksWithIssues: string[] = []
+	for (const page of pages) {
+		const issues: string[] = []
 
-		for (const [idx, chunk] of page.chunks.entries()) {
-			if (
-				chunk.note_transclusion_path &&
-				!pages.has(chunk.note_transclusion_path)
-			) {
-				chunksWithIssues.push(
-					`Chunk ${idx}: Missing transcluded note '${chunk.note_transclusion_path}'`
+		// Check sidebar images for missing references
+		for (const img of page.sidebarImages) {
+			const imageExists = imagePathsInDb.some(
+				(path) => path === img.image_path
+			)
+			if (!imageExists) {
+				issues.push(
+					`Sidebar image '${img.image_name}' references missing image '${img.image_path}'`
 				)
-			}
-			if (chunk.image_path) {
-				const imageExists = imagePathsInDb.some(
-					(path) => path === chunk.image_path
-				)
-				if (!imageExists) {
-					chunksWithIssues.push(
-						`Chunk ${idx}: Missing image '${chunk.image_path}'`
-					)
-				}
 			}
 		}
 
-		if (chunksWithIssues.length > 0) {
-			missingRefs.set(notePath, chunksWithIssues)
+		if (issues.length > 0) {
+			missingRefs.set(page.note.path, issues)
 		}
 	}
 
@@ -541,7 +556,7 @@ export async function syncIndividualNote(
 			[{ file: note, hash }],
 			new Set(),
 			files.images.nameToPath,
-			vault
+			this.app
 		)
 		const fileSync = await syncFiles(
 			files.images.toInsert,
@@ -742,5 +757,149 @@ export async function pingDeployHook(settings: WikiGeneratorSettings) {
 			})
 	} else {
 		new Notice("No deploy hook is set. Please add one in the settings.")
+	}
+}
+
+/**
+ * Convert note titles to website routes while avoiding duplicates and
+ * disambiguating appropriately. Route format is inspired by Wikipedia,
+ * where the route *is* the title, with spaces turned to underscores and
+ * disambiguations are added in parenthesis after.
+ */
+export class RouteManager {
+	private titleToRoute: Map<string, string> = new Map()
+	private pathToRoute: Map<string, string> = new Map()
+	// Save all the paths that would point to the same route for disambiguation
+	private routeToPaths: Map<string, string[]> = new Map()
+
+	private encodeRoute(title: string) {
+		return encodeURIComponent(title.replace(/ /g, "_"))
+	}
+
+	/**
+	 * Create a route for a file path, handling collisions by appending folder names
+	 * @param path The full path of the file
+	 * @param title The basename of the file
+	 * @returns The unique route for this file
+	 */
+	createRoute(path: string, title: string): string {
+		// Check if we've already processed this path
+		if (this.pathToRoute.has(path)) return this.pathToRoute.get(path)!
+
+		const baseRoute = this.encodeRoute(title)
+
+		// If no path points to this route, just add it to the list
+		if (!this.routeToPaths.has(baseRoute)) {
+			this.routeToPaths.set(baseRoute, [path])
+			this.pathToRoute.set(path, baseRoute)
+			this.titleToRoute.set(title, baseRoute)
+			this.titleToRoute.set(title.toLowerCase(), baseRoute)
+			return baseRoute
+		}
+
+		// Otherwise disambiguate and add that
+		const fixedRoute = this.disambiguateRoute(baseRoute, path)
+		this.pathToRoute.set(path, fixedRoute)
+		this.titleToRoute.set(title, fixedRoute)
+		this.titleToRoute.set(title.toLowerCase(), fixedRoute)
+		return fixedRoute
+	}
+
+	/**
+	 * Get the route associated with the given string. Automatically handles
+	 * both titles and filepaths.
+	 */
+	getRoute(titleOrPath: string) {
+		if (titleOrPath.includes("/")) {
+			return this.pathToRoute.get(titleOrPath)
+		} else {
+			return this.titleToRoute.get(titleOrPath)
+		}
+	}
+
+	getRoutes() {
+		return this.titleToRoute
+	}
+
+	/**
+	 * Check if this path and route pair is unique in the given Map.
+	 */
+	private isRouteUnique(
+		path: string,
+		route: string,
+		existingRoutes: Map<string, string>
+	) {
+		for (const [otherPath, otherRoute] of existingRoutes) {
+			if (path !== otherPath && route === otherRoute) {
+				return false
+			}
+		}
+		return true
+	}
+
+	/**
+	 * Disambiguate a route by appending folder names until it's unique
+	 * @param route The base route that has a collision
+	 * @param path The path of the file we're creating a route for
+	 * @returns A unique route
+	 */
+	private disambiguateRoute(route: string, path: string): string {
+		// Get all paths that currently map to this route and merge them
+		const conflictingPaths = this.routeToPaths.get(route) ?? []
+		const allPaths = [...conflictingPaths, path]
+		this.routeToPaths.set(route, allPaths)
+
+		// Disambiguate shorter paths first since folder order is important
+		allPaths.sort((a, b) => a.split("/").length - b.split("/").length)
+
+		// For each path, create a disambiguated route
+		const updatedRoutes: Map<string, string> = new Map()
+		for (const path of allPaths) {
+			const parts = path.split("/").filter((part) => part !== "")
+
+			// Keep adding folders until we have a unique route
+			let folderIndex = 0
+			let disambiguatedRoute = route
+			while (true) {
+				const folders = this.encodeRoute(
+					parts.slice(0, folderIndex + 1).join("_")
+				)
+				const newRoute = folders ? `${route}_(${folders})` : route
+
+				// Check if this new route already exists for another path
+				let isUnique =
+					this.isRouteUnique(path, newRoute, updatedRoutes) &&
+					this.isRouteUnique(path, newRoute, this.pathToRoute)
+
+				if (isUnique) {
+					disambiguatedRoute = newRoute
+					break
+				}
+
+				folderIndex += 1
+				// Should never happen, but if folders run out, just add a random number
+				if (folderIndex >= parts.length) {
+					const idk = Math.floor(Math.random() * 100)
+					disambiguatedRoute = `${route}_${idk}`
+					break
+				}
+			}
+
+			updatedRoutes.set(path, disambiguatedRoute)
+		}
+
+		// Update all the routes
+		for (const [path, route] of updatedRoutes) {
+			this.pathToRoute.set(path, route)
+			const pathParts = path.split("/").filter((part) => part !== "")
+			const fileName = pathParts[pathParts.length - 1].replace(
+				/\.md$/,
+				""
+			)
+			this.titleToRoute.set(fileName, route)
+			this.titleToRoute.set(fileName.toLowerCase(), route)
+		}
+
+		return updatedRoutes.get(path)!
 	}
 }

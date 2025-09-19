@@ -70,7 +70,7 @@ export default class WikiGeneratorPlugin extends Plugin {
 
 		const sync = async (reset: boolean) => {
 			try {
-				await syncNotes(this.app.vault, settings, reset)
+				await syncNotes(this.app, settings, reset)
 			} catch (error) {
 				console.error("An error occured while syncing notes.", error)
 				new Notice(

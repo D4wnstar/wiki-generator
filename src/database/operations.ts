@@ -1,7 +1,7 @@
 import { Client, createClient } from "@libsql/client"
 import { Database } from "sql.js"
 import {
-	Pages,
+	Page,
 	User,
 	DatabaseAdapter,
 	Note,
@@ -17,16 +17,16 @@ import { findFileInPlugin } from "./filesystem"
 const createNotes = `
 CREATE TABLE IF NOT EXISTS notes (
 	path TEXT PRIMARY KEY,
+    route TEXT NOT NULL UNIQUE,
 	title TEXT NOT NULL,
-	alt_title TEXT,
 	search_terms TEXT NOT NULL, -- semicolon separated list. Default should be alt_title ?? title
-	slug TEXT UNIQUE NOT NULL,
 	frontpage BOOLEAN DEFAULT FALSE,
 	lead TEXT NOT NULL,
 	allowed_users TEXT,
 	hash TEXT NOT NULL, -- hash is calculated BEFORE preprocessing anything!
 	last_updated INTEGER NOT NULL,
-	can_prerender BOOLEAN NOT NULL
+	can_prerender BOOLEAN NOT NULL,
+	html_content TEXT NOT NULL
 );`
 
 const createImages = `
@@ -40,24 +40,13 @@ CREATE TABLE IF NOT EXISTS images (
 	compressed BOOLEAN NOT NULL
 );`
 
-const createNoteContents = `
-CREATE TABLE IF NOT EXISTS note_contents (
-	note_path TEXT NOT NULL REFERENCES notes (path) ON DELETE CASCADE,
-	chunk_id INTEGER NOT NULL,
-	"text" TEXT NOT NULL,
-	allowed_users TEXT,
-	image_path TEXT REFERENCES images (path) ON DELETE CASCADE,
-	note_transclusion_path TEXT REFERENCES notes (path) ON DELETE CASCADE,
-	PRIMARY KEY (note_path, chunk_id)
-);`
-
 const createDetails = `
 CREATE TABLE IF NOT EXISTS details (
 	note_path TEXT NOT NULL REFERENCES notes (path) ON DELETE CASCADE,
 	"order" INTEGER NOT NULL,
-	detail_name TEXT NOT NULL,
-	detail_content TEXT,
-	PRIMARY KEY (note_path, detail_name)
+	"key" TEXT,
+	value TEXT,
+	PRIMARY KEY (note_path, "order")
 );`
 
 const createSidebarImages = `
@@ -88,28 +77,19 @@ const createNotesAllowedUsersIndex = `
 CREATE INDEX IF NOT EXISTS idx_notes_allowed_users ON notes(allowed_users);
 `
 
-const createNoteContentsAllowedUsersIndex = `
-CREATE INDEX IF NOT EXISTS idx_note_contents_allowed_users ON note_contents(allowed_users);
-`
-
 const tables = [
 	{ name: "notes", schema: createNotes },
 	{ name: "images", schema: createImages },
-	{ name: "note_contents", schema: createNoteContents },
 	{ name: "details", schema: createDetails },
 	{ name: "sidebar_images", schema: createSidebarImages },
 	{ name: "wiki_settings", schema: createWikiSettings },
 	{ name: "users", schema: createUsers },
 ]
 
-const indexes = [
-	createNotesAllowedUsersIndex,
-	createNoteContentsAllowedUsersIndex,
-]
+const indexes = [createNotesAllowedUsersIndex]
 
 const deleteTableNotes = `DROP TABLE IF EXISTS notes;`
 const deleteTableImages = `DROP TABLE IF EXISTS images;`
-const deleteTableNoteContents = `DROP TABLE IF EXISTS note_contents;`
 const deleteTableDetails = `DROP TABLE IF EXISTS details;`
 const deleteTableSidebarImages = `DROP TABLE IF EXISTS sidebar_images;`
 // const deleteTableWikiSettings = `DROP TABLE IF EXISTS wiki_settings;`
@@ -118,34 +98,24 @@ const deleteTableSidebarImages = `DROP TABLE IF EXISTS sidebar_images;`
 const insertNotes = `\
 INSERT OR REPLACE INTO notes (
 	path,
+    route,
 	title,
-	alt_title,
 	search_terms,
-	slug,
 	frontpage,
 	lead,
 	allowed_users,
 	hash,
 	last_updated,
-	can_prerender
+	can_prerender,
+	html_content
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING path;`
-
-const insertNoteContents = `\
-INSERT INTO note_contents (
-	note_path,
-	chunk_id,
-	"text",
-	allowed_users,
-	image_path,
-	note_transclusion_path
-) VALUES (?, ?, ?, ?, ?, ?);`
 
 const insertDetails = `\
 INSERT INTO details (
 	note_path,
 	"order",
-	detail_name,
-	detail_content
+	"key",
+	value
 ) VALUES (?, ?, ?, ?);`
 
 const insertSidebarImages = `\
@@ -405,16 +375,18 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 			res[0].values.map((val) => {
 				return {
 					path: val[0] as string,
-					title: val[1] as string,
-					alt_title: val[2] as string | null,
-					search_terms: val[3] as string,
-					slug: val[4] as string,
-					frontpage: val[5] as string | number,
-					lead: val[6] as string,
-					allowed_users: val[7] as string | null,
-					hash: val[8] as string,
-					last_updated: val[9] as number,
-					can_prerender: val[10] as number,
+					route: val[1] as string,
+					title: val[2] as string,
+					alt_title: val[3] as string | null,
+					search_terms: val[4] as string,
+					slug: val[5] as string,
+					frontpage: val[6] as string | number,
+					lead: val[7] as string,
+					allowed_users: val[8] as string | null,
+					hash: val[9] as string,
+					last_updated: val[10] as number,
+					can_prerender: val[11] as number,
+					html_content: val[12] as string,
 				}
 			}) ?? []
 		)
@@ -438,49 +410,38 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 		}
 	}
 
-	async insertPages(pages: Pages): Promise<number> {
+	async insertPages(pages: Page[]): Promise<number> {
 		const noteQueries = []
-		const noteContentsQueries = []
 		const detailsQueries = []
 		const sidebarImagesQueries = []
 
-		for (const [notePath, page] of pages.entries()) {
+		for (const page of pages) {
 			noteQueries.push({
 				sql: insertNotes,
 				args: [
-					notePath,
+					page.note.path,
+					page.note.route,
 					page.note.title,
-					page.note.alt_title,
 					page.note.search_terms,
-					page.note.slug,
 					page.note.frontpage,
 					page.note.lead,
 					page.note.allowed_users,
 					page.note.hash,
 					page.note.last_updated,
 					page.note.can_prerender,
+					page.note.html_content,
 				],
 			})
-
-			for (const [idx, chunk] of page.chunks.entries()) {
-				noteContentsQueries.push({
-					sql: insertNoteContents,
-					args: [
-						notePath,
-						// Use whatever order the chunks were passed in
-						idx,
-						chunk.text,
-						chunk.allowed_users,
-						chunk.image_path,
-						chunk.note_transclusion_path,
-					],
-				})
-			}
 
 			for (const detail of page.details) {
 				detailsQueries.push({
 					sql: insertDetails,
-					args: [notePath, detail.order, detail.key, detail.value],
+					args: [
+						page.note.path,
+						detail.order,
+						detail.key,
+						detail.value,
+					],
 				})
 			}
 
@@ -488,7 +449,7 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 				sidebarImagesQueries.push({
 					sql: insertSidebarImages,
 					args: [
-						notePath,
+						page.note.path,
 						img.order,
 						img.image_name,
 						img.image_path,
@@ -503,18 +464,33 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 		this.db.run("BEGIN TRANSACTION;")
 		try {
 			for (const query of noteQueries) {
-				const res = this.db.exec(query.sql, query.args)
-				// INSERT is RETURNING so the result has the same number of rows that were inserted
-				if (res[0]?.values) inserted += res[0].values.length
-			}
-			for (const query of noteContentsQueries) {
-				this.db.exec(query.sql, query.args)
+				try {
+					const res = this.db.exec(query.sql, query.args)
+					// INSERT is RETURNING so the result has the same number of rows that were inserted
+					if (res[0]?.values) inserted += res[0].values.length
+				} catch (error) {
+					console.error(`Error inserting note: ${error}`, query)
+					throw error
+				}
 			}
 			for (const query of detailsQueries) {
-				this.db.exec(query.sql, query.args)
+				try {
+					this.db.exec(query.sql, query.args)
+				} catch (error) {
+					console.error(`Error inserting detail: ${error}`, query)
+					throw error
+				}
 			}
 			for (const query of sidebarImagesQueries) {
-				this.db.exec(query.sql, query.args)
+				try {
+					this.db.exec(query.sql, query.args)
+				} catch (error) {
+					console.error(
+						`Error inserting sidebar image metadata: ${error}`,
+						query
+					)
+					throw error
+				}
 			}
 			this.db.run("COMMIT;")
 			return inserted
@@ -537,7 +513,6 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 
 	async clearContent(): Promise<void> {
 		this.db.run("BEGIN TRANSACTION;")
-		this.db.run(deleteTableNoteContents)
 		this.db.run(deleteTableDetails)
 		this.db.run(deleteTableSidebarImages)
 		this.db.run(deleteTableImages)
@@ -668,50 +643,35 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 		return results.reduce((sum, res) => sum + (res.rows.length ?? 0), 0)
 	}
 
-	async insertPages(pages: Pages): Promise<number> {
+	async insertPages(pages: Page[]): Promise<number> {
 		return await withRetry(async () => {
 			const noteQueries = []
-			const noteContentsQueries = []
 			const detailsQueries = []
 			const sidebarImagesQueries = []
 
-			for (const [notePath, page] of pages.entries()) {
+			for (const page of pages) {
 				noteQueries.push({
 					sql: insertNotes,
 					args: [
-						notePath,
+						page.note.path,
+						page.note.route,
 						page.note.title,
-						page.note.alt_title,
 						page.note.search_terms,
-						page.note.slug,
 						page.note.frontpage,
 						page.note.lead,
 						page.note.allowed_users,
 						page.note.hash,
 						page.note.last_updated,
 						page.note.can_prerender,
+						page.note.html_content,
 					],
 				})
-
-				for (const [idx, chunk] of page.chunks.entries()) {
-					noteContentsQueries.push({
-						sql: insertNoteContents,
-						args: [
-							notePath,
-							idx,
-							chunk.text,
-							chunk.allowed_users,
-							chunk.image_path,
-							chunk.note_transclusion_path,
-						],
-					})
-				}
 
 				for (const detail of page.details) {
 					detailsQueries.push({
 						sql: insertDetails,
 						args: [
-							notePath,
+							page.note.path,
 							detail.order,
 							detail.key,
 							detail.value,
@@ -723,7 +683,7 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 					sidebarImagesQueries.push({
 						sql: insertSidebarImages,
 						args: [
-							notePath,
+							page.note.path,
 							img.order,
 							img.image_name,
 							img.image_path,
@@ -735,7 +695,6 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 
 			const queries = [
 				...noteQueries,
-				...noteContentsQueries,
 				...detailsQueries,
 				...sidebarImagesQueries,
 			]
@@ -757,7 +716,6 @@ export class RemoteDatabaseAdapter implements DatabaseAdapter {
 	async clearContent(): Promise<void> {
 		await withRetry(async () => {
 			await this.db.batch([
-				deleteTableNoteContents,
 				deleteTableDetails,
 				deleteTableSidebarImages,
 				deleteTableImages,
