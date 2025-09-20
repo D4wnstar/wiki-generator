@@ -205,19 +205,34 @@ class ImageBlock extends Block {
 	 * Parse the contents of an :::image::: block, excluding ones with the "sidebar" argument.
 	 * Sidebar images are handled by `extract`.
 	 */
-	static async replace(md: string) {
-		return md.replace(this.getRegex(), (match, args, content) => {
-			// Leave sidebar content alone
-			if (args?.includes("sidebar")) return match
+	static async replace(
+		md: string,
+		app: App,
+		routes: RouteManager,
+		imageNameToPath: Map<string, string>
+	) {
+		return await replaceAllAsync(
+			md,
+			this.getRegex(),
+			async (match, args, content) => {
+				// Leave sidebar content alone
+				if (args?.includes("sidebar")) return match
 
-			// Let the Obsidian renderer handle the ![[wikilink]] -> <img> conversion
-			// but mark the caption manually
-			const lines = content.split("\n")
-			const wikilink = lines[0]
-			const caption = lines.slice(1).join("\n")
-			const captionTag = `<p class="image-caption">${caption}</p>`
-			return `\n\n${wikilink}\n\n${captionTag}\n\n`
-		})
+				// Let the Obsidian renderer handle the ![[wikilink]] -> <img> conversion
+				// but mark the caption manually
+				const lines = content.split("\n")
+				const wikilink = lines[0]
+				const caption = await mdToHtml(
+					lines.slice(1).join("\n"),
+					app,
+					routes,
+					imageNameToPath,
+					{ unwrap: true }
+				)
+				const captionTag = `<p class="image-caption">${caption}</p>`
+				return `\n\n${wikilink}\n\n${captionTag}\n\n`
+			}
+		)
 	}
 
 	private static async processBlock(
@@ -330,7 +345,7 @@ export async function handleCustomSyntax(
 	md = await SecretBlock.replace(md, app, routes, imageNameToPath)
 
 	// Process inline :::image::: blocks
-	md = await ImageBlock.replace(md)
+	md = await ImageBlock.replace(md, app, routes, imageNameToPath)
 
 	// Extract the first :::details::: block
 	let details: Detail[] = []

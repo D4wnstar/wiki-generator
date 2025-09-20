@@ -143,27 +143,29 @@ export function postprocessHtml(
 	// Change link URLs to be actual website URLs
 	const links = Array.from(doc.querySelectorAll("a")).reverse()
 	for (const link of links) {
+		// Remove some fluff
 		link.removeAttribute("data-href")
 		link.removeAttribute("data-tooltip-position")
 
+		// Get the href and leave external links alone
 		const href = link.getAttribute("href")
-		if (!href) continue
-		if (link.className.includes("external-link")) continue
+		if (!href || link.className.includes("external-link")) continue
 
 		// Remove target="_blank" and classes from internal links
 		link.removeAttribute("target")
 		link.removeAttribute("class")
 
-		// Leave internal links alone
-		if (href.startsWith("#")) continue
+		// Leave internal header links and already converted ones alone
+		if (href.startsWith("#") || href.startsWith("/wiki/")) continue
 
-		// Remove any hash fragment for lookup
+		// Get the filename or filepath without any hash fragment
 		const hashIndex = href.indexOf("#")
 		let titleOrPath = hashIndex > -1 ? href.substring(0, hashIndex) : href
 		if (titleOrPath.includes("/")) {
 			titleOrPath = titleOrPath.concat(".md")
 		}
 
+		// Grab the route and make either a page link or an img API call
 		if (routes.getRoute(titleOrPath)) {
 			const route = routes.getRoute(titleOrPath) as string
 			const sub =
@@ -209,17 +211,16 @@ export function postprocessHtml(
 		if (!filename) continue
 
 		// Inline :::image::: blocks add their caption as the next element over
-		// Frontend uses alt to initialize caption, so we move it to there
+		// Frontend uses data-caption to initialize caption, so we move it to there
 		const caption = img.nextElementSibling
 		if (
 			caption &&
 			caption.tagName === "P" &&
 			caption.classList.contains("image-caption")
 		) {
+			img.setAttribute("data-caption", caption.innerHTML ?? "")
 			img.setAttribute("alt", caption.textContent ?? "")
 			caption.remove()
-		} else {
-			img.removeAttribute("alt")
 		}
 
 		const path = imageNameToPath.get(filename)
