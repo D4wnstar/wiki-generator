@@ -332,9 +332,8 @@ export async function handleCustomSyntax(
 	imageNameToPath: Map<string, string>
 ) {
 	// Anything in codeblocks should be ignored, so remove them and put them back later
-	const codeRegex = /^```.*\n[^]*?\n```/gm
-	const codeblocks = Array.from(md.matchAll(codeRegex)).reverse()
-	md = md.replace(codeRegex, "|codeblock|")
+	const code = removeCode(md)
+	md = code.md
 
 	// Remove :::hidden::: blocks and Markdown comments
 	md = md.replace(/%%.*?%%/gs, "")
@@ -377,28 +376,8 @@ export async function handleCustomSyntax(
 		console.warn(`Error parsing :::image::: in ${filename}: ${error}`)
 	}
 
-	// Bypass MathJax entirely and use KaTeX instead
-	const mathBlock = Array.from(md.matchAll(/\$\$(.*?)\$\$/gs))
-		.map((block) =>
-			block[1]
-				.replace(/^>\s+/gm, "")
-				.replace("\n", "")
-				.replace(
-					/\\(begin|end)\{(equation|gather|align|alignat)\}/g,
-					"\\$1{$2*}"
-				)
-		)
-		.reverse()
-	md = md
-		.replace(/\$\$.*?\$\$/gs, "|math|")
-		.replace(/^\|math\|/gm, "\n|math|\n")
-	const mathInline = Array.from(md.matchAll(/\$(.*?)\$/g))
-		.map((code) => code[1])
-		.reverse()
-	md = md.replace(/\$.*?\$/g, "|math-inline|")
-
 	// Put the codeblocks back
-	md = md.replace(/^\|codeblock\|/gm, () => codeblocks.pop()?.[0] ?? "")
+	md = addCode(md, code.blocks, code.inline)
 
 	// Manually replace Mermaid codeblocks before PrismJS messes up the formatting
 	md = md.replace(/```mermaid\n(.*?)\n```/gs, '<pre class="mermaid">$1</pre>')
@@ -408,6 +387,32 @@ export async function handleCustomSyntax(
 		isSecret,
 		details,
 		sidebarImages: images,
-		math: { block: mathBlock, inline: mathInline },
 	}
+}
+
+export function removeCode(md: string) {
+	const codeRegex = /^```.*\n[^]*?\n```/gm
+	const blocks = Array.from(md.matchAll(codeRegex))
+		.map((code) => code[0])
+		.reverse()
+	md = md.replace(codeRegex, "###codeblock###")
+
+	const inlineRegex = /`.*?`/g
+	const inline = Array.from(md.matchAll(inlineRegex))
+		.map((code) => code[0])
+		.reverse()
+
+	md = md.replace(inlineRegex, "###inline-code###")
+	return { md, blocks, inline }
+}
+
+export function addCode(
+	md: string,
+	codeblocks: string[],
+	inlinecode: string[]
+) {
+	md = md.replace(/^###codeblock###/gm, () => codeblocks.pop() ?? "")
+	md = md.replace(/###inline-code###/g, () => inlinecode.pop() ?? "")
+
+	return md
 }

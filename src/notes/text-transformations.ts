@@ -1,5 +1,5 @@
 import { App, Component, MarkdownRenderer, TFile } from "obsidian"
-import { handleCustomSyntax } from "./custom-blocks"
+import { addCode, handleCustomSyntax, removeCode } from "./custom-blocks"
 import { Frontmatter, Note, Page } from "../database/types"
 import katex from "katex"
 import { RouteManager } from "src/commands"
@@ -34,16 +34,6 @@ export async function createPage(
 
 	// Convert the entire markdown to HTML using Obsidian's builtin renderer
 	let html = await mdToHtml(parsed.md, app, routes, imageNameToPath)
-
-	// Add KaTeX math manually
-	html = html.replace(/\|math\|(<br>)?/g, () =>
-		katex.renderToString(parsed.math.block.pop() ?? "", {
-			displayMode: true,
-		})
-	)
-	html = html.replace(/\|math-inline\|/g, () =>
-		katex.renderToString(parsed.math.inline.pop() ?? "")
-	)
 
 	// Manage titles and routes
 	const route = routes.getRoute(file.path) ?? file.basename.replace(/ /g, "_")
@@ -104,16 +94,59 @@ export async function mdToHtml(
 	const tempEl = document.createElement("div")
 
 	try {
-		await MarkdownRenderer.render(app, md, tempEl, "", new Component())
-		return postprocessHtml(
+		const math = removeMath(md)
+		await MarkdownRenderer.render(app, math.md, tempEl, "", new Component())
+		const html = postprocessHtml(
 			tempEl.innerHTML,
 			routes,
 			imageNameToPath,
 			options?.unwrap
 		)
+		return addMath(html, math.blocks, math.inline)
 	} finally {
 		tempEl.remove()
 	}
+}
+
+function removeMath(md: string) {
+	// Bypass MathJax entirely and use KaTeX instead
+	const code = removeCode(md)
+	md = code.md
+
+	const blocks = Array.from(md.matchAll(/\$\$(.*?)\$\$/gs))
+		.map((block) =>
+			block[1]
+				.replace(/^>\s+/gm, "")
+				.replace("\n", "")
+				.replace(
+					/\\(begin|end)\{(equation|gather|align|alignat)\}/g,
+					"\\$1{$2*}"
+				)
+		)
+		.reverse()
+	md = md.replace(/\$\$.*?\$\$/gs, "###math###")
+
+	const inline = Array.from(md.matchAll(/\$(.*?)\$/g))
+		.map((code) => code[1])
+		.reverse()
+	md = md.replace(/\$.*?\$/g, "###math-inline###")
+
+	md = addCode(md, code.blocks, code.inline)
+	return { md, blocks, inline }
+}
+
+function addMath(html: string, block: string[], inline: string[]) {
+	// Add KaTeX math manually
+	html = html.replace(/###math###(<br>)?/g, () =>
+		katex.renderToString(block.pop() ?? "", {
+			displayMode: true,
+		})
+	)
+	html = html.replace(/###math-inline###/g, () =>
+		katex.renderToString(inline.pop() ?? "")
+	)
+
+	return html
 }
 
 /**
