@@ -27,6 +27,7 @@ export async function addWikiPublishToNewFile(
 			// Only add frontmatter if folders aren't restricted or we're in a valid folder
 			if (isFilePublic(newFile.path, settings)) {
 				await fileManager.processFrontMatter(newFile, (matter) => {
+					if (matter["excalidraw-plugin"]) return // Bypass Excalidraw files
 					matter["wiki-publish"] = true
 				})
 			}
