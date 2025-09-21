@@ -391,18 +391,18 @@ export async function handleCustomSyntax(
 }
 
 export function removeCode(md: string) {
-	const codeRegex = /^```.*\n[^]*?\n```/gm
-	const blocks = Array.from(md.matchAll(codeRegex))
+	const blockRegex = /^```.*\n[^]*?\n```/gm
+	const blocks = Array.from(md.matchAll(blockRegex))
 		.map((code) => code[0])
 		.reverse()
-	md = md.replace(codeRegex, "###codeblock###")
+	md = md.replace(blockRegex, "###codeblock###")
 
 	const inlineRegex = /`.*?`/g
 	const inline = Array.from(md.matchAll(inlineRegex))
 		.map((code) => code[0])
 		.reverse()
-
 	md = md.replace(inlineRegex, "###inline-code###")
+
 	return { md, blocks, inline }
 }
 

@@ -1,8 +1,11 @@
 import { App, Component, MarkdownRenderer, TFile } from "obsidian"
 import { addCode, handleCustomSyntax, removeCode } from "./custom-blocks"
 import { Frontmatter, Note, Page } from "../database/types"
-import katex from "katex"
 import { RouteManager } from "src/commands"
+
+// No official ES6 way of importing katex AND the mhchem extension
+const katex = require("katex")
+require("katex/contrib/mhchem")
 
 /**
  * Create a `Page` object from the given Markdown file, which means processing
@@ -136,15 +139,40 @@ function removeMath(md: string) {
 }
 
 function addMath(html: string, block: string[], inline: string[]) {
+	// Some fixes to convert MathJax format into KaTeX format and alleviate issues
+	// KaTeX macros are not used because they expand recursively, making them unusable
+	// if they expand into something that contains the original (infinite loop)
+	const fixes: [RegExp, string][] = [
+		[/\\textendash/g, "\\text{\\textendash}"],
+		[/\\textemdash/g, "\\text{\\textemdash}"],
+	]
+
+	const fixMath = (math: string) => {
+		for (const [key, value] of fixes) {
+			math = math.replace(key, value)
+		}
+		return math
+	}
+
+	const render = (array: string[], displayMode: boolean) => {
+		try {
+			const math = fixMath(array.pop() ?? "")
+			return katex.renderToString(math, {
+				displayMode,
+				strict: false, // MathJax compatibility
+				colorIsTextColor: true, // MathJax compatibility
+			})
+		} catch (e) {
+			console.warn(
+				`Couldn't render math. ${e}.\n${html.substring(0, 400)}`
+			)
+			return "[Math rendering error]"
+		}
+	}
+
 	// Add KaTeX math manually
-	html = html.replace(/###math###(<br>)?/g, () =>
-		katex.renderToString(block.pop() ?? "", {
-			displayMode: true,
-		})
-	)
-	html = html.replace(/###math-inline###/g, () =>
-		katex.renderToString(inline.pop() ?? "")
-	)
+	html = html.replace(/###math###(<br>)?/g, () => render(block, true))
+	html = html.replace(/###math-inline###/g, () => render(inline, false))
 
 	return html
 }
@@ -209,7 +237,7 @@ export function postprocessHtml(
 		} else if (imageNameToPath.has(titleOrPath)) {
 			const slug = imageNameToPath.get(titleOrPath) as string
 			const path = encodeURIComponent(slug)
-			link.setAttribute("href", `/api/v1/image/${path}`)
+			link.setAttribute("href", `/api/image/${path}`)
 		} else {
 			// If no slug is found, unwrap the anchor tag
 			const parent = link.parentNode
@@ -259,7 +287,7 @@ export function postprocessHtml(
 		const path = imageNameToPath.get(filename)
 		if (path) {
 			const component = encodeURIComponent(path)
-			img.setAttribute("src", `/api/v1/image/${component}`)
+			img.setAttribute("src", `/api/image/${component}`)
 		} else {
 			img.removeAttribute("src")
 		}
@@ -272,7 +300,7 @@ export function postprocessHtml(
 	for (const img of excImgs) {
 		const path = img.getAttribute("filesource")?.replace(/\.md$/, ".svg")
 		if (path) {
-			img.setAttribute("src", `/api/v1/image/${encodeURIComponent(path)}`)
+			img.setAttribute("src", `/api/image/${encodeURIComponent(path)}`)
 		} else {
 			img.removeAttribute("src")
 		}
