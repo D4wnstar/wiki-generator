@@ -773,7 +773,7 @@ export class RouteManager {
 	private routeToPaths: Map<string, string[]> = new Map()
 
 	private encodeRoute(title: string) {
-		return encodeURIComponent(title.replace(/ /g, "_"))
+		return title.replace(/ /g, "_")
 	}
 
 	/**
