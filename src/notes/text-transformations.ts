@@ -191,6 +191,14 @@ export function postprocessHtml(
 	const parser = new DOMParser()
 	const doc = parser.parseFromString(html, "text/html")
 
+	// Remove empty <p> tags
+	const emptyPs = Array.from(doc.querySelectorAll("p"))
+	for (const empty of emptyPs) {
+		if (empty.childElementCount === 0 && empty.textContent === "") {
+			empty.remove()
+		}
+	}
+
 	// Unwrap the topmost element if requested
 	if (unwrap && doc.body.firstElementChild) {
 		doc.body.replaceChildren(
@@ -248,15 +256,13 @@ export function postprocessHtml(
 		}
 	}
 
-	// Unwrap images nested in p > span > img to be top-level img elements
+	// Unwrap nested images and Excalidraw drawings to be top-level img elements
 	const nestedImgs = Array.from(
 		doc.querySelectorAll("p > span.image-embed > img")
 	)
 	for (const img of nestedImgs) {
 		const span = img.parentElement
 		const p = span?.parentElement
-
-		// If we have all the elements, move the img to be a sibling of the p
 		if (p && span) {
 			p.parentNode?.insertBefore(img, p)
 			span.remove()
@@ -264,12 +270,33 @@ export function postprocessHtml(
 		}
 	}
 
+	const nestedExcalidraw = Array.from(
+		doc.querySelectorAll("div.excalidraw-svg > img")
+	)
+	for (const img of nestedExcalidraw) {
+		const div = img.parentElement
+		if (div) {
+			div.parentNode?.insertBefore(img, div)
+			div.remove()
+		}
+	}
+
 	// Handle <img> sources and captions
 	const imgs = Array.from(doc.querySelectorAll("img"))
 	for (const img of imgs) {
-		// The alt property contains the filename
-		const filename = img.getAttribute("alt")
-		if (!filename) continue
+		let path: string | undefined
+		if (img.classList.contains("excalidraw-embedded-img")) {
+			// Excalidraw support. Filesource contains the path
+			path = img.getAttribute("filesource")?.replace(/\.md$/, ".svg")
+			img.removeAttribute("draggable")
+			img.removeAttribute("oncanvas")
+			img.removeAttribute("filesource")
+		} else {
+			// The alt property contains the filename
+			const filename = img.getAttribute("alt")
+			if (!filename) continue
+			path = imageNameToPath.get(filename)
+		}
 
 		// Inline :::image::: blocks add their caption as the next element over
 		// Frontend uses data-caption to initialize caption, so we move it to there
@@ -284,23 +311,9 @@ export function postprocessHtml(
 			caption.remove()
 		}
 
-		const path = imageNameToPath.get(filename)
 		if (path) {
 			const component = encodeURIComponent(path)
 			img.setAttribute("src", `/api/image/${component}`)
-		} else {
-			img.removeAttribute("src")
-		}
-	}
-
-	// Support for Excalidraw (make sure SVGs are being exported)
-	const excImgs = Array.from(
-		doc.querySelectorAll("img.excalidraw-embedded-img")
-	)
-	for (const img of excImgs) {
-		const path = img.getAttribute("filesource")?.replace(/\.md$/, ".svg")
-		if (path) {
-			img.setAttribute("src", `/api/image/${encodeURIComponent(path)}`)
 		} else {
 			img.removeAttribute("src")
 		}

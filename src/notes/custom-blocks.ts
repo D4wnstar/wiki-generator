@@ -230,7 +230,7 @@ class ImageBlock extends Block {
 					{ unwrap: true }
 				)
 				const captionTag = `<p class="image-caption">${caption}</p>`
-				return `\n\n${wikilink}\n\n${captionTag}\n\n`
+				return `\n\n${wikilink}\n${captionTag}\n\n`
 			}
 		)
 	}
