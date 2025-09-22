@@ -74,7 +74,7 @@ export async function createPage(
 /**
  * Return the file's frontmatter as an object.
  */
-async function extractFrontmatter(file: TFile, app: App) {
+export async function extractFrontmatter(file: TFile, app: App) {
 	let frontmatter: Frontmatter
 	return app.fileManager
 		.processFrontMatter(file, (matter) => (frontmatter = matter))
@@ -234,25 +234,39 @@ export function postprocessHtml(
 			titleOrPath = titleOrPath.concat(".md")
 		}
 
-		// Grab the route and make either a page link or an img API call
-		if (routes.getRoute(titleOrPath)) {
-			const route = routes.getRoute(titleOrPath) as string
-			const sub =
-				hashIndex > -1
-					? `/wiki/${route}${href.substring(hashIndex)}`
-					: `/wiki/${route}`
-			link.setAttribute("href", sub)
-		} else if (imageNameToPath.has(titleOrPath)) {
-			const slug = imageNameToPath.get(titleOrPath) as string
-			const path = encodeURIComponent(slug)
-			link.setAttribute("href", `/api/image/${path}`)
-		} else {
-			// If no slug is found, unwrap the anchor tag
+		// Unwrap the link and only keep the inner text
+		const removeLink = () => {
 			const parent = link.parentNode
 			while (link.firstChild) {
 				parent?.insertBefore(link.firstChild, link)
 			}
 			parent?.removeChild(link)
+		}
+
+		// Grab the route or image and add the appropriate href
+		// Also respect permissions and remove dead links
+		const route = routes.getRoute(titleOrPath)
+		const image = imageNameToPath.get(titleOrPath)
+		if (route) {
+			const permissions = routes.getPermissions(route)
+			if (!permissions?.published) {
+				removeLink()
+			} else {
+				const sub =
+					hashIndex > -1
+						? `/wiki/${route}${href.substring(hashIndex)}`
+						: `/wiki/${route}`
+				link.setAttribute("href", sub)
+				if (permissions.allowedUsers) {
+					const userlist = permissions.allowedUsers.join(";")
+					link.setAttribute("data-allowed-users", userlist)
+				}
+			}
+		} else if (image) {
+			const path = encodeURIComponent(image)
+			link.setAttribute("href", `/api/image/${path}`)
+		} else {
+			removeLink()
 		}
 	}
 

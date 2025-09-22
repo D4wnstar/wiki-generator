@@ -7,7 +7,7 @@ import {
 	LocalDatabaseAdapter,
 	RemoteDatabaseAdapter,
 } from "./database/operations"
-import { createPage } from "./notes/text-transformations"
+import { createPage, extractFrontmatter } from "./notes/text-transformations"
 import { DatabaseAdapter, Page } from "./database/types"
 
 import { wikilinkRegex } from "./notes/regexes"
@@ -331,7 +331,7 @@ async function processNotes(
 	// Bind titles to paths
 	const routeManager = new RouteManager()
 	for (const file of app.vault.getMarkdownFiles()) {
-		routeManager.createRoute(file.path, file.basename)
+		await routeManager.createRoute(file, app)
 	}
 	console.debug("Routes", routeManager)
 	console.debug("Image name -> Path", imageNameToPath)
@@ -760,6 +760,11 @@ export async function pingDeployHook(settings: WikiGeneratorSettings) {
 	}
 }
 
+interface PagePermissions {
+	published: boolean
+	allowedUsers: string[] | null
+}
+
 /**
  * Convert note titles to website routes while avoiding duplicates and
  * disambiguating appropriately. Route format is inspired by Wikipedia,
@@ -769,6 +774,8 @@ export async function pingDeployHook(settings: WikiGeneratorSettings) {
 export class RouteManager {
 	private titleToRoute: Map<string, string> = new Map()
 	private pathToRoute: Map<string, string> = new Map()
+	// Keep track of the permissions of each route (published or not, allowed users)
+	private routeToPermissions: Map<string, PagePermissions> = new Map()
 	// Save all the paths that would point to the same route for disambiguation
 	private routeToPaths: Map<string, string[]> = new Map()
 
@@ -782,7 +789,15 @@ export class RouteManager {
 	 * @param title The basename of the file
 	 * @returns The unique route for this file
 	 */
-	createRoute(path: string, title: string): string {
+	async createRoute(file: TFile, app: App): Promise<string> {
+		const path = file.path
+		const title = file.basename
+		const frontmatter = await extractFrontmatter(file, app)
+		const permissions = {
+			allowedUsers: frontmatter["wiki-allowed-users"] ?? null,
+			published: frontmatter["wiki-publish"] ?? false,
+		}
+
 		// Check if we've already processed this path
 		if (this.pathToRoute.has(path)) return this.pathToRoute.get(path)!
 
@@ -791,6 +806,7 @@ export class RouteManager {
 		// If no path points to this route, just add it to the list
 		if (!this.routeToPaths.has(baseRoute)) {
 			this.routeToPaths.set(baseRoute, [path])
+			this.routeToPermissions.set(baseRoute, permissions)
 			this.pathToRoute.set(path, baseRoute)
 			this.titleToRoute.set(title, baseRoute)
 			this.titleToRoute.set(title.toLowerCase(), baseRoute)
@@ -799,6 +815,7 @@ export class RouteManager {
 
 		// Otherwise disambiguate and add that
 		const fixedRoute = this.disambiguateRoute(baseRoute, path)
+		this.routeToPermissions.set(fixedRoute, permissions)
 		this.pathToRoute.set(path, fixedRoute)
 		this.titleToRoute.set(title, fixedRoute)
 		this.titleToRoute.set(title.toLowerCase(), fixedRoute)
@@ -815,6 +832,10 @@ export class RouteManager {
 		} else {
 			return this.titleToRoute.get(titleOrPath)
 		}
+	}
+
+	getPermissions(route: string) {
+		return this.routeToPermissions.get(route)
 	}
 
 	getRoutes() {
@@ -890,6 +911,8 @@ export class RouteManager {
 
 		// Update all the routes
 		for (const [path, route] of updatedRoutes) {
+			const oldRoute = this.pathToRoute.get(path)!
+
 			this.pathToRoute.set(path, route)
 			const pathParts = path.split("/").filter((part) => part !== "")
 			const fileName = pathParts[pathParts.length - 1].replace(
@@ -898,6 +921,12 @@ export class RouteManager {
 			)
 			this.titleToRoute.set(fileName, route)
 			this.titleToRoute.set(fileName.toLowerCase(), route)
+
+			const permissions = this.routeToPermissions.get(oldRoute)
+			if (permissions) {
+				this.routeToPermissions.delete(oldRoute)
+				this.routeToPermissions.set(route, permissions)
+			}
 		}
 
 		return updatedRoutes.get(path)!
