@@ -88,12 +88,12 @@ const tables = [
 
 const indexes = [createNotesAllowedUsersIndex]
 
-const deleteTableNotes = `DROP TABLE IF EXISTS notes;`
-const deleteTableImages = `DROP TABLE IF EXISTS images;`
-const deleteTableDetails = `DROP TABLE IF EXISTS details;`
-const deleteTableSidebarImages = `DROP TABLE IF EXISTS sidebar_images;`
-// const deleteTableWikiSettings = `DROP TABLE IF EXISTS wiki_settings;`
-// const deleteTableUsers = `DROP TABLE IF EXISTS users;`
+const deleteTableNotes = `DROP TABLE IF EXISTS "notes";`
+const deleteTableImages = `DROP TABLE IF EXISTS "images";`
+const deleteTableDetails = `DROP TABLE IF EXISTS "details";`
+const deleteTableSidebarImages = `DROP TABLE IF EXISTS "sidebar_images";`
+// const deleteTableWikiSettings = `DROP TABLE IF EXISTS "wiki_settings";`
+// const deleteTableUsers = `DROP TABLE IF EXISTS "users";`
 
 const insertNotes = `\
 INSERT OR REPLACE INTO notes (
@@ -502,22 +502,34 @@ export class LocalDatabaseAdapter implements DatabaseAdapter {
 	}
 
 	async updateSettings(settings: WikiGeneratorSettings): Promise<void> {
-		this.db.run("BEGIN TRANSACTION;")
-		this.db.run("DELETE FROM wiki_settings;")
-		this.db.run(insertWikiSettings, [
-			settings.wikiTitle,
-			settings.allowLogins ? 1 : 0,
-		])
-		this.db.run("COMMIT;")
+		try {
+			this.db.run("BEGIN TRANSACTION;")
+			this.db.run("DELETE FROM wiki_settings;")
+			this.db.run(insertWikiSettings, [
+				settings.wikiTitle,
+				settings.allowLogins ? 1 : 0,
+			])
+			this.db.run("COMMIT;")
+		} catch (e) {
+			console.error(`Updating settings failed. ${e}`)
+			this.db.run("ROLLBACK;")
+			throw e
+		}
 	}
 
 	async clearContent(): Promise<void> {
 		this.db.run("BEGIN TRANSACTION;")
-		this.db.run(deleteTableDetails)
-		this.db.run(deleteTableSidebarImages)
-		this.db.run(deleteTableImages)
-		this.db.run(deleteTableNotes)
-		this.db.run("COMMIT;")
+		try {
+			this.db.run(deleteTableDetails)
+			this.db.run(deleteTableSidebarImages)
+			this.db.run(deleteTableImages)
+			this.db.run(deleteTableNotes)
+			this.db.run("COMMIT;")
+		} catch (e) {
+			console.error(`Clearing content failed. ${e}`)
+			this.db.run("ROLLBACK;")
+			throw e
+		}
 	}
 
 	async export(vault: Vault, filename = "data.db"): Promise<void> {
@@ -773,11 +785,11 @@ async function withRetry<T>(
 				)
 				throw error
 			}
-			// Exponential backoff before retry
+			// Backoff before retry
 			await new Promise((resolve) =>
 				setTimeout(resolve, 1000 * (maxRetries - retries + 1))
 			)
 		}
 	}
-	throw new Error("Retry logic failed - should never reach here")
+	throw new Error("Retry logic failed")
 }
